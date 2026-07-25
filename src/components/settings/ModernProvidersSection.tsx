@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -541,6 +542,7 @@ function displayResolutionLabel(value: string): string {
 }
 
 export const ModernProvidersSection = memo(function ModernProvidersSection() {
+  const { t } = useTranslation();
   const providers = useCustomProvidersStore((state) => state.providers);
   const pendingEditId = useCustomProvidersStore((state) => state.pendingEditId);
   const addProvider = useCustomProvidersStore((state) => state.addProvider);
@@ -837,7 +839,9 @@ export const ModernProvidersSection = memo(function ModernProvidersSection() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-base font-semibold text-text-dark">图片生成（新）</h2>
+        <h2 className="text-base font-semibold text-text-dark">
+          {t('settings.imageProviderConfig.preset')}
+        </h2>
         <p className="mt-1 text-xs leading-5 text-text-muted">
           推荐使用这个入口：选择接口类型，填写 Base URL 和 API Key，再同步或勾选模型。应用会根据模型类型自动组装请求，不再让主流接口手写整段 JSON。
         </p>

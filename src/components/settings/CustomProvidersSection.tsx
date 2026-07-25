@@ -1,9 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { Copy, CheckCircle2, Trash2, Upload, Plus, Eye, EyeOff, Lightbulb, Save, Pencil, List, Plug, Loader2, AlertTriangle } from 'lucide-react';
+import { Copy, CheckCircle2, Trash2, Upload, Plus, Eye, EyeOff, Lightbulb, Save, Pencil, List, Plug, Loader2, AlertTriangle, Sparkles } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import {
   CUSTOM_PROVIDER_PRESETS,
-  CUSTOM_PROVIDER_TUTORIAL_PROMPT,
   isChatCustomProvider,
   isVideoCustomProvider,
   useCustomProvidersStore,
@@ -22,9 +22,23 @@ import {
   type CustomProviderBodyMode,
 } from '@/features/canvas/infrastructure/customProviderTransport';
 import {
-  normalizeProviderBaseUrl,
-  normalizeProviderEndpointPath,
-} from '@/features/canvas/application/providerUrl';
+  createEmptyCustomImageProviderDraft,
+  customImageProviderConfigToDraft,
+  customImageProviderDraftFromUnknown,
+  customImageProviderDraftToConfig,
+  extractCustomImageProviderJson,
+  parseCustomImageProviderJsonRecord,
+  stringifyCustomImageRequestContract,
+  type CustomImageProviderDraft,
+  type CustomImageProviderFieldIssue,
+} from '@/features/canvas/application/customImageProviderConfig';
+import {
+  CUSTOM_PROVIDER_TUTORIAL_PROMPT,
+  parseCustomImageProviderAssistantResponse,
+} from '@/features/canvas/application/customImageProviderAiPrompt';
+import { normalizeCustomImageRequestContract } from '@/features/canvas/application/customImageProviderContract';
+import { CustomImageProviderContractEditor } from './CustomImageProviderContractEditor';
+import { CustomProviderConfigAssistantDialog } from './CustomProviderConfigAssistantDialog';
 
 /** Which half of the split UI to render. `both` keeps the original tabbed view
  *  (kept for backwards compat); `add` is the new "添加服务商" settings tab
@@ -84,33 +98,10 @@ const RESPONSE_FORMAT_HELP: Record<typeof RESPONSE_FORMATS[number], string> = {
   generic: '递归扫描任意 JSON 字段里的图片 URL/data URL，容错最高但不够精确。',
 };
 
-interface DraftConfig extends Omit<CustomProviderConfig, 'id'> {
-  id: string | null; // null while editing a new draft
-  supportedRatios: string[];
-}
+type DraftConfig = CustomImageProviderDraft;
 
 function emptyDraft(): DraftConfig {
-  return {
-    id: null,
-    mediaType: 'image',
-    label: '',
-    baseUrl: '',
-    endpointPath: '',
-    modelListEndpointPath: '/models',
-    httpMethod: 'POST',
-    apiKey: '',
-    apiStyle: 'openai-compatible',
-    models: [],
-    supportsWebSearch: false,
-    supportedRatios: ['auto', '16:9', '1:1'],
-    supportedResolutions: [],
-    supportedModelVersions: [],
-    extraHeaders: {},
-    queryParams: {},
-    responseFormat: 'openai-images',
-    extraParams: {},
-    note: '',
-  };
+  return createEmptyCustomImageProviderDraft();
 }
 
 function isModernProviderConfig(provider: CustomProviderConfig): boolean {
@@ -118,7 +109,8 @@ function isModernProviderConfig(provider: CustomProviderConfig): boolean {
 }
 
 function providerKindLabel(provider: CustomProviderConfig): {
-  label: string;
+  label?: string;
+  labelKey?: 'settings.imageProviderConfig.preset' | 'settings.imageProviderConfig.fullCustom';
   className: string;
 } {
   if (isChatCustomProvider(provider)) {
@@ -135,76 +127,36 @@ function providerKindLabel(provider: CustomProviderConfig): {
   }
   if (isModernProviderConfig(provider)) {
     return {
-      label: '图片新配置',
+      labelKey: 'settings.imageProviderConfig.preset',
       className: 'border-accent/35 bg-accent/15 text-accent',
     };
   }
   return {
-    label: '图片老配置',
+    labelKey: 'settings.imageProviderConfig.fullCustom',
     className: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
   };
 }
 
 /** Turn a stored provider into an editable draft. */
 function toDraft(p: CustomProviderConfig): DraftConfig {
-  const extraRatios = (p.extraParams && typeof p.extraParams === 'object' && Array.isArray((p.extraParams as { supportedRatios?: unknown }).supportedRatios))
-    ? ((p.extraParams as { supportedRatios: string[] }).supportedRatios)
-    : ['auto', '16:9', '1:1'];
-  return {
-    ...p,
-    endpointPath: p.endpointPath ?? '',
-    modelListEndpointPath: p.modelListEndpointPath ?? '/models',
-    httpMethod: p.httpMethod ?? 'POST',
-    queryParams: p.queryParams ?? {},
-    responseFormat: p.responseFormat ?? 'openai-images',
-    supportedRatios: extraRatios,
-    supportedResolutions: p.supportedResolutions ?? [],
-    supportedModelVersions: p.supportedModelVersions ?? [],
-  };
+  return customImageProviderConfigToDraft(p);
 }
 
 /** Materialize a draft back into a stored provider shape. */
 function fromDraft(d: DraftConfig, fallbackId: string): CustomProviderConfig {
-  return {
-    id: d.id ?? fallbackId,
-    label: d.label.trim() || '未命名配置',
-    mediaType: d.mediaType ?? 'image',
-    baseUrl: normalizeProviderBaseUrl(d.baseUrl),
-    endpointPath: normalizeProviderEndpointPath(d.endpointPath ?? ''),
-    modelListEndpointPath: normalizeProviderEndpointPath(d.modelListEndpointPath ?? ''),
-    httpMethod: d.httpMethod ?? 'POST',
-    apiKey: d.apiKey,
-    apiStyle: d.apiStyle,
-    models: d.models,
-    supportsWebSearch: d.supportsWebSearch,
-    extraHeaders: d.extraHeaders ?? {},
-    queryParams: d.queryParams ?? {},
-    responseFormat: d.responseFormat ?? 'openai-images',
-    supportedResolutions: (d.supportedResolutions ?? []).length > 0 ? d.supportedResolutions : undefined,
-    supportedModelVersions: (d.supportedModelVersions ?? []).length > 0 ? d.supportedModelVersions : undefined,
-    extraParams: { ...(d.extraParams ?? {}), mediaType: d.mediaType ?? 'image', supportedRatios: d.supportedRatios },
-    note: d.note ?? '',
-  };
+  const result = customImageProviderDraftToConfig(d, fallbackId);
+  if (!result.value) {
+    throw new Error(result.issues.map((entry) => `${entry.path}: ${entry.message}`).join('；'));
+  }
+  return result.value;
 }
 
-function stringifyDefaultRequestParams(extraParams: Record<string, unknown> | undefined): string {
-  const raw = extraParams?.defaultRequestParams;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return '{}';
-  }
-  return JSON.stringify(raw, null, 2);
+function stringifyDefaultRequestParams(value: Record<string, unknown> | undefined): string {
+  return JSON.stringify(value ?? {}, null, 2);
 }
 
 function parseDefaultRequestParams(text: string): Record<string, unknown> | null {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const parsed = JSON.parse(trimmed) as unknown;
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('必须是 JSON 对象，例如 { "quality": "high" }');
-  }
-  return parsed as Record<string, unknown>;
+  return parseCustomImageProviderJsonRecord(text, '默认请求参数');
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -398,6 +350,7 @@ function formatImportPlanPreview(extraParams: Record<string, unknown> | undefine
  *     查看配置 opens the edit drawer (same form, 保存 后生效).
  */
 export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: CustomProvidersSectionProps) => {
+  const { t } = useTranslation();
   const providers = useCustomProvidersStore((s) => s.providers);
   const addProvider = useCustomProvidersStore((s) => s.addProvider);
   const updateProvider = useCustomProvidersStore((s) => s.updateProvider);
@@ -428,6 +381,10 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
   const [newHeaderValue, setNewHeaderValue] = useState('');
   const [defaultParamsText, setDefaultParamsText] = useState('{}');
   const [defaultParamsError, setDefaultParamsError] = useState('');
+  const [contractText, setContractText] = useState(() => stringifyCustomImageRequestContract(emptyDraft().imageRequestContract));
+  const [contractIssues, setContractIssues] = useState<CustomImageProviderFieldIssue[]>([]);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [aiGeneratedDraft, setAiGeneratedDraft] = useState(false);
   // Connectivity test state.
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<CustomProviderTestResult | null>(null);
@@ -439,19 +396,108 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
   const [modelAddValue, setModelAddValue] = useState('');
   const [modelEditMode, setModelEditMode] = useState(false);
 
+  const setFormDraft = useCallback((nextDraft: DraftConfig, generatedByAi = false) => {
+    setDraft(nextDraft);
+    setModelOptions(nextDraft.models);
+    setDefaultParamsText(stringifyDefaultRequestParams(nextDraft.defaultRequestParams));
+    setContractText(stringifyCustomImageRequestContract(nextDraft.imageRequestContract));
+    setDefaultParamsError('');
+    setContractIssues([]);
+    setModelFetchResult(null);
+    setAiGeneratedDraft(generatedByAi);
+  }, []);
+
+  const handleApplyContractText = useCallback((): DraftConfig | null => {
+    try {
+      const parsed = extractCustomImageProviderJson(contractText);
+      const normalized = normalizeCustomImageRequestContract(parsed);
+      const issues = normalized.issues.map((entry) => ({
+        path: `imageRequestContract.${entry.path.replace(/^imageRequestContract\.?/, '')}`.replace(/\.$/, ''),
+        message: entry.message,
+      }));
+      if (!normalized.value || issues.length > 0) {
+        setContractIssues(issues.length > 0 ? issues : [{ path: 'imageRequestContract', message: '契约无效' }]);
+        return null;
+      }
+      const nextDraft: DraftConfig = {
+        ...draft,
+        endpointPath: normalized.value.textToImage?.endpointPath ?? draft.endpointPath,
+        httpMethod: normalized.value.textToImage?.method ?? draft.httpMethod,
+        imageRequestContract: normalized.value,
+      };
+      setDraft(nextDraft);
+      setContractText(stringifyCustomImageRequestContract(normalized.value));
+      setContractIssues([]);
+      return nextDraft;
+    } catch (error) {
+      setContractIssues([{
+        path: 'imageRequestContract',
+        message: error instanceof Error ? error.message : String(error),
+      }]);
+      return null;
+    }
+  }, [contractText, draft]);
+
+  const handleApplyAssistantDraft = useCallback((assistantDraft: DraftConfig) => {
+    const mergedDraft: DraftConfig = {
+      ...assistantDraft,
+      id: draft.id,
+      apiKey: draft.apiKey,
+      extraHeaders: { ...(draft.extraHeaders ?? {}), ...(assistantDraft.extraHeaders ?? {}) },
+      queryParams: { ...(draft.queryParams ?? {}), ...(assistantDraft.queryParams ?? {}) },
+      extraParams: { ...(draft.extraParams ?? {}), ...(assistantDraft.extraParams ?? {}) },
+    };
+    setFormDraft(mergedDraft, true);
+    setAssistantOpen(false);
+    setImportSuccess(true);
+    window.setTimeout(() => setImportSuccess(false), 1800);
+  }, [draft, setFormDraft]);
+
+  const handleEndpointPathChange = useCallback((endpointPath: string) => {
+    const currentTextVariant = draft.imageRequestContract.textToImage ?? {};
+    const currentImageVariant = draft.imageRequestContract.imageToImage ?? {};
+    const shouldSyncImageEndpoint = !currentImageVariant.endpointPath
+      || currentImageVariant.endpointPath === draft.endpointPath
+      || currentImageVariant.endpointPath === currentTextVariant.endpointPath;
+    const imageRequestContract = {
+      ...draft.imageRequestContract,
+      textToImage: { ...currentTextVariant, endpointPath },
+      imageToImage: {
+        ...currentImageVariant,
+        endpointPath: shouldSyncImageEndpoint ? endpointPath : currentImageVariant.endpointPath,
+      },
+    };
+    setDraft({ ...draft, endpointPath, imageRequestContract });
+    setContractText(stringifyCustomImageRequestContract(imageRequestContract));
+    setContractIssues([]);
+  }, [draft]);
+
+  const handleHttpMethodChange = useCallback((httpMethod: 'POST' | 'GET') => {
+    const imageRequestContract = {
+      ...draft.imageRequestContract,
+      textToImage: { ...(draft.imageRequestContract.textToImage ?? {}), method: httpMethod },
+      imageToImage: { ...(draft.imageRequestContract.imageToImage ?? {}), method: httpMethod },
+    };
+    setDraft({ ...draft, httpMethod, imageRequestContract });
+    setContractText(stringifyCustomImageRequestContract(imageRequestContract));
+    setContractIssues([]);
+  }, [draft]);
+
   const handleTestConnectivity = useCallback(async () => {
     setTesting(true);
     setTestResult(null);
     try {
-      const fallbackId = draft.id ?? `cp-draft-${Date.now()}`;
+      const contractDraft = handleApplyContractText();
+      if (!contractDraft) {
+        setTestResult({ ok: false, errorMessage: '声明式请求契约无效' });
+        return;
+      }
+      const fallbackId = contractDraft.id ?? `cp-draft-${Date.now()}`;
       const defaultRequestParams = parseDefaultRequestParams(defaultParamsText);
       setDefaultParamsError('');
       const full = fromDraft({
-        ...draft,
-        extraParams: {
-          ...(draft.extraParams ?? {}),
-          defaultRequestParams,
-        },
+        ...contractDraft,
+        defaultRequestParams: defaultRequestParams ?? {},
       }, fallbackId);
       const res = await testCustomProviderConnectivity(full);
       setTestResult(res);
@@ -462,7 +508,7 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
     } finally {
       setTesting(false);
     }
-  }, [defaultParamsText, draft]);
+  }, [defaultParamsText, handleApplyContractText]);
 
   const handleTestSavedProvider = useCallback(async (provider: CustomProviderConfig) => {
     setTestingProviderId(provider.id);
@@ -517,12 +563,29 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
     [draft],
   );
   const handleBodyModeChange = useCallback((mode: CustomProviderBodyMode) => {
-    setDraft((current) => ({
-      ...current,
-      extraParams: applyBodyModeToExtraParams(current.extraParams, mode),
-    }));
+    const nextContract = mode === 'signed'
+      ? draft.imageRequestContract
+      : {
+        ...draft.imageRequestContract,
+        textToImage: {
+          ...(draft.imageRequestContract.textToImage ?? {}),
+          bodyMode: mode,
+        },
+        imageToImage: {
+          ...(draft.imageRequestContract.imageToImage ?? {}),
+          bodyMode: mode,
+        },
+      };
+    const nextDraft = {
+      ...draft,
+      imageRequestContract: nextContract,
+      extraParams: applyBodyModeToExtraParams(draft.extraParams, mode),
+    };
+    setDraft(nextDraft);
+    setContractText(stringifyCustomImageRequestContract(nextContract));
+    setContractIssues([]);
     setDefaultParamsError('');
-  }, []);
+  }, [draft]);
   const importPlanPreview = useMemo(
     () => formatImportPlanPreview(draft.extraParams),
     [draft.extraParams],
@@ -574,8 +637,7 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
   const applyPreset = useCallback((presetKey: string) => {
     const preset = CUSTOM_PROVIDER_PRESETS.find((p) => p.key === presetKey);
     if (!preset) return;
-    setDraft({
-      ...emptyDraft(),
+    const imported = customImageProviderDraftFromUnknown({
       ...preset.template,
       apiKey: '',
       supportedRatios: Array.isArray((preset.template.extraParams as { supportedRatios?: unknown } | undefined)?.supportedRatios)
@@ -586,13 +648,14 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
       queryParams: preset.template.queryParams ?? {},
       extraHeaders: preset.template.extraHeaders ?? {},
       responseFormat: preset.template.responseFormat ?? 'openai-images',
-    });
-    setModelOptions(preset.template.models ?? []);
-    setDefaultParamsText(stringifyDefaultRequestParams(preset.template.extraParams));
-    setDefaultParamsError('');
-    setModelFetchResult(null);
+    }, emptyDraft());
+    if (!imported.value || imported.issues.length > 0) {
+      setImportError(imported.issues.map((entry) => `${entry.path}: ${entry.message}`).join('；'));
+      return;
+    }
+    setFormDraft(imported.value);
     setTab('configure');
-  }, []);
+  }, [setFormDraft]);
 
   // One-click import via JSON at the top.
   const handleImport = useCallback(() => {
@@ -601,8 +664,7 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
     const raw = importText.trim();
     if (!raw) { setImportError('先粘贴 AI 返回的 JSON'); return; }
     try {
-      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '');
-      const parsed = JSON.parse(cleaned);
+      const parsed = extractCustomImageProviderJson(raw);
       const block = Array.isArray(parsed) ? parsed[0] : parsed;
       if (!block || typeof block !== 'object') throw new Error('JSON 不是对象');
       const blockRecord = block as Record<string, unknown>;
@@ -626,8 +688,7 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
         importedExtraParams,
         blockRecord,
       );
-      setDraft({
-        ...emptyDraft(),
+      const importedCandidate = {
         ...baseTemplate,
         label: String(blockRecord.label ?? baseTemplate.label ?? ''),
         mediaType: (blockRecord.mediaType === 'video' || baseTemplate.mediaType === 'video') ? 'video' : 'image',
@@ -664,19 +725,27 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
           blockRecord.responseFormat as never
         ) ? blockRecord.responseFormat as DraftConfig['responseFormat'] : baseTemplate.responseFormat ?? 'generic',
         extraParams: normalizedExtraParams,
+        defaultRequestParams: normalizedExtraParams.defaultRequestParams,
+        imageRequestContract: blockRecord.imageRequestContract
+          ?? normalizedExtraParams.imageRequestContract,
         note: String(blockRecord.note ?? baseTemplate.note ?? ''),
-      });
-      setModelOptions(importedModels);
-      setDefaultParamsText(stringifyDefaultRequestParams(normalizedExtraParams));
-      setDefaultParamsError('');
-      setModelFetchResult(null);
+      };
+      const imported = parseCustomImageProviderAssistantResponse(
+        JSON.stringify(importedCandidate),
+        emptyDraft(),
+      );
+      if (!imported.value || imported.issues.length > 0) {
+        setContractIssues(imported.issues);
+        throw new Error(imported.issues.map((entry) => `${entry.path}: ${entry.message}`).join('；'));
+      }
+      setFormDraft(imported.value);
       setImportText('');
       setImportSuccess(true);
       setTimeout(() => setImportSuccess(false), 1800);
     } catch (err) {
       setImportError(err instanceof Error ? `解析失败：${err.message}` : '解析失败');
     }
-  }, [importText]);
+  }, [importText, setFormDraft]);
 
   const handleCopyTutorialPrompt = useCallback(async () => {
     try {
@@ -696,29 +765,30 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
       setDefaultParamsError(e instanceof Error ? e.message : String(e));
       return;
     }
+    const contractDraft = handleApplyContractText();
+    if (!contractDraft) return;
     const fallbackId = `cp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const full = fromDraft({
-      ...draft,
-      extraParams: {
-        ...(draft.extraParams ?? {}),
-        defaultRequestParams,
-      },
+    const result = customImageProviderDraftToConfig({
+      ...contractDraft,
+      defaultRequestParams: defaultRequestParams ?? {},
     }, fallbackId);
-    if (draft.id) {
-      updateProvider(draft.id, full);
-    } else {
-      addProvider(full);
+    if (!result.value) {
+      setContractIssues(result.issues);
+      return;
     }
-    setDraft(emptyDraft());
-    setModelOptions([]);
-    setDefaultParamsText('{}');
+    if (contractDraft.id) {
+      updateProvider(contractDraft.id, result.value);
+    } else {
+      addProvider(result.value);
+    }
+    setFormDraft(emptyDraft());
     setSaveFlash(true);
     // In the legacy tabbed view, jump to the list tab so the user sees their
     // new entry; in `add` mode there is no list tab (it lives in a separate
     // sidebar category), so just flash the success message.
     if (mode === 'both') setTab('list');
     setTimeout(() => setSaveFlash(false), 1500);
-  }, [defaultParamsText, draft, addProvider, updateProvider, mode]);
+  }, [defaultParamsText, draft, handleApplyContractText, addProvider, updateProvider, mode, setFormDraft]);
 
   const handleEdit = useCallback((id: string) => {
     const p = providers.find((x) => x.id === id);
@@ -728,34 +798,27 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
     // the target id in the store and let the host switch tabs — the add
     // instance picks it up on mount via useEffect below.
     if (mode === 'both' || mode === 'add') {
-      setDraft(toDraft(p));
-      setModelOptions(p.models);
-      setDefaultParamsText(stringifyDefaultRequestParams(p.extraParams));
-      setDefaultParamsError('');
+      setFormDraft(toDraft(p));
       if (mode === 'both') setTab('configure');
     }
     if (mode === 'list') {
       setPendingEditId(id);
       onRequestAdd?.(isChatCustomProvider(p) ? 'chat' : isVideoCustomProvider(p) ? 'video' : (isModernProviderConfig(p) ? 'new' : 'old'));
     }
-  }, [providers, mode, onRequestAdd, setPendingEditId]);
+  }, [providers, mode, onRequestAdd, setPendingEditId, setFormDraft]);
 
   const handleNewFromScratch = useCallback(() => {
-    setDraft(emptyDraft());
-    setModelOptions([]);
-    setDefaultParamsText('{}');
-    setDefaultParamsError('');
-    setModelFetchResult(null);
+    setFormDraft(emptyDraft());
     if (mode === 'both') setTab('configure');
     else if (mode === 'list') onRequestAdd?.('new');
-  }, [mode, onRequestAdd]);
+  }, [mode, onRequestAdd, setFormDraft]);
 
   // Keep draft in sync when providers change externally (e.g. removal).
   useEffect(() => {
     if (draft.id && !providers.find((p) => p.id === draft.id)) {
-      setDraft(emptyDraft());
+      setFormDraft(emptyDraft());
     }
-  }, [providers, draft.id]);
+  }, [providers, draft.id, setFormDraft]);
 
   // If the user clicked "查看配置" on the 我的配置 list, pick up the pending id
   // and hydrate the draft. This runs in the add-mode instance.
@@ -763,15 +826,12 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
     if ((mode === 'add' || mode === 'both') && pendingEditId) {
       const p = providers.find((x) => x.id === pendingEditId);
       if (p) {
-        setDraft(toDraft(p));
-        setModelOptions(p.models);
-        setDefaultParamsText(stringifyDefaultRequestParams(p.extraParams));
-        setDefaultParamsError('');
+        setFormDraft(toDraft(p));
         if (mode === 'both') setTab('configure');
       }
       setPendingEditId(null);
     }
-  }, [mode, pendingEditId, providers, setPendingEditId]);
+  }, [mode, pendingEditId, providers, setPendingEditId, setFormDraft]);
 
   const showConfigure = mode === 'add' || (mode === 'both' && tab === 'configure');
   const showList = mode === 'list' || (mode === 'both' && tab === 'list');
@@ -781,10 +841,10 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
       {mode !== 'list' && (
         <div>
           <h2 className="text-base font-semibold text-text-dark">
-            {mode === 'add' ? '图片生成（老）' : '配置模型服务'}
+            {mode === 'add' ? t('settings.imageProviderConfig.fullCustom') : '配置模型服务'}
           </h2>
           <p className="mt-1 text-xs text-text-muted">
-            如果供应商 API 符合官方或常见中转站调用格式，推荐使用「添加供应商（新）」。如果接口有自己的特殊路由、轮询任务、multipart、签名代理或复杂字段映射，再用这里的老版高级配置。
+            如果供应商 API 符合官方或常见中转站调用格式，推荐使用「{t('settings.imageProviderConfig.preset')}」。如果接口有自己的特殊路由、轮询任务、multipart、签名代理或复杂字段映射，再使用「{t('settings.imageProviderConfig.fullCustom')}」。
           </p>
         </div>
       )}
@@ -793,7 +853,7 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
           <div>
             <h2 className="text-base font-semibold text-text-dark">我的配置</h2>
             <p className="mt-1 text-xs text-text-muted">
-              已保存的图片新配置、图片老配置和视频配置。查看配置可回到对应表单继续编辑；查看模型展示该配置支持的模型与能力。
+              已保存的{t('settings.imageProviderConfig.preset')}、{t('settings.imageProviderConfig.fullCustom')}和视频配置。查看配置可回到对应表单继续编辑；查看模型展示该配置支持的模型与能力。
             </p>
           </div>
           <button
@@ -836,7 +896,17 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
               <div className="flex items-center gap-1.5 text-sm font-medium text-text-dark">
                 <Upload className="h-4 w-4 text-accent" /> 一键导入 JSON
               </div>
-              <div className="text-[11px] text-text-muted">复制教程提示词 → AI 自动判断模板 → 把 JSON 贴到这里</div>
+              <div className="flex items-center gap-2">
+                <div className="text-[11px] text-text-muted">复制教程提示词 → AI 自动判断模板 → 把 JSON 贴到这里</div>
+                <button
+                  type="button"
+                  onClick={() => setAssistantOpen(true)}
+                  className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md bg-accent px-2.5 text-[11px] text-black hover:bg-accent/90"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {t('settings.customProviders.assistant.open')}
+                </button>
+              </div>
             </div>
             <div className="flex gap-2">
               <textarea
@@ -865,7 +935,7 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
                     <Lightbulb className="h-3.5 w-3.5 text-accent" /> 不知道怎么配？
                   </div>
                   <p className="mt-1 text-[11px] leading-5 text-text-muted">
-                    复制教程提示词到任意 AI，贴上服务商文档 / cURL，让 AI 返回可导入 JSON；这里适合特殊路由、轮询、multipart、签名代理或复杂字段映射。普通 OpenAI Images、Gemini、Fal 等格式优先用「图片生成（新）」。
+                    复制教程提示词到任意 AI，贴上服务商文档 / cURL，让 AI 返回可导入 JSON；这里适合特殊路由、轮询、multipart、签名代理或复杂字段映射。普通 OpenAI Images、Gemini、Fal 等格式优先用「{t('settings.imageProviderConfig.preset')}」。
                   </p>
                 </div>
                 <button
@@ -993,7 +1063,7 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
                   </span>
                   <input
                     value={draft.endpointPath ?? ''}
-                    onChange={(e) => setDraft((d) => ({ ...d, endpointPath: e.target.value }))}
+                    onChange={(e) => handleEndpointPathChange(e.target.value)}
                     placeholder="/v1/images/generations"
                     className="rounded-md border border-border-dark bg-surface-dark px-2 py-1 text-text-dark outline-none focus:border-accent/50 font-mono"
                   />
@@ -1358,7 +1428,7 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
                       <span className="text-text-muted">HTTP 方法</span>
                       <select
                         value={draft.httpMethod ?? 'POST'}
-                        onChange={(e) => setDraft((d) => ({ ...d, httpMethod: e.target.value as 'POST' | 'GET' }))}
+                        onChange={(e) => handleHttpMethodChange(e.target.value as 'POST' | 'GET')}
                         className="rounded-md border border-border-dark bg-bg-dark px-2 py-1 text-text-dark outline-none focus:border-accent/50"
                       >
                         {HTTP_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
@@ -1508,8 +1578,15 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
                       <textarea
                         value={defaultParamsText}
                         onChange={(e) => {
-                          setDefaultParamsText(e.target.value);
-                          if (defaultParamsError) setDefaultParamsError('');
+                          const nextText = e.target.value;
+                          setDefaultParamsText(nextText);
+                          try {
+                            const defaultRequestParams = parseDefaultRequestParams(nextText) ?? {};
+                            setDraft((current) => ({ ...current, defaultRequestParams }));
+                            setDefaultParamsError('');
+                          } catch (error) {
+                            setDefaultParamsError(error instanceof Error ? error.message : String(error));
+                          }
                         }}
                         placeholder='{ "quality": "high", "output_format": "png" }'
                         className="h-20 resize-none rounded-md border border-border-dark bg-bg-dark px-2 py-1 font-mono text-[11px] text-text-dark outline-none focus:border-accent/50"
@@ -1518,6 +1595,17 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
                     </label>
                   </div>
                 </details>
+                <CustomImageProviderContractEditor
+                  value={contractText}
+                  issues={contractIssues}
+                  generatedByAi={aiGeneratedDraft}
+                  onChange={(value) => {
+                    setContractText(value);
+                    setContractIssues([]);
+                    setAiGeneratedDraft(false);
+                  }}
+                  onApply={() => { handleApplyContractText(); }}
+                />
                 {importPlanPreview && (
                   <details className="col-span-2 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3">
                     <summary className="cursor-pointer text-[11px] font-medium text-amber-200">
@@ -1648,7 +1736,7 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
                     <div className="flex min-w-0 items-center gap-2">
                       <div className="truncate text-sm font-medium text-text-dark">{p.label}</div>
                       <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] ${kind.className}`}>
-                        {kind.label}
+                        {kind.labelKey ? t(kind.labelKey) : kind.label}
                       </span>
                     </div>
                     <div className="mt-0.5 text-[11px] text-text-muted truncate font-mono">{p.baseUrl || '(未填 baseUrl)'}</div>
@@ -1714,6 +1802,12 @@ export const CustomProvidersSection = memo(({ mode = 'both', onRequestAdd }: Cus
       )}
 
       {/* "查看模型" popup */}
+      <CustomProviderConfigAssistantDialog
+        isOpen={assistantOpen}
+        onClose={() => setAssistantOpen(false)}
+        onApply={handleApplyAssistantDraft}
+      />
+
       {modelsDialogProvider && (
         <div
           className="fixed inset-0 z-[500] flex items-center justify-center bg-black/60"

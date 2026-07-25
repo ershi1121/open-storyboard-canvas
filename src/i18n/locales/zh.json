@@ -790,7 +790,8 @@
       "selectToEdit": "选中后在下方输入提示词生成或编辑图片",
       "generationFailed": "生成失败",
       "fetchResultFailed": "获取生成结果失败,请重试",
-      "generationElapsed": "生成耗时"
+      "generationElapsed": "生成耗时",
+      "providerWarning": "上游提示"
     },
     "imageEdit": {
       "promptRequired": "请输入提示词",
@@ -984,7 +985,8 @@
     "nodes": "节点数",
     "noProjects": "暂无项目",
     "empty": "暂无项目",
-    "emptyHint": "点击上方按钮创建新项目"
+    "emptyHint": "点击上方按钮创建新项目",
+    "webStorageFallback": "浏览器持久化存储不可用，项目暂时只保存在当前页面会话中。关闭或刷新页面前，请保留重要内容。"
   },
   "promptLibrary": {
     "title": "提示词中心",
@@ -1097,6 +1099,184 @@
     "providers": "密钥",
     "providersDesc": "配置 AI 服务商的 API 密钥",
     "providerGuideText": "不同供应商在模型能力、队列速度和稳定性上可能有差异。建议按当前任务场景切换供应商，并优先使用对应官方文档中的推荐参数。",
+    "imageProviderConfig": {
+      "preset": "图片模型预设配置",
+      "fullCustom": "图片模型全自定义配置"
+    },
+    "addProviders": {
+      "title": "添加供应商",
+      "description": "按生成类型选择配置入口。预设配置负责常见协议，全自定义配置用于搭建任意声明式图片请求。",
+      "tabs": {
+        "imagePreset": "主流 Images、Gemini、Fal 等常见协议",
+        "imageCustom": "自定义路由、字段、图片、比例与轮询",
+        "videoLabel": "视频生成",
+        "chatLabel": "文本对话",
+        "video": "OpenAI Videos API 兼容供应商配置",
+        "chat": "Responses、Chat Completions、Anthropic、Gemini"
+      }
+    },
+    "customProviders": {
+      "assistant": {
+        "open": "让 AI 配置",
+        "title": "AI 图片供应商配置助手",
+        "securityTitle": "只分析公开文档",
+        "securityDescription": "应用只发送固定 schema 指令和你粘贴的公开文档；现有 API Key、配置 Header 和图片 base64 不会发送。返回 JSON 会再次清除敏感字段，并先进入可编辑草稿。",
+        "model": "文本模型",
+        "selectModel": "选择已配置的文本模型",
+        "noUsableModel": "没有可用的文本模型",
+        "noUsableModelHelp": "请先在文本对话配置中添加可用模型；你仍可复制外部提示词，并把外部 AI 返回的 JSON 粘贴到下方。",
+        "documentation": "供应商公开文档 / cURL",
+        "documentationPlaceholder": "粘贴 endpoint、method、请求字段、图生图图片字段、比例映射、轮询和响应示例。请不要粘贴真实密钥。",
+        "generate": "生成配置草稿",
+        "generating": "分析中...",
+        "jsonDraft": "可编辑 JSON 草稿 / 外部 AI 结果",
+        "jsonPlaceholder": "AI 结果会显示在这里；也可以直接粘贴外部 AI 返回的 JSON。",
+        "applyJson": "应用到配置页",
+        "appliedNotice": "已应用到配置页；保存前请检查 endpoint、model、图片字段、比例映射和响应路径。",
+        "copyExternalPrompt": "复制外部 AI 提示词",
+        "promptCopied": "提示词已复制",
+        "fallbackTitle": "改用外部 AI 生成配置",
+        "fallbackDescription": "复制提示词到任意 AI，并粘贴供应商公开文档。将返回的 JSON 放到这里校验后继续。"
+      },
+      "workbench": {
+        "chooseTitle": "选择创建方式",
+        "chooseDescription": "两种方式都会进入同一个配置工作台；这里不提供协议预设，也不会执行脚本或插件代码。",
+        "aiRouteTitle": "让 AI 生成配置",
+        "aiRouteDescription": "粘贴供应商公开文档，由已配置的文本模型生成可编辑草稿。",
+        "manualRouteTitle": "手动搭建配置",
+        "manualRouteDescription": "按连接、请求、图片、响应、能力逐步组合完整 HTTP 契约。",
+        "title": "全自定义图片模型工作台",
+        "description": "每一步只处理一类问题；最后统一检查、测试并保存。",
+        "aiDraftNotice": "AI 已生成草稿，请逐步检查端点、字段、图片编码、比例映射和响应路径。",
+        "backToChoice": "重新选择创建方式",
+        "previous": "上一步",
+        "next": "下一步",
+        "test": "测试连通",
+        "testing": "测试中...",
+        "testPassed": "请求成功，已找到可用图片结果。",
+        "save": "保存配置",
+        "saved": "配置已保存到“我的配置”。",
+        "steps": {
+          "connection": "连接",
+          "request": "生成请求",
+          "images": "图片与几何",
+          "response": "响应与轮询",
+          "capabilities": "模型与能力",
+          "review": "检查与保存"
+        },
+        "stepTitles": {
+          "connection": "连接与鉴权",
+          "request": "文生图请求",
+          "images": "图生图与几何映射",
+          "response": "结果提取与异步轮询",
+          "capabilities": "模型和界面能力",
+          "review": "检查、测试、保存"
+        },
+        "stepDescriptions": {
+          "connection": "设置根地址和鉴权。API Key 可放在 Bearer、自定义 Header 或 Query 参数中。",
+          "request": "定义 endpoint、HTTP 方法、编码方式和任意嵌套请求体模板。",
+          "images": "按需启用独立图生图请求，并声明图片字段形状、编码和比例/分辨率映射。",
+          "response": "列出同步图片路径；异步接口可配置任务 ID、状态字段和轮询地址。",
+          "capabilities": "声明对用户可见的模型、比例、分辨率、版本和说明。",
+          "review": "先检查声明式契约，可选测试真实请求，确认后保存。"
+        },
+        "fields": {
+          "label": "配置名称",
+          "baseUrl": "API 根地址",
+          "apiKey": "API Key",
+          "authMode": "鉴权方式",
+          "authName": "Header / Query 字段名",
+          "authPrefix": "密钥前缀（可选）",
+          "extraHeaders": "额外 Headers JSON",
+          "queryParams": "固定 Query 参数 JSON",
+          "endpointPath": "文生图 endpoint",
+          "method": "HTTP 方法",
+          "bodyMode": "请求编码",
+          "bodyTemplate": "请求体模板 JSON",
+          "defaultParams": "默认请求参数 JSON",
+          "enableImageToImage": "图生图使用独立请求配置",
+          "imageEndpointPath": "图生图 endpoint",
+          "imageFieldName": "图片字段名 / 路径",
+          "imageFieldMode": "多图字段形状",
+          "imageEncoding": "图片编码",
+          "imageBodyTemplate": "图生图请求体模板 JSON",
+          "supportedRatios": "界面可选比例",
+          "supportedResolutions": "界面可选分辨率",
+          "ratioMappings": "比例与分辨率映射 JSON",
+          "responseImagePaths": "文生图响应图片路径",
+          "imageResponsePaths": "图生图响应图片路径",
+          "enableAsync": "提交后需要轮询任务结果",
+          "taskIdPath": "任务 ID 路径",
+          "resultEndpointPath": "轮询 endpoint 模板",
+          "resultMethod": "轮询方法",
+          "statusPath": "状态路径",
+          "successValues": "成功状态",
+          "pendingValues": "进行中状态",
+          "failedValues": "失败状态",
+          "errorPath": "错误信息路径",
+          "imagePath": "轮询结果图片路径（可选）",
+          "intervalMs": "轮询间隔（毫秒）",
+          "timeoutMs": "轮询超时（毫秒）",
+          "pollingRequestBody": "轮询 POST 请求体 JSON",
+          "models": "模型列表",
+          "modelListEndpointPath": "模型列表 endpoint（可选）",
+          "supportedModelVersions": "模型版本 / 变体（可选）",
+          "note": "使用说明（可选）"
+        },
+        "authModes": {
+          "bearer": "Authorization: Bearer",
+          "header": "自定义 Header",
+          "query": "Query 参数",
+          "none": "无需鉴权"
+        },
+        "help": {
+          "extraHeaders": "例如 {\"Referer\":\"https://example.com\",\"X-Version\":\"2026-01\"}。",
+          "queryParams": "所有提交、轮询和模型列表请求都会附带这些固定参数。",
+          "bodyTemplate": "可使用 {{model}}、{{prompt}}、{{size}}、{{aspectRatio}} 和 {{extra.foo}}。",
+          "defaultParams": "作为 {{extra.foo}} 的数据源，也会保留给兼容请求层。",
+          "imageBodyTemplate": "图片通过下方图片字段注入，模板不需要重复粘贴 base64。",
+          "ratioMappings": "例如 {\"16:9\":{\"size\":\"3840x2160\",\"fields\":{\"input.ratio\":\"wide\"}}}。",
+          "pollingRequestBody": "轮询接口需要 POST 请求体时，可在字符串值中使用 {taskId}。"
+        },
+        "review": {
+          "label": "配置",
+          "baseUrl": "根地址",
+          "models": "模型数量",
+          "requestVariants": "请求能力"
+        }
+      },
+      "contract": {
+        "title": "高级声明式图片请求契约 JSON",
+        "subtitle": "文生图 / 图生图分流、模板、图片字段、比例映射、轮询与响应路径",
+        "editorLabel": "声明式图片请求契约 JSON 编辑器",
+        "validationTitle": "请修正以下字段",
+        "securityHint": "仅允许 JSON 和受限模板变量；不执行脚本、函数或插件代码。",
+        "apply": "校验并应用 JSON",
+        "aiDraftNotice": "此契约由 AI 生成，已经过 schema 与敏感字段校验；保存前仍需人工核对。",
+        "sections": {
+          "basicRequest": {
+            "title": "基础请求",
+            "description": "endpoint、method、JSON / multipart / form"
+          },
+          "templates": {
+            "title": "字段与模板",
+            "description": "model、prompt、size 与安全变量"
+          },
+          "imageFields": {
+            "title": "图片字段",
+            "description": "显式 single / array / repeat 与编码"
+          },
+          "ratioMappings": {
+            "title": "比例映射",
+            "description": "任意嵌套路径、ratio 或 size 映射"
+          },
+          "asyncResponse": {
+            "title": "异步与响应",
+            "description": "taskId、轮询状态、多图片路径和错误"
+          }
+        }
+      }
+    },
     "customProviderHelp": {
       "title": "不知道怎么配？",
       "step1": "点左侧「复制教程提示词」，粘贴到你常用的 AI 助手。",

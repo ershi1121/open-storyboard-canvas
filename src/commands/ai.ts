@@ -19,10 +19,9 @@ export interface GenerationJobStatus {
   status: GenerationJobState;
   result?: string | null;
   error?: string | null;
+  /** Non-fatal provider diagnostic, for example an upstream aspect-ratio mismatch. */
+  warning?: string | null;
 }
-
-const BASE64_PREVIEW_HEAD = 96;
-const BASE64_PREVIEW_TAIL = 24;
 
 function truncateText(value: string, max = 200): string {
   if (value.length <= max) {
@@ -31,40 +30,38 @@ function truncateText(value: string, max = 200): string {
   return `${value.slice(0, max)}...(${value.length} chars)`;
 }
 
-function truncateBase64Like(value: string): string {
-  if (!value) {
-    return value;
-  }
+function redactDiagnosticText(value: string): string {
+  return value
+    .replace(/data:[^;\s,]+(?:;[^,\s]+)*;base64,[A-Za-z0-9+/_=-]+/gi, '[data-url omitted]')
+    .replace(/\b[A-Za-z0-9+/_-]{160,}={0,2}\b/g, '[base64 omitted]')
+    .replace(/(Bearer\s+)[^\s,]+/gi, '$1[redacted]')
+    .replace(/((?:api[-_]?key|authorization|token|secret|cookie)\s*[:=]\s*)["']?[^\s,"'}]+/gi, '$1[redacted]')
+    .replace(/([?&](?:api[_-]?key|authorization|token|secret|signature|sig)=)[^&#\s]+/gi, '$1[redacted]');
+}
 
-  if (value.startsWith('data:')) {
-    const [meta, payload = ''] = value.split(',', 2);
-    if (payload.length <= BASE64_PREVIEW_HEAD + BASE64_PREVIEW_TAIL) {
-      return value;
-    }
-    return `${meta},${payload.slice(0, BASE64_PREVIEW_HEAD)}...${payload.slice(-BASE64_PREVIEW_TAIL)}(${payload.length} chars)`;
+function summarizeResultSourceForLog(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '[empty]';
+  if (/^data:/i.test(trimmed)) return '[data-url omitted]';
+  if (/^blob:/i.test(trimmed)) return '[blob-url omitted]';
+  if (/^[A-Za-z0-9+/=]+$/.test(trimmed) && trimmed.length > 300) return '[base64 omitted]';
+  if (/^https?:\/\//i.test(trimmed)) {
+    return '[remote-url omitted]';
   }
-
-  const base64Like = /^[A-Za-z0-9+/=]+$/.test(value) && value.length > 256;
-  if (!base64Like) {
-    return truncateText(value, 280);
-  }
-
-  return `${value.slice(0, BASE64_PREVIEW_HEAD)}...${value.slice(-BASE64_PREVIEW_TAIL)}(${value.length} chars)`;
+  return '[local-source omitted]';
 }
 
 function sanitizeGenerateRequestForLog(request: GenerateRequest): Record<string, unknown> {
   return {
-    prompt: truncateText(request.prompt, 240),
+    promptLength: request.prompt.length,
     model: request.model,
     size: request.size,
     aspect_ratio: request.aspect_ratio,
     reference_images_count: request.reference_images?.length ?? 0,
-    reference_images_preview: (request.reference_images ?? []).map((item) =>
-      truncateBase64Like(item)
-    ),
+    reference_images_kinds: (request.reference_images ?? []).map(summarizeResultSourceForLog),
     reference_videos_count: request.reference_videos?.length ?? 0,
     reference_audios_count: request.reference_audios?.length ?? 0,
-    extra_params: request.extra_params ?? {},
+    extra_param_keys: Object.keys(request.extra_params ?? {}).filter((key) => key.trim()),
   };
 }
 
@@ -80,11 +77,17 @@ function normalizeInvokeError(error: unknown): { message: string; details?: stri
           ? (error as { details?: string }).details
           : undefined
         : undefined;
-    return { message: error.message || 'Generation failed', details: detailsText };
+    return {
+      message: redactDiagnosticText(error.message || 'Generation failed'),
+      details: detailsText ? redactDiagnosticText(detailsText) : undefined,
+    };
   }
 
   if (typeof error === 'string') {
-    return { message: error || 'Generation failed', details: error || undefined };
+    return {
+      message: redactDiagnosticText(error || 'Generation failed'),
+      details: error ? redactDiagnosticText(error) : undefined,
+    };
   }
 
   if (error && typeof error === 'object') {
@@ -100,7 +103,10 @@ function normalizeInvokeError(error: unknown): { message: string; details?: stri
     } catch {
       details = truncateText(String(record), 2000);
     }
-    return { message, details };
+    return {
+      message: redactDiagnosticText(message),
+      details: details ? redactDiagnosticText(details) : undefined,
+    };
   }
 
   return { message: 'Generation failed' };
@@ -117,7 +123,7 @@ function createErrorWithDetails(message: string, details?: string): ErrorWithDet
 export async function setApiKey(provider: string, apiKey: string): Promise<void> {
   console.info('[AI] set_api_key', {
     provider,
-    apiKeyMasked: apiKey ? `${apiKey.slice(0, 4)}***${apiKey.slice(-2)}` : '',
+    apiKeyConfigured: Boolean(apiKey),
     tauri: isTauri(),
   });
   if (!isTauri()) {
@@ -161,7 +167,7 @@ export async function generateImage(request: GenerateRequest): Promise<string> {
     const elapsedMs = Math.round(performance.now() - startedAt);
     console.info('[AI] generate_image success', {
       elapsedMs,
-      resultPreview: truncateText(result, 220),
+      resultSource: summarizeResultSourceForLog(result),
     });
     return result;
   } catch (error) {
@@ -170,11 +176,13 @@ export async function generateImage(request: GenerateRequest): Promise<string> {
     console.error('[AI] generate_image failed', {
       elapsedMs,
       request: sanitizeGenerateRequestForLog(request),
-      error,
-      normalizedError,
+      errorMessage: normalizedError.message,
+      hasDetails: Boolean(normalizedError.details),
     });
     const commandError: ErrorWithDetails = new Error(normalizedError.message);
-    commandError.details = normalizedError.details;
+    commandError.details = normalizedError.details
+      ? redactDiagnosticText(normalizedError.details)
+      : undefined;
     throw commandError;
   }
 }

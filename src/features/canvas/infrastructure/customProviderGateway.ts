@@ -22,6 +22,24 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { hasCustomProviderCredential } from '@/features/canvas/application/providerAvailability';
 import { isLocalFilesystemResultSource } from '@/features/canvas/application/generationRetry';
 import {
+  loadImageElement,
+  reduceAspectRatio,
+} from '@/features/canvas/application/imageData';
+import {
+  applyCustomImageRatioMapping,
+  CUSTOM_IMAGE_REQUEST_LEGACY_FALLBACK_KEY,
+  diagnoseImageAspectMismatch,
+  interpolateImageRequestTemplate,
+  normalizeCustomImageRequestContract,
+  selectImageRequestVariant,
+  setValueAtSafePath,
+  type CustomImageRequestContractV1,
+  type ImageFieldDescriptorV1,
+  type ImageRequestTemplateContext,
+  type ImageRequestVariantV1,
+  type JsonTemplateValue,
+} from '@/features/canvas/application/customImageProviderContract';
+import {
   parseCustomProviderModelId,
   redactSensitiveUrl,
   resolveGenerationSubmissionRetryAttempts,
@@ -67,6 +85,7 @@ interface VideoPollRetryContext {
 
 interface CachedJob extends GenerationJobStatus {
   videoPollRetry?: VideoPollRetryContext;
+  warning?: string | null;
 }
 
 class VideoPollTimeoutError extends Error {
@@ -105,6 +124,32 @@ type ImageEditCompatibilityProfileId = 'configured' | 'openai-array' | 'legacy-m
 interface ImageEditCompatibilityAttempt {
   profileId: ImageEditCompatibilityProfileId;
   reason: 'initial' | 'same-profile-retry' | 'alternate-profile';
+}
+
+interface ResolvedCustomImageContract {
+  contract: CustomImageRequestContractV1;
+  variant: ImageRequestVariantV1 | null;
+  context: ImageRequestTemplateContext;
+}
+
+interface ImageRequestExecutionPlan {
+  method: 'GET' | 'POST';
+  bodyMode: CustomProviderBodyMode;
+  url: string;
+  headers: Record<string, string>;
+  body?: unknown;
+  multipart?: CustomHttpMultipartBody;
+  explicitContract: ResolvedCustomImageContract | null;
+}
+
+function explicitContractOwnsRequestShape(
+  resolved: ResolvedCustomImageContract | null,
+): boolean {
+  const variant = resolved?.variant;
+  return Boolean(
+    variant?.bodyTemplate !== undefined
+      || (variant?.imageFields?.length ?? 0) > 0,
+  );
 }
 
 export interface CustomProviderRequestDebugPreview {
@@ -1051,6 +1096,185 @@ function buildRequestBody(
   }
 }
 
+function resolveExplicitCustomImageContract(
+  cfg: CustomProviderConfig,
+  modelName: string,
+  request: GenerateRequest,
+): ResolvedCustomImageContract | null {
+  const rawContract = cfg.extraParams?.imageRequestContract;
+  if (rawContract === undefined || rawContract === null) return null;
+  const normalized = normalizeCustomImageRequestContract(rawContract);
+  if (!normalized.value || normalized.issues.length > 0) {
+    const details = normalized.issues
+      .slice(0, 6)
+      .map((entry) => `${entry.path}: ${entry.message}`)
+      .join('；');
+    throw new Error(`图片模型全自定义配置无效${details ? `：${details}` : ''}`);
+  }
+  const context: ImageRequestTemplateContext = {
+    model: modelName,
+    prompt: request.prompt,
+    size: request.size,
+    aspectRatio: request.aspect_ratio,
+    images: [...(request.reference_images ?? [])],
+    extra: { ...(request.extra_params ?? {}) },
+  };
+  return {
+    contract: normalized.value,
+    variant: selectImageRequestVariant(
+      normalized.value,
+      (request.reference_images?.length ?? 0) > 0,
+    ),
+    context,
+  };
+}
+
+function recordFromTemplateValue(value: unknown, label: string): Record<string, unknown> {
+  const record = asPlainRecord(value);
+  if (!record) {
+    throw new Error(`${label} 必须生成 JSON 对象`);
+  }
+  return record;
+}
+
+function applyMappedCanonicalGeometry(
+  body: Record<string, unknown>,
+  mappedAspectRatio: string,
+  mappedSize: string,
+): void {
+  if (Object.prototype.hasOwnProperty.call(body, 'aspect_ratio')) {
+    body.aspect_ratio = mappedAspectRatio;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'aspectRatio')) {
+    body.aspectRatio = mappedAspectRatio;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'size')) {
+    body.size = mappedSize;
+  }
+}
+
+function normalizeContractImageSource(source: string, encoding: ImageFieldDescriptorV1['encoding']): string {
+  const trimmed = source.trim();
+  if (encoding === 'base64') {
+    if (/^https?:\/\//i.test(trimmed)) {
+      throw new Error('图片字段 encoding=base64 时，参考图必须先转换为 data URL/base64，不能直接填写远程 URL。');
+    }
+    return stripDataUrlPrefix(trimmed);
+  }
+  if (encoding === 'data-url') {
+    if (trimmed.startsWith('data:')) return trimmed;
+    if (/^https?:\/\//i.test(trimmed)) {
+      throw new Error('图片字段 encoding=data-url 时，参考图必须先下载并转换，不能直接填写远程 URL。');
+    }
+    return `data:image/png;base64,${trimmed}`;
+  }
+  if (encoding === 'url' && !/^https?:\/\//i.test(trimmed)) {
+    throw new Error('图片字段 encoding=url 时，参考图必须是 http(s) URL。');
+  }
+  return trimmed;
+}
+
+function setContractBodyField(
+  body: Record<string, unknown>,
+  fieldName: string,
+  value: unknown,
+): void {
+  const trimmed = fieldName.trim();
+  if (/^[A-Za-z0-9_$-]+\[\]$/.test(trimmed)) {
+    body[trimmed] = value;
+    return;
+  }
+  setValueAtSafePath(body, trimmed, value);
+}
+
+function applyContractImageFieldsToBody(
+  body: Record<string, unknown>,
+  descriptors: ImageFieldDescriptorV1[] | undefined,
+  images: string[],
+): void {
+  if (!descriptors || descriptors.length === 0) return;
+  delete body.reference_images;
+  delete body.image;
+  delete body.images;
+  descriptors.forEach((descriptor) => {
+    const encoded = images.map((source) => normalizeContractImageSource(source, descriptor.encoding));
+    if (encoded.length === 0) return;
+    setContractBodyField(
+      body,
+      descriptor.name,
+      descriptor.mode === 'single' ? encoded[0] : encoded,
+    );
+  });
+}
+
+function buildExplicitContractRequestBody(
+  cfg: CustomProviderConfig,
+  modelName: string,
+  request: GenerateRequest,
+  resolved: ResolvedCustomImageContract,
+): Record<string, unknown> {
+  const ratioSelection = applyCustomImageRatioMapping(
+    resolved.contract,
+    request.aspect_ratio,
+    resolved.context,
+  );
+  const mappedContext: ImageRequestTemplateContext = {
+    ...resolved.context,
+    aspectRatio: ratioSelection.aspectRatio,
+    size: ratioSelection.size,
+  };
+  const template = resolved.variant?.bodyTemplate;
+  let initialBody = template === undefined
+    ? recordFromTemplateValue(buildRequestBody(cfg, modelName, request), '默认请求体')
+    : recordFromTemplateValue(
+      interpolateImageRequestTemplate(template, mappedContext),
+      'imageRequestContract.bodyTemplate',
+    );
+  // A versioned contract can be created by opening and saving a legacy
+  // provider. In that migration shape there is no bodyTemplate yet, so the
+  // legacy requestBodyHints remain the source of truth for nested model,
+  // prompt, ratio, size, and reference-image fields. Apply them before any
+  // explicit ratio mapping; a declared mapping then wins over the fallback.
+  if (
+    template === undefined
+      && cfg.extraParams?.[CUSTOM_IMAGE_REQUEST_LEGACY_FALLBACK_KEY] === true
+  ) {
+    initialBody = applyRequestBodyHints(cfg, initialBody, request, modelName);
+  }
+  const ratioResult = applyCustomImageRatioMapping(
+    resolved.contract,
+    request.aspect_ratio,
+    resolved.context,
+    initialBody,
+  );
+  const body = ratioResult.body;
+  applyMappedCanonicalGeometry(body, ratioResult.aspectRatio, ratioResult.size);
+  applyContractImageFieldsToBody(
+    body,
+    resolved.variant?.imageFields,
+    mappedContext.images,
+  );
+  return body;
+}
+
+function interpolateContractStringRecord(
+  template: Record<string, unknown> | undefined,
+  context: ImageRequestTemplateContext,
+): Record<string, string> {
+  if (!template) return {};
+  const interpolated = interpolateImageRequestTemplate(
+    template as unknown as JsonTemplateValue,
+    context,
+  );
+  const record = asPlainRecord(interpolated);
+  if (!record) return {};
+  return Object.fromEntries(
+    Object.entries(record)
+      .map(([key, value]) => [key.trim(), queryParamValue(value)] as const)
+      .filter((entry): entry is readonly [string, string] => Boolean(entry[0]) && entry[1] !== null),
+  );
+}
+
 function isChatCompletionsEndpoint(cfg: CustomProviderConfig): boolean {
   return (cfg.endpointPath ?? '').toLowerCase().includes('/chat/completions');
 }
@@ -1317,11 +1541,16 @@ function resolveHintedSizeValue(
 }
 
 function parseBodyPath(rawPath: string): string[] {
-  return rawPath
+  const path = rawPath
     .replace(/\[(\d+)\]/g, '.$1')
     .split('.')
     .map((part) => part.trim())
     .filter(Boolean);
+  const unsafePart = path.find((part) => part === '__proto__' || part === 'prototype' || part === 'constructor');
+  if (unsafePart) {
+    throw new Error(`请求字段路径包含不安全片段：${unsafePart}`);
+  }
+  return path;
 }
 
 function setBodyValue(target: Record<string, unknown>, rawPath: string, value: unknown): void {
@@ -1372,15 +1601,57 @@ function resolveDefaultRequestParams(cfg: CustomProviderConfig): Record<string, 
   return raw as Record<string, unknown>;
 }
 
+type CustomProviderAuthMode = 'bearer' | 'header' | 'query' | 'none';
+
+function resolveCustomProviderAuth(cfg: CustomProviderConfig): {
+  mode: CustomProviderAuthMode;
+  name: string;
+  prefix: string;
+} {
+  const auth = asPlainRecord(cfg.extraParams?.auth);
+  const rawMode = String(auth?.mode ?? auth?.type ?? cfg.extraParams?.authMode ?? 'bearer')
+    .trim()
+    .toLowerCase();
+  const mode: CustomProviderAuthMode = rawMode === 'header' || rawMode === 'query' || rawMode === 'none'
+    ? rawMode
+    : 'bearer';
+  const defaultName = mode === 'query' ? 'key' : 'x-api-key';
+  return {
+    mode,
+    name: String(auth?.name ?? cfg.extraParams?.authName ?? defaultName).trim() || defaultName,
+    prefix: String(auth?.prefix ?? cfg.extraParams?.authPrefix ?? '').trim(),
+  };
+}
+
+function configuredApiKeyValue(cfg: CustomProviderConfig, prefix: string): string {
+  const key = cfg.apiKey.trim();
+  return prefix ? `${prefix}${prefix.endsWith(' ') ? '' : ' '}${key}` : key;
+}
+
+function appendConfiguredAuthQuery(
+  cfg: CustomProviderConfig,
+  queryParams: Record<string, string>,
+): Record<string, string> {
+  const auth = resolveCustomProviderAuth(cfg);
+  if (auth.mode !== 'query' || !cfg.apiKey.trim()) return queryParams;
+  return {
+    ...queryParams,
+    [auth.name]: configuredApiKeyValue(cfg, auth.prefix),
+  };
+}
+
 function buildRequestHeaders(
   cfg: CustomProviderConfig,
   bodyMode: CustomProviderBodyMode,
   method: 'GET' | 'POST' = 'POST',
 ): Record<string, string> {
   const headers: Record<string, string> = {};
+  const auth = resolveCustomProviderAuth(cfg);
   if ((modernProviderKind(cfg) === 'google-gemini' || modernProviderKind(cfg) === 'google-video') && cfg.apiKey?.trim()) {
     headers['x-goog-api-key'] = cfg.apiKey.trim();
-  } else if (cfg.apiKey?.trim()) {
+  } else if (auth.mode === 'header' && cfg.apiKey?.trim()) {
+    headers[auth.name] = configuredApiKeyValue(cfg, auth.prefix);
+  } else if (auth.mode === 'bearer' && cfg.apiKey?.trim()) {
     headers.Authorization = `Bearer ${cfg.apiKey.trim()}`;
   }
   if (method === 'POST' && bodyMode === 'json') {
@@ -1586,6 +1857,86 @@ function buildMultipartBody(
   return { fields, files };
 }
 
+function contractMultipartFile(
+  fieldName: string,
+  source: string,
+  index: number,
+  encoding: ImageFieldDescriptorV1['encoding'],
+): NonNullable<CustomHttpMultipartBody['files']>[number] {
+  if (encoding === 'base64') {
+    return {
+      name: fieldName,
+      fileName: index === 0 ? 'reference.png' : `reference-${index + 1}.png`,
+      mimeType: 'image/png',
+      base64: normalizeContractImageSource(source, 'base64'),
+    };
+  }
+  if (encoding === 'data-url') {
+    return {
+      name: fieldName,
+      fileName: index === 0 ? 'reference.png' : `reference-${index + 1}.png`,
+      dataUrl: normalizeContractImageSource(source, 'data-url'),
+    };
+  }
+  return buildMultipartFile(fieldName, source, index);
+}
+
+function buildExplicitContractMultipartBody(
+  cfg: CustomProviderConfig,
+  modelName: string,
+  request: GenerateRequest,
+  resolved: ResolvedCustomImageContract,
+): CustomHttpMultipartBody {
+  const body = buildExplicitContractRequestBody(cfg, modelName, request, resolved);
+  const descriptors = resolved.variant?.imageFields ?? [];
+  const skipPaths = new Set<string>([
+    'reference_images',
+    'image',
+    'images',
+    ...descriptors.map((descriptor) => descriptor.name),
+    ...descriptors.map((descriptor) => descriptor.name.replace(/\[\]$/, '')),
+  ]);
+  const fields: NonNullable<CustomHttpMultipartBody['fields']> = [];
+  collectMultipartFields(body, '', skipPaths, fields);
+  const files: NonNullable<CustomHttpMultipartBody['files']> = [];
+  const images = request.reference_images ?? [];
+
+  if (descriptors.length === 0) {
+    const fallbackField = resolveCustomProviderMultipartFileField(cfg);
+    images.forEach((source, index) => {
+      files.push(buildMultipartFile(fallbackField, source, index));
+    });
+    return { fields, files };
+  }
+
+  descriptors.forEach((descriptor) => {
+    const selected = descriptor.mode === 'single' ? images.slice(0, 1) : images;
+    const multipartFieldName = descriptor.mode === 'array' && !descriptor.name.endsWith('[]')
+      ? `${descriptor.name}[]`
+      : descriptor.name;
+    if (descriptor.encoding === 'url') {
+      selected.forEach((source) => {
+        appendMultipartField(
+          fields,
+          multipartFieldName,
+          normalizeContractImageSource(source, 'url'),
+        );
+      });
+      return;
+    }
+    selected.forEach((source, index) => {
+      files.push(contractMultipartFile(
+        multipartFieldName,
+        source,
+        index,
+        descriptor.encoding,
+      ));
+    });
+  });
+
+  return { fields, files };
+}
+
 function buildImageEditCompatibilityMultipart(
   cfg: CustomProviderConfig,
   modelName: string,
@@ -1653,10 +2004,10 @@ function resolveModernProviderBodyMode(
 
 function resolveModelListUrl(cfg: CustomProviderConfig): string {
   const path = (cfg.modelListEndpointPath ?? '').trim() || '/models';
-  return buildProviderUrl(cfg.baseUrl, path, {
+  return buildProviderUrl(cfg.baseUrl, path, appendConfiguredAuthQuery(cfg, {
     ...(cfg.queryParams ?? {}),
     ...(isGoogleChatProvider(cfg) && cfg.apiKey.trim() ? { key: cfg.apiKey.trim() } : {}),
-  });
+  }));
 }
 
 function resolveModernEndpointPath(cfg: CustomProviderConfig, request: GenerateRequest): string | null {
@@ -1679,10 +2030,11 @@ function resolveEndpointUrlForRequest(
   modelName: string,
   request: GenerateRequest,
   dynamicQueryParams?: Record<string, string>,
+  endpointPathOverride?: string,
 ): string {
   const base = normalizeProviderBaseUrl(cfg.baseUrl);
   const modernPath = resolveModernEndpointPath(cfg, request);
-  const configuredPath = (modernPath ?? cfg.endpointPath ?? '').trim();
+  const configuredPath = (endpointPathOverride ?? modernPath ?? cfg.endpointPath ?? '').trim();
   const joined = configuredPath
     ? buildProviderUrl(base, configuredPath)
     : (
@@ -1694,7 +2046,7 @@ function resolveEndpointUrlForRequest(
     .replace(/\{model\}/g, encodeURIComponent(modelName))
     .replace(/\{modelId\}/g, encodeURIComponent(modelName));
   return appendQueryParams(withModel, {
-    ...(cfg.queryParams ?? {}),
+    ...appendConfiguredAuthQuery(cfg, cfg.queryParams ?? {}),
     ...(dynamicQueryParams ?? {}),
   });
 }
@@ -1741,7 +2093,7 @@ function buildQueryParamsFromRequestBody(body: unknown): Record<string, string> 
 }
 
 function isSensitiveFieldName(name: string): boolean {
-  return /(authorization|api[-_ ]?key|access[-_ ]?token|secret|password|bearer|x-goog-api-key)/i.test(name);
+  return /(authorization|proxy[-_ ]?authorization|cookie|set[-_ ]?cookie|(?:x[-_ ]?(?:goog[-_ ]?)?)?api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|client[-_ ]?secret|secret|signature|credential|password|passphrase|bearer|token)/i.test(name);
 }
 
 function maskDebugHeaderValue(key: string, value: string): string {
@@ -1833,6 +2185,97 @@ function logCustomProviderPhase(
   log('[CustomProviderGeneration]', { phase, ...details });
 }
 
+function buildImageRequestExecutionPlan(
+  cfg: CustomProviderConfig,
+  model: string,
+  request: GenerateRequest,
+): ImageRequestExecutionPlan {
+  const explicitContract = resolveExplicitCustomImageContract(cfg, model, request);
+  const configuredBodyMode = resolveCustomProviderBodyMode(cfg, request.extra_params);
+  const method = explicitContract?.variant?.method ?? cfg.httpMethod ?? 'POST';
+  // Signed/proxy-only markers are a security boundary, not a fallback body
+  // preference. A declarative JSON variant must never bypass this block.
+  const bodyMode = configuredBodyMode === 'signed'
+    ? 'signed'
+    : explicitContract?.variant?.bodyMode
+      ?? resolveModernProviderBodyMode(cfg, request)
+      ?? configuredBodyMode;
+  if (bodyMode === 'signed') {
+    return {
+      method,
+      bodyMode,
+      url: resolveEndpointUrlForRequest(
+        cfg,
+        model,
+        request,
+        undefined,
+        explicitContract?.variant?.endpointPath,
+      ),
+      headers: {},
+      explicitContract,
+    };
+  }
+  if (method === 'GET' && bodyMode === 'multipart') {
+    throw new Error('GET 请求不支持 multipart；请改为 POST 或使用 query 参数。');
+  }
+
+  const body = bodyMode === 'json' || bodyMode === 'form-urlencoded'
+    ? (explicitContract
+      ? buildExplicitContractRequestBody(cfg, model, request, explicitContract)
+      : buildRequestBody(cfg, model, request))
+    : undefined;
+  const multipart = bodyMode === 'multipart'
+    ? (explicitContract
+      ? buildExplicitContractMultipartBody(cfg, model, request, explicitContract)
+      : buildMultipartBody(cfg, model, request))
+    : undefined;
+
+  let contractContext = explicitContract?.context;
+  if (explicitContract) {
+    const mapped = applyCustomImageRatioMapping(
+      explicitContract.contract,
+      request.aspect_ratio,
+      explicitContract.context,
+    );
+    contractContext = {
+      ...explicitContract.context,
+      aspectRatio: mapped.aspectRatio,
+      size: mapped.size,
+    };
+  }
+  const contractQuery = explicitContract && contractContext
+    ? interpolateContractStringRecord(explicitContract.variant?.query, contractContext)
+    : {};
+  const dynamicQuery = {
+    ...contractQuery,
+    ...(method === 'GET' && body ? buildQueryParamsFromRequestBody(body) : {}),
+  };
+  const url = resolveEndpointUrlForRequest(
+    cfg,
+    model,
+    request,
+    dynamicQuery,
+    explicitContract?.variant?.endpointPath,
+  );
+  const headers = buildRequestHeaders(cfg, bodyMode, method);
+  if (explicitContract && contractContext) {
+    const contractHeaders = interpolateContractStringRecord(
+      explicitContract.variant?.headers,
+      contractContext,
+    );
+    Object.entries(contractHeaders).forEach(([key, value]) => {
+      if (
+        (bodyMode === 'multipart' || bodyMode === 'form-urlencoded')
+        && /^(content-type|content-length)$/i.test(key)
+      ) {
+        return;
+      }
+      headers[key] = value;
+    });
+  }
+  return { method, bodyMode, url, headers, body, multipart, explicitContract };
+}
+
 export function buildCustomProviderRequestDebugPreview(
   request: GenerateRequest,
 ): CustomProviderRequestDebugPreview {
@@ -1842,9 +2285,8 @@ export function buildCustomProviderRequestDebugPreview(
   }
 
   const { cfg, model } = resolved;
-  const method = cfg.httpMethod ?? 'POST';
-  const bodyMode = resolveModernProviderBodyMode(cfg, request)
-    ?? resolveCustomProviderBodyMode(cfg, request.extra_params);
+  const plan = buildImageRequestExecutionPlan(cfg, model, request);
+  const { method, bodyMode, url, headers, body, multipart } = plan;
 
   if (bodyMode === 'signed') {
     return {
@@ -1854,24 +2296,12 @@ export function buildCustomProviderRequestDebugPreview(
       modelName: model,
       method,
       bodyMode,
-      url: maskDebugUrl(resolveEndpointUrlForRequest(cfg, model, request)),
+      url: maskDebugUrl(url),
       headers: {},
       error:
         '该配置被识别为签名鉴权/代理路线（signed_proxy_required）。预览不会伪造 AK/SK、时间戳或 Action 签名，请改为后端代理后的普通接口。',
     };
   }
-
-  const body = bodyMode === 'json' || bodyMode === 'form-urlencoded'
-    ? buildRequestBody(cfg, model, request)
-    : undefined;
-  const multipart = bodyMode === 'multipart' ? buildMultipartBody(cfg, model, request) : undefined;
-  const url = resolveEndpointUrlForRequest(
-    cfg,
-    model,
-    request,
-    method === 'GET' && body ? buildQueryParamsFromRequestBody(body) : undefined,
-  );
-  const headers = buildRequestHeaders(cfg, bodyMode, method);
 
   return {
     providerLabel: cfg.label,
@@ -1933,7 +2363,15 @@ function previewPayload(payload: unknown): string {
 }
 
 function redactSensitiveText(value: string): string {
-  return value.replace(/https?:\/\/[^\s"'<>]+/gi, (url) => redactSensitiveUrl(url));
+  return value
+    .replace(/data:[^;\s,]+(?:;[^,\s]+)*;base64,[A-Za-z0-9+/_=-]+/gi, '[data-url omitted]')
+    .replace(/\b[A-Za-z0-9+/_-]{160,}={0,2}\b/g, '[base64 omitted]')
+    .replace(/\b(Bearer|Basic|Token)\s+[^\s,;]+/gi, '$1 [redacted]')
+    .replace(
+      /((?:["']?(?:authorization|proxy-authorization|cookie|set-cookie|(?:x-)?api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|secret(?:[-_ ]?key)?|signature|credential|password)["']?\s*[:=]\s*["']?))([^\s,"'}]+)(["']?)/gi,
+      '$1[redacted]$3',
+    )
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (url) => redactSensitiveUrl(url));
 }
 
 function previewJsonPayload(payload: unknown, maxLength = 1000): string {
@@ -1947,7 +2385,8 @@ function previewJsonPayload(payload: unknown, maxLength = 1000): string {
       serialized = String(payload);
     }
   }
-  return serialized.length > maxLength ? `${serialized.slice(0, maxLength)}...` : serialized;
+  const redacted = redactSensitiveText(serialized);
+  return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}...` : redacted;
 }
 
 function normalizeAsyncStatusValue(value: unknown): string {
@@ -1968,7 +2407,7 @@ function normalizeAsyncStatusValues(values: unknown, fallback: string[]): string
 function formatAsyncErrorValue(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value === 'string') {
-    const trimmed = value.trim();
+    const trimmed = redactSensitiveText(value.trim());
     return trimmed || null;
   }
   if (typeof value === 'number' || typeof value === 'boolean') {
@@ -1988,10 +2427,17 @@ function pickFormattedErrorMessage(...values: unknown[]): string | null {
   return null;
 }
 
-function buildImageNotFoundMessage(cfg: CustomProviderConfig, payload: unknown): string {
+function buildImageNotFoundMessage(
+  cfg: CustomProviderConfig,
+  payload: unknown,
+  explicitPaths: string[] = [],
+): string {
   const responseFormat = cfg.responseFormat ?? 'openai-images';
-  const pathHint = cfg.extraParams?.responseImagePath
-    ? `当前 responseImagePath=${String(cfg.extraParams.responseImagePath)}，请确认路径是否指向图片 URL/base64。`
+  const configuredPaths = explicitPaths.length > 0
+    ? explicitPaths.join(', ')
+    : (cfg.extraParams?.responseImagePath ? String(cfg.extraParams.responseImagePath) : '');
+  const pathHint = configuredPaths
+    ? `当前响应图片路径=${configuredPaths}，请确认路径是否指向图片 URL/base64。`
     : '建议在高级参数里填写 extraParams.responseImagePath，例如 data[0].url、choices[0].message.content、results[0].url。';
   return `响应中未找到图片 URL（responseFormat=${responseFormat}）。${pathHint} 响应预览：${previewPayload(payload)}`;
 }
@@ -2127,26 +2573,35 @@ function guessDefaultPath(apiStyle: string, base: string): string {
   }
 }
 
-function extractFirstImageUrl(cfg: CustomProviderConfig, payload: unknown): string | null {
+function extractFirstImageUrl(
+  cfg: CustomProviderConfig,
+  payload: unknown,
+  explicitPaths: string[] = [],
+): string | null {
   if (typeof payload === 'string') {
     const nested = parseNestedJsonString(payload.trim());
     if (nested !== null) {
-      const nestedImage = extractFirstImageUrl(cfg, nested);
+      const nestedImage = extractFirstImageUrl(cfg, nested, explicitPaths);
       if (nestedImage) return nestedImage;
     }
   }
 
   const unwrappedPayload = unwrapProviderPayload(payload);
   if (!Object.is(unwrappedPayload, payload)) {
-    const unwrapped = extractFirstImageUrl(cfg, unwrappedPayload);
+    const unwrapped = extractFirstImageUrl(cfg, unwrappedPayload, explicitPaths);
     if (unwrapped) return unwrapped;
+  }
+
+  for (const path of explicitPaths) {
+    const explicit = extractByPath(cfg, payload, path);
+    if (explicit) return explicit;
   }
 
   const candidate = selectImageResultCandidate(
     payload,
-    typeof cfg.extraParams?.responseImagePath === 'string'
+    explicitPaths[0] ?? (typeof cfg.extraParams?.responseImagePath === 'string'
       ? cfg.extraParams.responseImagePath
-      : undefined,
+      : undefined),
   );
   if (candidate) {
     const normalized = normalizeImageSourceForProvider(cfg, candidate.source);
@@ -2429,6 +2884,8 @@ async function runCustomProviderJob(
       ...providerLogContext(cfg, model),
       referenceImageCount: request.reference_images?.length ?? 0,
     });
+    const explicitContract = resolveExplicitCustomImageContract(cfg, model, request);
+    const responseImagePaths = explicitContract?.variant?.responseImagePaths ?? [];
     const parsed = await sendGenerationRequest(cfg, model, request);
     logCustomProviderPhase('info', 'submit:success', {
       jobId,
@@ -2437,7 +2894,14 @@ async function runCustomProviderJob(
       responseShape: summarizeResponseShape(parsed),
     });
     const parseStartedAt = Date.now();
-    const imageUrl = await resolveGeneratedImageUrl(cfg, parsed, POLL_TIMEOUT_MS);
+    const imageUrl = await resolveGeneratedImageUrl(
+      cfg,
+      parsed,
+      POLL_TIMEOUT_MS,
+      responseImagePaths,
+      explicitContract?.variant?.asyncTask,
+      Boolean(explicitContract),
+    );
     if (!imageUrl) {
       logCustomProviderPhase('warn', 'parse:no-image', {
         jobId,
@@ -2449,7 +2913,7 @@ async function runCustomProviderJob(
         job_id: jobId,
         status: 'failed',
         result: null,
-        error: buildImageNotFoundMessage(cfg, parsed),
+        error: buildImageNotFoundMessage(cfg, parsed, responseImagePaths),
       });
       return;
     }
@@ -2460,16 +2924,32 @@ async function runCustomProviderJob(
       sourceKind: resolveSourceKind(imageUrl),
     });
     let preparedImageSource: string;
+    let aspectWarning: string | null = null;
     try {
       const materializeStartedAt = Date.now();
-      preparedImageSource = await materializeGeneratedImageSource(cfg, imageUrl);
+      const materialized = await materializeGeneratedImageSourceDetails(cfg, imageUrl);
+      preparedImageSource = materialized.imageSource;
+      aspectWarning = formatImageAspectDiagnostic(
+        request.aspect_ratio === 'auto' ? request.size : request.aspect_ratio,
+        materialized.aspectRatio,
+      );
       logCustomProviderPhase('info', 'materialize:success', {
         jobId,
         ...providerLogContext(cfg, model),
         elapsedMs: Date.now() - materializeStartedAt,
         sourceKind: resolveSourceKind(imageUrl),
-        localPathBasename: basenameForLog(preparedImageSource),
+        localPathBasename: summarizeMaterializedSourceForLog(preparedImageSource),
       });
+      if (aspectWarning) {
+        logCustomProviderPhase('warn', 'materialize:aspect-mismatch', {
+          jobId,
+          ...providerLogContext(cfg, model),
+          requestedRatio: request.aspect_ratio,
+          requestedSize: request.size,
+          actualRatio: materialized.aspectRatio,
+          warning: aspectWarning,
+        });
+      }
     } catch (materializeError) {
       logCustomProviderPhase('warn', 'materialize:failed', {
         jobId,
@@ -2485,7 +2965,13 @@ async function runCustomProviderJob(
       });
       return;
     }
-    cache.set(jobId, { job_id: jobId, status: 'succeeded', result: preparedImageSource, error: null });
+    cache.set(jobId, {
+      job_id: jobId,
+      status: 'succeeded',
+      result: preparedImageSource,
+      error: null,
+      warning: aspectWarning,
+    });
   } catch (err) {
     logCustomProviderPhase('warn', 'submit:failed', {
       jobId,
@@ -2497,7 +2983,7 @@ async function runCustomProviderJob(
       job_id: jobId,
       status: 'failed',
       result: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatUnknownError(err),
     });
   }
 }
@@ -2528,9 +3014,19 @@ function resolveSourceKind(source: string): string {
   return 'text';
 }
 
-function basenameForLog(path: string): string {
-  const normalized = path.replace(/\\/g, '/');
-  return normalized.split('/').pop() ?? '';
+export function summarizeMaterializedSourceForLog(path: string): string {
+  const trimmed = path.trim();
+  if (/^data:/i.test(trimmed)) {
+    const commaIndex = trimmed.indexOf(',');
+    const payloadLength = commaIndex >= 0 ? trimmed.length - commaIndex - 1 : 0;
+    return `[data-url omitted${payloadLength > 0 ? ` (${payloadLength} chars)` : ''}]`;
+  }
+  if (isBase64LikeImage(trimmed)) {
+    return `[base64 omitted (${trimmed.length} chars)]`;
+  }
+  if (/^https?:\/\//i.test(trimmed)) return '[remote-url omitted]';
+  if (isLocalFilesystemResultSource(trimmed)) return '[local-file omitted]';
+  return `[${resolveSourceKind(trimmed)}]`;
 }
 
 function isRemoteHttpImageSource(source: string): boolean {
@@ -2554,37 +3050,61 @@ function asLightweightRetryResultSource(source: string): string | null {
 }
 
 function buildAuthenticatedImageFetchHeaders(cfg: CustomProviderConfig): Record<string, string> {
-  const headers: Record<string, string> = {};
-  if ((modernProviderKind(cfg) === 'google-gemini' || modernProviderKind(cfg) === 'google-video') && cfg.apiKey?.trim()) {
-    headers['x-goog-api-key'] = cfg.apiKey.trim();
-  } else if (cfg.apiKey?.trim()) {
-    headers.Authorization = `Bearer ${cfg.apiKey.trim()}`;
-  }
-  Object.entries(cfg.extraHeaders ?? {}).forEach(([key, value]) => {
-    const normalizedKey = key.trim();
-    if (!normalizedKey || /^content-type$/i.test(normalizedKey)) {
-      return;
-    }
-    headers[normalizedKey] = value;
-  });
-  return headers;
+  return buildRequestHeaders(cfg, 'json', 'GET');
 }
 
-async function materializeGeneratedImageSource(
+interface MaterializedGeneratedImageSource {
+  imageSource: string;
+  aspectRatio?: string;
+}
+
+export async function detectInlineImageAspectRatio(source: string): Promise<string | undefined> {
+  const trimmed = source.trim();
+  if (!/^data:image\//i.test(trimmed) && !/^blob:/i.test(trimmed)) {
+    return undefined;
+  }
+  // The native materializer reports dimensions for remote URLs. Inline data
+  // URLs bypass that path, so decode them once in the WebView as well. If the
+  // browser cannot decode the source, keep the image and omit only the
+  // optional diagnostic rather than failing generation.
+  if (typeof Image === 'undefined') return undefined;
+  try {
+    const image = await loadImageElement(trimmed);
+    const width = Number(image.naturalWidth);
+    const height = Number(image.naturalHeight);
+    if (width > 0 && height > 0) return reduceAspectRatio(width, height);
+  } catch {
+    // Aspect diagnostics are best effort and must not block a valid result.
+  }
+  return undefined;
+}
+
+async function materializeGeneratedImageSourceDetails(
   cfg: CustomProviderConfig,
   imageSource: string,
-): Promise<string> {
+): Promise<MaterializedGeneratedImageSource> {
   if (!isRemoteHttpImageSource(imageSource)) {
-    return imageSource;
+    return {
+      imageSource,
+      aspectRatio: await detectInlineImageAspectRatio(imageSource),
+    };
   }
 
   try {
     const prepared = await prepareNodeImageSource(imageSource);
-    return prepared.imagePath;
+    return { imageSource: prepared.imagePath, aspectRatio: prepared.aspectRatio };
   } catch (publicError) {
     const authHeaders = buildAuthenticatedImageFetchHeaders(cfg);
+    const auth = resolveCustomProviderAuth(cfg);
+    const authenticatedImageSource = auth.mode === 'query' && cfg.apiKey.trim()
+      ? appendQueryParams(imageSource, {
+        [auth.name]: configuredApiKeyValue(cfg, auth.prefix),
+      })
+      : imageSource;
     const mayForwardCredentials = shouldForwardProviderCredentials(cfg.baseUrl, imageSource);
-    if (Object.keys(authHeaders).length === 0 || !mayForwardCredentials) {
+    const hasAuthenticatedRetry = Object.keys(authHeaders).length > 0
+      || authenticatedImageSource !== imageSource;
+    if (!hasAuthenticatedRetry || !mayForwardCredentials) {
       throw new Error(
         [
           '已获取到生成结果地址，但图片下载或解析失败。',
@@ -2595,8 +3115,8 @@ async function materializeGeneratedImageSource(
     }
 
     try {
-      const prepared = await prepareNodeImageSourceWithHeaders(imageSource, authHeaders);
-      return prepared.imagePath;
+      const prepared = await prepareNodeImageSourceWithHeaders(authenticatedImageSource, authHeaders);
+      return { imageSource: prepared.imagePath, aspectRatio: prepared.aspectRatio };
     } catch (authenticatedError) {
       throw new Error(
         [
@@ -2607,6 +3127,39 @@ async function materializeGeneratedImageSource(
       );
     }
   }
+}
+
+async function materializeGeneratedImageSource(
+  cfg: CustomProviderConfig,
+  imageSource: string,
+): Promise<string> {
+  return (await materializeGeneratedImageSourceDetails(cfg, imageSource)).imageSource;
+}
+
+function aspectRatioParts(value: string | undefined): { width: number; height: number } | null {
+  if (!value) return null;
+  const match = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(value.trim());
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+function formatImageAspectDiagnostic(
+  requestedRatio: string,
+  actualRatio: string | undefined,
+): string | null {
+  const actual = aspectRatioParts(actualRatio);
+  if (!actual) return null;
+  const diagnostic = diagnoseImageAspectMismatch({
+    requestedRatio,
+    actualWidth: actual.width,
+    actualHeight: actual.height,
+  });
+  if (!diagnostic) return null;
+  return diagnostic.orientation === 'reversed'
+    ? `上游返回比例方向与请求相反：请求 ${requestedRatio}，实际 ${actualRatio}。请在“图片模型全自定义配置”的比例映射中调整上游字段或 size。`
+    : `上游返回比例与请求不一致：请求 ${requestedRatio}，实际 ${actualRatio}。请检查上游是否忽略比例/分辨率字段。`;
 }
 
 export async function materializeCustomProviderImageResult(
@@ -3698,7 +4251,7 @@ async function runCustomVideoJob(
         job_id: jobId,
         status: 'failed',
         result: null,
-        error: err.message,
+        error: formatUnknownError(err),
         videoPollRetry: err.retryContext,
       });
       return;
@@ -3707,7 +4260,7 @@ async function runCustomVideoJob(
       job_id: jobId,
       status: 'failed',
       result: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatUnknownError(err),
     });
   }
 }
@@ -3734,7 +4287,7 @@ async function retryCustomVideoPoll(jobId: string, retryContext: VideoPollRetryC
         job_id: jobId,
         status: 'failed',
         result: null,
-        error: err.message,
+        error: formatUnknownError(err),
         videoPollRetry: err.retryContext,
       });
       return;
@@ -3743,7 +4296,7 @@ async function retryCustomVideoPoll(jobId: string, retryContext: VideoPollRetryC
       job_id: jobId,
       status: 'failed',
       result: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatUnknownError(err),
     });
   }
 }
@@ -3919,24 +4472,13 @@ async function sendGenerationRequest(
   request: GenerateRequest,
   timeoutMs?: number,
 ): Promise<unknown> {
-  const method = cfg.httpMethod ?? 'POST';
-  const bodyMode = resolveModernProviderBodyMode(cfg, request)
-    ?? resolveCustomProviderBodyMode(cfg, request.extra_params);
+  const plan = buildImageRequestExecutionPlan(cfg, model, request);
+  const { method, bodyMode, body, multipart: configuredMultipart, url, headers, explicitContract } = plan;
   if (bodyMode === 'signed') {
     throw new Error(
       '该配置被识别为签名鉴权/代理路线（signed_proxy_required）。当前通用直连不会生成 AK/SK、时间戳或 Action 签名；请改为后端代理后的普通 JSON/multipart 接口，或重新导入为可直连预设。'
     );
   }
-  const body = bodyMode === 'json' || bodyMode === 'form-urlencoded'
-    ? buildRequestBody(cfg, model, request)
-    : undefined;
-  const url = resolveEndpointUrlForRequest(
-    cfg,
-    model,
-    request,
-    method === 'GET' && body ? buildQueryParamsFromRequestBody(body) : undefined,
-  );
-  const headers = buildRequestHeaders(cfg, bodyMode, method);
   const resolvedTimeoutMs = timeoutMs ?? resolveGenerationRequestTimeoutMs(cfg);
   const submit = async (
     multipart?: CustomHttpMultipartBody,
@@ -3973,9 +4515,11 @@ async function sendGenerationRequest(
     return parsed;
   };
 
-  if (!isImageEditCompatibilityEligible(cfg, method, bodyMode, url, request)) {
-    const multipart = bodyMode === 'multipart' ? buildMultipartBody(cfg, model, request) : undefined;
-    return submit(multipart);
+  if (
+    explicitContractOwnsRequestShape(explicitContract)
+    || !isImageEditCompatibilityEligible(cfg, method, bodyMode, url, request)
+  ) {
+    return submit(configuredMultipart);
   }
 
   const lookupKey = imageEditCompatibilityLookupKey(cfg, model, url);
@@ -4081,8 +4625,12 @@ function extractTaskId(payload: unknown): string | null {
   return typeof found === 'string' ? found.trim() : null;
 }
 
-function resolveAsyncTaskConfig(cfg: CustomProviderConfig): AsyncTaskConfig | null {
-  const raw = cfg.extraParams?.asyncTask;
+function resolveAsyncTaskConfig(
+  cfg: CustomProviderConfig,
+  rawOverride?: unknown,
+  hasExplicitContract = false,
+): AsyncTaskConfig | null {
+  const raw = hasExplicitContract ? rawOverride : (rawOverride ?? cfg.extraParams?.asyncTask);
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     if (isModernProviderConfig(cfg) && modernProviderKind(cfg) === 'replicate') {
       return {
@@ -4137,7 +4685,7 @@ function resolveAsyncTaskConfig(cfg: CustomProviderConfig): AsyncTaskConfig | nu
 
 function resolveAsyncTaskUrl(cfg: CustomProviderConfig, pathTemplate: string, taskId: string): string {
   const filled = pathTemplate.replace(/\{taskId\}/g, encodeURIComponent(taskId));
-  return buildProviderUrl(cfg.baseUrl, filled, cfg.queryParams ?? {});
+  return buildProviderUrl(cfg.baseUrl, filled, appendConfiguredAuthQuery(cfg, cfg.queryParams ?? {}));
 }
 
 function fillTaskTemplate(value: unknown, taskId: string): unknown {
@@ -4153,9 +4701,13 @@ async function pollAsyncTaskResult(
   cfg: CustomProviderConfig,
   submitPayload: unknown,
   config: AsyncTaskConfig,
+  explicitPaths: string[] = [],
 ): Promise<string | null> {
   const payloadAtSubmit = unwrapProviderPayload(submitPayload);
-  const immediate = config.imagePath
+  const immediate = explicitPaths.length > 0
+    ? extractFirstImageUrl(cfg, submitPayload, explicitPaths)
+      ?? extractFirstImageUrl(cfg, payloadAtSubmit, explicitPaths)
+    : config.imagePath
     ? extractByPath(cfg, submitPayload, config.imagePath) ?? extractByPath(cfg, payloadAtSubmit, config.imagePath)
     : extractFirstImageUrl(cfg, payloadAtSubmit);
   if (immediate) return immediate;
@@ -4207,11 +4759,6 @@ async function pollAsyncTaskResult(
     }
 
     const payload = unwrapProviderPayload(parsed);
-    const imageUrl = config.imagePath
-      ? extractByPath(cfg, parsed, config.imagePath) ?? extractByPath(cfg, payload, config.imagePath)
-      : extractFirstImageUrl(cfg, payload);
-    if (imageUrl) return imageUrl;
-
     const statusRaw = config.statusPath
       ? (getValueByPath(parsed, config.statusPath) ?? getValueByPath(payload, config.statusPath))
       : null;
@@ -4222,6 +4769,15 @@ async function pollAsyncTaskResult(
         : null;
       throw new Error(formatAsyncErrorValue(messageRaw) ?? `任务失败：${status}`);
     }
+
+    const imageUrl = explicitPaths.length > 0
+      ? extractFirstImageUrl(cfg, parsed, explicitPaths)
+        ?? extractFirstImageUrl(cfg, payload, explicitPaths)
+      : config.imagePath
+      ? extractByPath(cfg, parsed, config.imagePath) ?? extractByPath(cfg, payload, config.imagePath)
+      : extractFirstImageUrl(cfg, payload);
+    if (imageUrl) return imageUrl;
+
     if (status && config.successValues.includes(status)) {
       lastSuccessWithoutImage = status;
       continue;
@@ -4317,21 +4873,26 @@ async function resolveGeneratedImageUrl(
   cfg: CustomProviderConfig,
   parsed: unknown,
   fallbackTimeoutMs: number,
+  responseImagePaths: string[] = [],
+  asyncTaskOverride?: unknown,
+  hasExplicitContract = false,
 ): Promise<string | null> {
   const unwrappedParsed = unwrapProviderPayload(parsed);
   const direct =
-    extractFirstImageUrl(cfg, parsed)
-    ?? (Object.is(unwrappedParsed, parsed) ? null : extractFirstImageUrl(cfg, unwrappedParsed));
+    extractFirstImageUrl(cfg, parsed, responseImagePaths)
+    ?? (Object.is(unwrappedParsed, parsed)
+      ? null
+      : extractFirstImageUrl(cfg, unwrappedParsed, responseImagePaths));
   if (direct) return direct;
 
-  const asyncTask = resolveAsyncTaskConfig(cfg);
+  const asyncTask = resolveAsyncTaskConfig(cfg, asyncTaskOverride, hasExplicitContract);
   let asyncTaskError: unknown = null;
   if (asyncTask) {
     try {
       const imageUrl = await pollAsyncTaskResult(cfg, parsed, {
         ...asyncTask,
         timeoutMs: Math.max(asyncTask.timeoutMs, fallbackTimeoutMs),
-      });
+      }, responseImagePaths);
       if (imageUrl) return imageUrl;
     } catch (err) {
       asyncTaskError = err;
@@ -4352,7 +4913,15 @@ async function resolveGeneratedImageUrl(
 export function getCustomProviderJob(jobId: string): GenerationJobStatus {
   const cached = cache.get(jobId);
   if (!cached) return { job_id: jobId, status: 'not_found', result: null, error: 'job id not found' };
-  return cached;
+  // Keep retry context (which contains the provider config and API key) inside
+  // the gateway. Never expose it through the public polling DTO.
+  return {
+    job_id: cached.job_id,
+    status: cached.status,
+    result: cached.result ?? null,
+    error: cached.error ?? null,
+    ...(cached.warning ? { warning: cached.warning } : {}),
+  };
 }
 
 export function retryCustomProviderJob(jobId: string): boolean {
@@ -4459,7 +5028,7 @@ export async function fetchCustomProviderModels(
       headers,
       timeoutMs: 20000,
     });
-    const rawPreview = text.slice(0, 300);
+    const rawPreview = previewPayload(text);
     const models = extractModelIds(parsed);
     if (models.length === 0) {
       return { ok: false, models: [], status, errorMessage: '响应中没有识别到模型 id', rawPreview };
@@ -5047,7 +5616,7 @@ export async function testCustomChatProviderConnectivity(
       body,
       timeoutMs: 30000,
     });
-    const rawPreview = text.slice(0, 300);
+    const rawPreview = previewPayload(text);
     const extractedText = extractChatText(parsed);
     if (extractedText) {
       return { ok: true, status, text: extractedText, rawPreview };
@@ -5310,7 +5879,7 @@ export async function testCustomProviderConnectivity(
   try {
     if (isVideoCustomProvider(cfg)) {
       const parsed = await sendVideoGenerationRequest(cfg, modelName, request);
-      const rawPreview = JSON.stringify(parsed).slice(0, 300);
+      const rawPreview = previewPayload(parsed);
       const videoSource =
         extractFirstVideoSource(cfg, parsed)
         ?? (extractTaskId(parsed) ? 'pending-video-task' : null);
@@ -5324,14 +5893,28 @@ export async function testCustomProviderConnectivity(
         rawPreview,
       };
     }
+    const explicitContract = resolveExplicitCustomImageContract(cfg, modelName, request);
+    const responseImagePaths = explicitContract?.variant?.responseImagePaths ?? [];
     const parsed = await sendGenerationRequest(cfg, modelName, request, 30000);
-    const rawPreview = JSON.stringify(parsed).slice(0, 300);
-    const imageUrl = await resolveGeneratedImageUrl(cfg, parsed, CONNECTIVITY_TEST_POLL_TIMEOUT_MS);
+    const rawPreview = previewPayload(parsed);
+    const imageUrl = await resolveGeneratedImageUrl(
+      cfg,
+      parsed,
+      CONNECTIVITY_TEST_POLL_TIMEOUT_MS,
+      responseImagePaths,
+      explicitContract?.variant?.asyncTask,
+      Boolean(explicitContract),
+    );
     if (imageUrl) {
       const preparedImageSource = await materializeGeneratedImageSource(cfg, imageUrl);
       return { ok: true, status: 200, imageUrl: preparedImageSource, rawPreview };
     }
-    return { ok: false, status: 200, errorMessage: buildImageNotFoundMessage(cfg, parsed), rawPreview };
+    return {
+      ok: false,
+      status: 200,
+      errorMessage: buildImageNotFoundMessage(cfg, parsed, responseImagePaths),
+      rawPreview,
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, errorMessage: `请求失败：${msg}` };

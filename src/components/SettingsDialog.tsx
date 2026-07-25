@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import { X, FolderOpen, Plus, Trash2, CheckCircle2, ExternalLink, RotateCcw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { getVersion } from '@tauri-apps/api/app';
+import { isTauri } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { customHttpRequest } from '@/commands/ai';
@@ -353,6 +354,12 @@ export function SettingsDialog({
 
   useEffect(() => {
     let mounted = true;
+    if (!isTauri()) {
+      setAppVersion('');
+      return () => {
+        mounted = false;
+      };
+    }
     const loadAppVersion = async () => {
       try {
         const version = await getVersion();
@@ -676,7 +683,7 @@ export function SettingsDialog({
       />
       <div className="relative w-[min(96vw,1120px)]">
         <div
-          className={`relative mx-auto h-[min(86vh,760px)] w-full overflow-hidden rounded-lg border border-border-dark bg-surface-dark shadow-xl transition-opacity duration-200 ${isVisible ? 'opacity-100' : 'opacity-0'} flex`}
+          className={`relative mx-auto flex h-[min(86vh,760px)] w-full flex-col overflow-hidden rounded-lg border border-border-dark bg-surface-dark shadow-xl transition-opacity duration-200 sm:flex-row ${isVisible ? 'opacity-100' : 'opacity-0'}`}
         >
           {/* Close button */}
           <button
@@ -687,14 +694,14 @@ export function SettingsDialog({
           </button>
 
           {/* Sidebar */}
-          <div className="ui-scrollbar w-[180px] bg-bg-dark border-r border-border-dark flex flex-col overflow-y-auto">
-            <div className="px-4 py-4">
+          <div className="ui-scrollbar flex w-full shrink-0 flex-col overflow-hidden border-b border-border-dark bg-bg-dark sm:h-auto sm:w-[180px] sm:overflow-y-auto sm:border-b-0 sm:border-r">
+            <div className="hidden px-4 py-4 sm:block">
               <span className="text-xs font-medium text-text-muted uppercase tracking-wider">
                 {t('settings.title')}
               </span>
             </div>
 
-            <nav className="flex-1">
+            <nav className="ui-scrollbar flex flex-1 overflow-x-auto pr-10 [&>button]:w-auto [&>button]:shrink-0 sm:block sm:overflow-visible sm:pr-0 sm:[&>button]:w-full">
               <button
                 onClick={() => setActiveCategory('general')}
                 className={`
@@ -880,7 +887,7 @@ export function SettingsDialog({
           </div>
 
           {/* Content */}
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {activeCategory === 'customProviders' && (
               <div className="flex flex-1 flex-col overflow-hidden">
                 <div className="ui-scrollbar flex-1 overflow-y-auto px-6 py-5">

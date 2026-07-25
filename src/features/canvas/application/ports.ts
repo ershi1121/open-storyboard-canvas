@@ -62,6 +62,7 @@ export interface AiGateway {
     status: 'queued' | 'running' | 'succeeded' | 'failed' | 'not_found';
     result?: string | null;
     error?: string | null;
+    warning?: string | null;
   }>;
   submitGenerateVideoJob: (payload: GenerateVideoPayload) => Promise<string>;
   getGenerateVideoJob: (jobId: string) => Promise<{
@@ -69,6 +70,7 @@ export interface AiGateway {
     status: 'queued' | 'running' | 'succeeded' | 'failed' | 'not_found';
     result?: string | null;
     error?: string | null;
+    warning?: string | null;
   }>;
   retryGenerateVideoJob?: (jobId: string) => Promise<boolean>;
 }

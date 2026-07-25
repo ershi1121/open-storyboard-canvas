@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { useTranslation } from 'react-i18next';
 import { Canvas } from './features/canvas/Canvas';
 import { TitleBar } from './components/TitleBar';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
@@ -24,6 +25,7 @@ import {
   subscribeOpenSettingsDialog,
   type SettingsCategory,
 } from './features/settings/settingsEvents';
+import { subscribeWebProjectStorageStatus } from './commands/projectState';
 
 function toRgbCssValue(hexColor: string): string {
   const hex = hexColor.replace('#', '');
@@ -37,6 +39,7 @@ function toRgbCssValue(hexColor: string): string {
 }
 
 function App() {
+  const { t } = useTranslation();
   const { theme } = useThemeStore();
   const uiRadiusPreset = useSettingsStore((state) => state.uiRadiusPreset);
   const themeTonePreset = useSettingsStore((state) => state.themeTonePreset);
@@ -50,6 +53,7 @@ function App() {
   const [latestVersion, setLatestVersion] = useState<string>('');
   const [currentVersion, setCurrentVersion] = useState<string>('');
   const [globalError, setGlobalError] = useState<GlobalErrorDialogDetail | null>(null);
+  const [showWebStorageFallback, setShowWebStorageFallback] = useState(false);
 
   const isHydrated = useProjectStore((state) => state.isHydrated);
   const hydrate = useProjectStore((state) => state.hydrate);
@@ -86,6 +90,14 @@ function App() {
   }, [accentColor]);
 
   useEffect(() => {
+    return subscribeWebProjectStorageStatus((status) => {
+      if (status.mode === 'memory') {
+        setShowWebStorageFallback(true);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
     void hydrate();
   }, [hydrate]);
 
@@ -105,6 +117,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
     let cancelled = false;
     let retryTimer: ReturnType<typeof window.setTimeout> | null = null;
 
@@ -221,6 +237,22 @@ function App() {
             showBackButton={!!currentProjectId}
             onBackClick={closeProject}
           />
+
+          {showWebStorageFallback ? (
+            <div
+              role="status"
+              className="flex shrink-0 items-center justify-between gap-4 border-b border-amber-400/30 bg-amber-400/10 px-4 py-2 text-xs text-text-dark"
+            >
+              <span>{t('project.webStorageFallback')}</span>
+              <button
+                type="button"
+                className="shrink-0 rounded px-2 py-1 text-text-muted transition-colors hover:bg-amber-400/10 hover:text-text-dark"
+                onClick={() => setShowWebStorageFallback(false)}
+              >
+                {t('common.close')}
+              </button>
+            </div>
+          ) : null}
 
           <main className="relative min-h-0 flex-1 overflow-hidden">
             {currentProjectId ? <Canvas /> : <ProjectHome />}

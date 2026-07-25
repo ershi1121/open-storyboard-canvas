@@ -49,6 +49,8 @@ export interface NodeImageData extends NodeDisplayData {
   imageUrl: string | null;
   previewImageUrl?: string | null;
   aspectRatio: string;
+  /** Non-fatal provider diagnostic kept alongside a successful image result. */
+  generationWarning?: string | null;
   isSizeManuallyAdjusted?: boolean;
   [key: string]: unknown;
 }

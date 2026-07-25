@@ -657,7 +657,7 @@ export const CUSTOM_PROVIDER_PRESETS: CustomProviderPreset[] = [
 /** Tutorial prompt: users paste this into their favourite AI with their actual
  *  provider doc / curl example, then paste the returned JSON back into the app
  *  for one-click import. */
-export const CUSTOM_PROVIDER_TUTORIAL_PROMPT = `\
+export const LEGACY_CUSTOM_PROVIDER_TUTORIAL_PROMPT = `\
 我正在一个画布类 AI 绘图应用里配置一个自定义的图像生成服务商。请你帮我把下面这段服务商文档 / cURL / 请求示例转换成一个标准的 JSON 配置，方便我一键导入。
 
 要求：
@@ -766,3 +766,5 @@ export const CUSTOM_PROVIDER_TUTORIAL_PROMPT = `\
 
 下面是我的服务商资料：
 <<此处粘贴文档 / cURL / 请求示例>>`;
+
+export { CUSTOM_PROVIDER_TUTORIAL_PROMPT } from '@/features/canvas/application/customImageProviderAiPrompt';

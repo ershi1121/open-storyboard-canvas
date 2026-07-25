@@ -12,6 +12,7 @@ import { prepareNodeImage } from '@/features/canvas/application/imageData';
 import {
   buildGenerationErrorReport,
   CURRENT_RUNTIME_SESSION_ID,
+  sanitizeGenerationDiagnosticText,
 } from '@/features/canvas/application/generationErrorReport';
 import { isLightweightGenerationRetryResultUrl } from '@/features/canvas/application/generationRetry';
 import { showErrorDialog } from '@/features/canvas/application/errorDialog';
@@ -191,11 +192,23 @@ interface PollContext {
 function formatPrepareErrorDetails(error: unknown): string {
   if (error instanceof Error) {
     const details = (error as Error & { details?: unknown }).details;
-    return typeof details === 'string' && details.trim()
+    return sanitizeGenerationDiagnosticText(typeof details === 'string' && details.trim()
       ? `${error.message}\n${details}`
-      : error.message;
+      : error.message);
   }
-  return String(error);
+  return sanitizeGenerationDiagnosticText(String(error));
+}
+
+function formatGenerationErrorForLog(error: unknown): string {
+  if (error instanceof Error) {
+    const details = (error as Error & { details?: unknown }).details;
+    return formatPrepareErrorDetails(
+      typeof details === 'string' && details.trim()
+        ? `${error.message}\n${details}`
+        : error.message,
+    );
+  }
+  return sanitizeGenerationDiagnosticText(String(error));
 }
 
 function resolveGenerationElapsedMs(currentData: Record<string, unknown>, endedAt = Date.now()): number | null {
@@ -243,6 +256,7 @@ async function prepareCompletedImageResult(
   currentData: Record<string, unknown>,
   updateNodeData: (id: string, patch: Partial<CanvasNodeData>) => void,
   translateError: (key: string) => string,
+  generationWarning?: string | null,
 ): Promise<boolean> {
   let prepared;
   let lastPrepareError: unknown = null;
@@ -263,7 +277,7 @@ async function prepareCompletedImageResult(
         nodeId,
         attempt: attempt + 1,
         of: PREPARE_IMAGE_MAX_ATTEMPTS,
-        error,
+        error: formatGenerationErrorForLog(error),
       });
       if (attempt < PREPARE_IMAGE_MAX_ATTEMPTS - 1) {
         // 500 ms, 1 s, 2 s — keeps total worst-case retry under 3.5 s
@@ -319,7 +333,10 @@ async function prepareCompletedImageResult(
       gridCols: Math.max(1, Math.round(storyboardMetadataRaw.gridCols)),
       frameNotes: storyboardMetadataRaw.frameNotes,
     }).catch((error) => {
-      console.warn('[GenerationJob] embed storyboard metadata failed', { nodeId, error });
+      console.warn('[GenerationJob] embed storyboard metadata failed', {
+        nodeId,
+        error: formatGenerationErrorForLog(error),
+      });
       return prepared.imageUrl;
     });
   }
@@ -343,6 +360,14 @@ async function prepareCompletedImageResult(
   let finalPreviewImageUrl = previewWithMetadata;
   let generatedFileName = extractFileNameFromPath(imageWithMetadata);
   const generatedNamingMode = customName ? 'custom' : 'default';
+  const currentGenerationWarning = typeof currentData.generationWarning === 'string'
+    ? currentData.generationWarning.trim()
+    : '';
+  const resolvedGenerationWarning = generationWarning === undefined
+    ? (currentGenerationWarning || null)
+    : (typeof generationWarning === 'string' && generationWarning.trim()
+      ? generationWarning.trim()
+      : null);
 
   try {
     const renamed = await renameLocalMediaFiles({
@@ -357,7 +382,7 @@ async function prepareCompletedImageResult(
   } catch (error) {
     console.warn('[GenerationJob] renameLocalMediaFiles failed for image result', {
       nodeId,
-      error,
+      error: formatGenerationErrorForLog(error),
     });
   }
 
@@ -380,6 +405,7 @@ async function prepareCompletedImageResult(
     generationStoryboardMetadata: undefined,
     generationError: null,
     generationErrorDetails: null,
+    generationWarning: resolvedGenerationWarning,
     generationDebugContext: undefined,
     generationRetryResultUrl: null,
     generationRetryRequestedAt: null,
@@ -417,7 +443,7 @@ async function prepareCompletedVideoResult(
         nodeId,
         attempt: attempt + 1,
         of: PREPARE_VIDEO_MAX_ATTEMPTS,
-        error,
+        error: formatGenerationErrorForLog(error),
       });
       if (attempt < PREPARE_VIDEO_MAX_ATTEMPTS - 1) {
         await sleep(500 * 2 ** attempt);
@@ -432,8 +458,8 @@ async function prepareCompletedVideoResult(
       '获取视频生成结果失败',
     );
     const errorDetails = lastPrepareError instanceof Error
-      ? lastPrepareError.message
-      : String(lastPrepareError);
+      ? formatGenerationErrorForLog(lastPrepareError)
+      : sanitizeGenerationDiagnosticText(String(lastPrepareError));
     const generationClientSessionId =
       typeof currentData.generationClientSessionId === 'string'
         ? currentData.generationClientSessionId
@@ -493,7 +519,7 @@ async function prepareCompletedVideoResult(
   } catch (error) {
     console.warn('[GenerationJob] renameLocalMediaFiles failed for video result', {
       nodeId,
-      error,
+      error: formatGenerationErrorForLog(error),
     });
   }
 
@@ -532,6 +558,8 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
   let lastApiKeyResetAt = 0;
   let lastApiKeyResetProvider: string | null = null;
   let handledRetryRequestedAt: number | null = null;
+  let clearedGenerationWarning = false;
+  let latestGenerationWarning: string | null = null;
 
   try {
     while (true) {
@@ -566,6 +594,15 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
       if (!isGenerating) {
         return;
       }
+      if (!clearedGenerationWarning) {
+        // A reused result node must not show the previous provider warning
+        // while a new request is still in flight. A warning received from the
+        // current job is written after this one-time reset below.
+        clearedGenerationWarning = true;
+        if (currentData.generationWarning) {
+          updateNodeData(nodeId, { generationWarning: null });
+        }
+      }
       if (!jobId && retryResultUrl) {
         if (isVideoNode) {
           await prepareCompletedVideoResult(
@@ -582,6 +619,7 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
             currentData,
             updateNodeData,
             translateError,
+            latestGenerationWarning,
           );
         }
         return;
@@ -603,7 +641,11 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
       ) {
         handledRetryRequestedAt = generationRetryRequestedAt;
         const restarted = await canvasVideoGateway.retryGenerateVideoJob(jobId).catch((error) => {
-          console.warn('[GenerationJob] video retry restart failed', { nodeId, jobId, error });
+          console.warn('[GenerationJob] video retry restart failed', {
+            nodeId,
+            jobId,
+            error: formatGenerationErrorForLog(error),
+          });
           return false;
         });
         if (!restarted && !retryResultUrl) {
@@ -634,7 +676,7 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
               console.warn('[GenerationJob] set_api_key failed before poll', {
                 nodeId,
                 generationProviderId,
-                error,
+                error: formatGenerationErrorForLog(error),
               });
             });
             lastApiKeyResetAt = Date.now();
@@ -647,12 +689,36 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
         ? canvasVideoGateway.getGenerateVideoJob(jobId)
         : canvasAiGateway.getGenerateImageJob(jobId)
       ).catch((error) => {
-        console.warn('[GenerationJob] poll failed', { nodeId, jobId, error });
+        console.warn('[GenerationJob] poll failed', {
+          nodeId,
+          jobId,
+          error: formatGenerationErrorForLog(error),
+        });
         return null;
       });
       if (!status) {
         await sleep(GENERATION_JOB_POLL_INTERVAL_MS);
         continue;
+      }
+
+      const providerWarning = typeof status.warning === 'string'
+        ? sanitizeGenerationDiagnosticText(status.warning.trim())
+        : '';
+      if (providerWarning) {
+        console.warn('[GenerationJob] provider warning', {
+          nodeId,
+          jobId,
+          warning: providerWarning,
+        });
+        if (!isVideoNode && providerWarning) {
+          latestGenerationWarning = providerWarning;
+          updateNodeData(nodeId, { generationWarning: providerWarning });
+        }
+      }
+
+      const currentStatusWarning: string | null = providerWarning || latestGenerationWarning;
+      if (currentStatusWarning) {
+        latestGenerationWarning = currentStatusWarning;
       }
 
       if (status.status === 'queued' || status.status === 'running') {
@@ -678,6 +744,7 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
           currentData,
           updateNodeData,
           translateError,
+          currentStatusWarning,
         );
         return;
       }
@@ -709,14 +776,19 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
             currentData,
             updateNodeData,
             translateError,
+            currentStatusWarning,
           );
         }
         return;
       }
 
       // Failure / not_found / canceled / unknown.
-      const errorMessage =
-        status.error ?? (status.status === 'not_found' ? 'generation job not found' : 'generation failed');
+      const errorMessage = sanitizeGenerationDiagnosticText(
+        status.error ?? (status.status === 'not_found' ? 'generation job not found' : 'generation failed'),
+      );
+      const errorDetails = status.error
+        ? sanitizeGenerationDiagnosticText(status.error)
+        : null;
       const generationClientSessionId =
         typeof currentData.generationClientSessionId === 'string'
           ? currentData.generationClientSessionId
@@ -725,13 +797,13 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
       if (shouldShowDialog) {
         const reportText = buildGenerationErrorReport({
           errorMessage,
-          errorDetails: status.error ?? undefined,
+          errorDetails: errorDetails ?? undefined,
           context: currentData.generationDebugContext,
         });
         void showErrorDialog(
           errorMessage,
           translateError('common.error'),
-          status.error ?? undefined,
+          errorDetails ?? undefined,
           reportText,
         );
       }
@@ -742,7 +814,7 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
       markGenerationFailed(
         nodeId,
         errorMessage,
-        status.error ?? null,
+        errorDetails,
         updateNodeData,
         statusRetryResultUrl
           ? { preserveRetryMetadata: true, retryResultUrl: statusRetryResultUrl, clearJobMetadata: true }

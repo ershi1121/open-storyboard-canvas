@@ -4,7 +4,7 @@
 
 **Goal:** 让 Storyboard-Copilot 在普通浏览器中稳定启动并具备基础本地项目能力，同时将图片模型配置升级为安全、可组合、可由 AI 生成草稿的声明式 HTTP 契约。
 
-**Architecture:** 在 Tauri/浏览器边界增加运行时能力适配，在 canvas application 层统一归一化图片请求模板、比例映射和响应诊断，在 custom provider gateway 层编译为现有 HTTP DTO。设置 UI 与 AI 助手只编辑经过同一 schema 校验的配置，旧 extraParams 保留为兼容回退。
+**Architecture:** 在 Tauri/浏览器边界增加运行时能力适配，在 canvas application 层统一归一化图片请求模板、比例映射和响应诊断，在 custom provider gateway 层编译为现有 HTTP DTO。图片预设与全自定义入口分离；全自定义通过创建方式选择进入同一渐进式工作台，旧 extraParams 保留为兼容回退。
 
 **Tech Stack:** React 18, TypeScript, Zustand, Vite, Tauri 2, Vitest, Playwright, localStorage。
 
@@ -79,6 +79,8 @@ Read result dimensions at the materialization boundary, compare with the request
 
 Add versioned schema normalization and old-field mirrors. Update labels without changing IDs. Make form controls and advanced JSON editor share one serializer/validator.
 
+The full-custom create surface must be new: show only an AI/manual creation choice, then the shared workbench steps (connection, generation request, images and geometry, response and polling, models and capabilities, review/test/save). Do not render legacy form fields, mainstream presets, import boxes, tutorials, or external-AI prompts on this first screen. Keep advanced JSON in an explicit, collapsed expert section. Old providers open as normalized workbench drafts.
+
 ### Task 6: Add the AI configuration assistant
 
 **Files:**
@@ -88,7 +90,7 @@ Add versioned schema normalization and old-field mirrors. Update labels without 
 - Modify: both locale files
 - Test: `src/features/canvas/application/customImageProviderAiPrompt.test.ts`
 
-Reuse the existing chat gateway, redact secrets, parse JSON responses, validate the schema, and feed a draft into the same editor. Preserve copy-prompt/paste-JSON fallback.
+Reuse the existing chat gateway, redact secrets, parse JSON responses, validate the schema, and feed a draft into the same workbench. Show copy-prompt/paste-JSON only within the AI route when no text model is available or generation fails.
 
 ### Task 7: Verify and commit
 

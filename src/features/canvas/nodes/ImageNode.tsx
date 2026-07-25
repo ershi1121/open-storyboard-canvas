@@ -65,6 +65,10 @@ export const ImageNode = memo(({ id, data, selected, type, width, height }: Imag
     typeof (data as { generationError?: unknown }).generationError === 'string'
       ? ((data as { generationError?: string }).generationError ?? '').trim()
       : '';
+  const generationWarning =
+    typeof (data as { generationWarning?: unknown }).generationWarning === 'string'
+      ? ((data as { generationWarning?: string }).generationWarning ?? '').trim()
+      : '';
   const hasGenerationError =
     isExportResultNode && !isGenerating && !data.imageUrl && generationError.length > 0;
   const generationStartedAt =
@@ -304,6 +308,17 @@ export const ImageNode = memo(({ id, data, selected, type, width, height }: Imag
             />
           </div>
         )}
+
+        {generationWarning && data.imageUrl ? (
+          <div
+            className="pointer-events-auto absolute inset-x-2 bottom-2 z-10 flex max-h-16 items-start gap-1.5 overflow-y-auto rounded-md border border-amber-300/45 bg-amber-950/85 px-2 py-1.5 text-[11px] leading-4 text-amber-100 shadow-lg backdrop-blur-sm"
+            role="status"
+            title={t('node.imageNode.providerWarning')}
+          >
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+            <span className="min-w-0 break-words">{generationWarning}</span>
+          </div>
+        ) : null}
       </div>
 
       <Handle

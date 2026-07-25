@@ -1,8 +1,9 @@
 import { memo } from 'react';
 import { Image, Layers, MessageSquareText, Video } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { ChatProvidersSection } from '@/components/settings/ChatProvidersSection';
-import { CustomProvidersSection } from '@/components/settings/CustomProvidersSection';
+import { CustomImageProviderWorkbench } from '@/components/settings/CustomImageProviderWorkbench';
 import { ModernProvidersSection } from '@/components/settings/ModernProvidersSection';
 import { VideoProvidersSection } from '@/components/settings/VideoProvidersSection';
 
@@ -15,32 +16,36 @@ interface AddProvidersSectionProps {
 
 const TABS: Array<{
   id: AddProviderTab;
-  label: string;
-  description: string;
+  labelKey:
+    | 'settings.imageProviderConfig.preset'
+    | 'settings.imageProviderConfig.fullCustom'
+    | 'settings.addProviders.tabs.videoLabel'
+    | 'settings.addProviders.tabs.chatLabel';
+  descriptionKey: string;
   icon: typeof Image;
 }> = [
   {
     id: 'imageNew',
-    label: '图片生成（新）',
-    description: '主流 Images、Gemini、Fal 等格式优先用这里',
+    labelKey: 'settings.imageProviderConfig.preset',
+    descriptionKey: 'settings.addProviders.tabs.imagePreset',
     icon: Image,
   },
   {
     id: 'imageOld',
-    label: '图片生成（老）',
-    description: '复杂路由、轮询、multipart、签名代理等高级配置',
+    labelKey: 'settings.imageProviderConfig.fullCustom',
+    descriptionKey: 'settings.addProviders.tabs.imageCustom',
     icon: Layers,
   },
   {
     id: 'video',
-    label: '视频生成',
-    description: 'OpenAI Videos API 兼容供应商配置',
+    labelKey: 'settings.addProviders.tabs.videoLabel',
+    descriptionKey: 'settings.addProviders.tabs.video',
     icon: Video,
   },
   {
     id: 'chat',
-    label: '文本对话',
-    description: 'Responses、Chat Completions、Anthropic、Gemini',
+    labelKey: 'settings.addProviders.tabs.chatLabel',
+    descriptionKey: 'settings.addProviders.tabs.chat',
     icon: MessageSquareText,
   },
 ];
@@ -49,12 +54,14 @@ export const AddProvidersSection = memo(function AddProvidersSection({
   activeTab,
   onTabChange,
 }: AddProvidersSectionProps) {
+  const { t } = useTranslation();
+
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-base font-semibold text-text-dark">添加供应商</h2>
+        <h2 className="text-base font-semibold text-text-dark">{t('settings.addProviders.title')}</h2>
         <p className="mt-1 text-xs leading-5 text-text-muted">
-          按生成类型选择配置入口。图片新/老配置会继续沿用现有功能；视频和文本对话配置先保存参数，供后续调用层读取。
+          {t('settings.addProviders.description')}
         </p>
       </div>
 
@@ -75,16 +82,18 @@ export const AddProvidersSection = memo(function AddProvidersSection({
             >
               <div className="flex items-center gap-2">
                 <Icon className={`h-4 w-4 ${selected ? 'text-accent' : 'text-text-muted'}`} />
-                <span className="text-sm font-medium text-text-dark">{tab.label}</span>
+                <span className="text-sm font-medium text-text-dark">
+                  {t(tab.labelKey)}
+                </span>
               </div>
-              <div className="mt-1 text-[11px] leading-4 text-text-muted">{tab.description}</div>
+              <div className="mt-1 text-[11px] leading-4 text-text-muted">{t(tab.descriptionKey)}</div>
             </button>
           );
         })}
       </div>
 
       {activeTab === 'imageNew' && <ModernProvidersSection />}
-      {activeTab === 'imageOld' && <CustomProvidersSection mode="add" />}
+      {activeTab === 'imageOld' && <CustomImageProviderWorkbench />}
       {activeTab === 'video' && <VideoProvidersSection />}
       {activeTab === 'chat' && <ChatProvidersSection />}
     </div>

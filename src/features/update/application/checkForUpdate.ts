@@ -2,8 +2,6 @@ import { getVersion } from '@tauri-apps/api/app';
 import { isTauri } from '@tauri-apps/api/core';
 import { checkLatestReleaseTag } from '../../../commands/update';
 
-const GITHUB_LATEST_RELEASE_API =
-  'https://api.github.com/repos/ganbo-gab/open-storyboard-canvas/releases/latest';
 const VERSION_SUPPRESSION_STORAGE_KEY =
   'open-storyboard-canvas:update-check:version-suppressions';
 
@@ -14,9 +12,6 @@ export interface UpdateCheckResult {
   error?: 'network' | 'unknown';
 }
 
-interface GithubLatestReleaseResponse {
-  tag_name?: string;
-}
 type VersionSuppressionMode = 'today' | 'forever';
 
 interface VersionSuppressionRecord {
@@ -145,47 +140,24 @@ function compareVersions(left: string, right: string): number {
 }
 
 export async function checkForUpdate(): Promise<UpdateCheckResult> {
+  // The browser build has no native app version or Tauri update command.
+  // Return quietly instead of invoking the Tauri app plugin and logging a
+  // rejected command on every Web startup.
+  if (!isTauri()) {
+    return { hasUpdate: false };
+  }
+
   try {
     const currentVersion = normalizeVersion(await getVersion());
     if (!currentVersion) {
       return { hasUpdate: false };
     }
-    if (!GITHUB_LATEST_RELEASE_API) {
-      return { hasUpdate: false };
-    }
-
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 8000);
-
     let latestTag = '';
 
-    if (isTauri()) {
-      try {
-        latestTag = normalizeVersion((await checkLatestReleaseTag()) ?? '');
-      } catch {
-        return { hasUpdate: false, error: 'network' };
-      } finally {
-        window.clearTimeout(timeoutId);
-      }
-    } else {
-      try {
-        const response = await fetch(GITHUB_LATEST_RELEASE_API, {
-          method: 'GET',
-          headers: {
-            Accept: 'application/vnd.github+json',
-          },
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          return { hasUpdate: false, error: 'network' };
-        }
-
-        const data = (await response.json()) as GithubLatestReleaseResponse;
-        latestTag = normalizeVersion(data.tag_name ?? '');
-      } finally {
-        window.clearTimeout(timeoutId);
-      }
+    try {
+      latestTag = normalizeVersion((await checkLatestReleaseTag()) ?? '');
+    } catch {
+      return { hasUpdate: false, error: 'network' };
     }
 
     if (!latestTag) {

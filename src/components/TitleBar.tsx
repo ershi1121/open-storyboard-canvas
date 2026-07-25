@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, X, Maximize2, Settings, ArrowLeft } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -23,7 +24,8 @@ export function TitleBar({ onSettingsClick, showBackButton, onBackClick }: Title
   const { theme, toggleTheme } = useThemeStore();
   const currentProjectName = useProjectStore((state) => state.currentProject?.name);
 
-  const appWindow = getCurrentWindow();
+  const isDesktopRuntime = isTauri();
+  const appWindow = isDesktopRuntime ? getCurrentWindow() : null;
   const isZh = i18n.language.startsWith('zh');
   const isMac =
     typeof navigator !== 'undefined'
@@ -32,10 +34,12 @@ export function TitleBar({ onSettingsClick, showBackButton, onBackClick }: Title
   const titleText = currentProjectName ? `${currentProjectName} - ${appTitle}` : appTitle;
 
   const handleMinimize = useCallback(async () => {
+    if (!appWindow) return;
     await appWindow.minimize();
   }, [appWindow]);
 
   const handleMaximize = useCallback(async () => {
+    if (!appWindow) return;
     const isMaximized = await appWindow.isMaximized();
     if (isMaximized) {
       await appWindow.unmaximize();
@@ -45,10 +49,12 @@ export function TitleBar({ onSettingsClick, showBackButton, onBackClick }: Title
   }, [appWindow]);
 
   const handleClose = useCallback(async () => {
+    if (!appWindow) return;
     await appWindow.close();
   }, [appWindow]);
 
   const handleDragStart = useCallback(async (e: React.MouseEvent) => {
+    if (!appWindow) return;
     if (e.button !== 0) return;
     const target = e.target as HTMLElement | null;
     if (target?.closest('button') || target?.closest('[data-no-drag="true"]')) {
@@ -68,7 +74,7 @@ export function TitleBar({ onSettingsClick, showBackButton, onBackClick }: Title
 
   return (
     <div className="h-10 flex items-center justify-between bg-surface-dark border-b border-border-dark select-none z-50 relative">
-      {isMac ? (
+      {isDesktopRuntime && isMac ? (
         <div className="group flex items-center h-full pl-3 pr-2 gap-2" data-no-drag="true">
           <button
             type="button"
@@ -107,8 +113,8 @@ export function TitleBar({ onSettingsClick, showBackButton, onBackClick }: Title
       ) : null}
 
       <div
-        className="flex-1 h-full flex items-center px-4 cursor-move"
-        onMouseDown={handleDragStart}
+        className={`flex-1 h-full flex items-center px-4 ${isDesktopRuntime ? 'cursor-move' : 'cursor-default'}`}
+        onMouseDown={isDesktopRuntime ? handleDragStart : undefined}
       >
         {showBackButton && onBackClick && (
           <button
@@ -166,7 +172,7 @@ export function TitleBar({ onSettingsClick, showBackButton, onBackClick }: Title
           <Settings className="w-4 h-4 text-text-muted" />
         </button>
 
-        {!isMac ? (
+        {isDesktopRuntime && !isMac ? (
           <>
             <div className="w-px h-4 bg-border-dark mx-1" />
 

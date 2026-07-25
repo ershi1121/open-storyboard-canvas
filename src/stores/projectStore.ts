@@ -921,7 +921,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         isHydrated: true,
       });
     } catch (error) {
-      console.error('Failed to hydrate project summaries from SQLite', error);
+      console.error('Failed to hydrate project summaries from project storage', error);
       set({
         projects: [],
         currentProjectId: null,

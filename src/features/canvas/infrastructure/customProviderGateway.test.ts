@@ -14,8 +14,14 @@ vi.mock('@/commands/ai', async (importOriginal) => {
 
 import { useCustomProvidersStore, type CustomProviderConfig } from '@/stores/customProvidersStore';
 import {
+  customImageProviderConfigToDraft,
+  customImageProviderDraftToConfig,
+} from '@/features/canvas/application/customImageProviderConfig';
+import {
   buildCustomProviderRequestDebugPreview,
+  detectInlineImageAspectRatio,
   getCustomProviderJob,
+  summarizeMaterializedSourceForLog,
   submitCustomProviderJob,
 } from './customProviderGateway';
 
@@ -79,6 +85,97 @@ async function waitForTerminalJob(jobId: string) {
 }
 
 describe('custom provider image request contracts', () => {
+  it('sends an API key through a configured custom header without Bearer auth', async () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      extraParams: { auth: { mode: 'header', name: 'X-API-Key', prefix: 'Token' } },
+    })]);
+    customHttpRequestMock.mockImplementationOnce(() => response(200, {
+      data: [{ b64_json: 'a'.repeat(400) }],
+    }));
+
+    const job = await waitForTerminalJob(await submitCustomProviderJob({
+      prompt: 'draw',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x1024',
+      aspect_ratio: '1:1',
+    }));
+
+    expect(job.status).toBe('succeeded');
+    expect(customHttpRequestMock.mock.calls[0][0].headers).toMatchObject({
+      'X-API-Key': 'Token secret',
+    });
+    expect(customHttpRequestMock.mock.calls[0][0].headers.Authorization).toBeUndefined();
+  });
+
+  it('sends an API key through a configured query parameter', async () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      extraParams: { auth: { mode: 'query', name: 'api_key' } },
+    })]);
+    customHttpRequestMock.mockImplementationOnce(() => response(200, {
+      data: [{ b64_json: 'a'.repeat(400) }],
+    }));
+
+    const job = await waitForTerminalJob(await submitCustomProviderJob({
+      prompt: 'draw',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x1024',
+      aspect_ratio: '1:1',
+    }));
+
+    expect(job.status).toBe('succeeded');
+    expect(customHttpRequestMock.mock.calls[0][0].url).toContain('api_key=secret');
+    expect(customHttpRequestMock.mock.calls[0][0].headers.Authorization).toBeUndefined();
+  });
+
+  it('allows a no-auth custom provider to submit without a placeholder API key', async () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      apiKey: '',
+      extraParams: { auth: { mode: 'none' } },
+    })]);
+    customHttpRequestMock.mockImplementationOnce(() => response(200, {
+      data: [{ b64_json: 'a'.repeat(400) }],
+    }));
+
+    const job = await waitForTerminalJob(await submitCustomProviderJob({
+      prompt: 'draw',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x1024',
+      aspect_ratio: '1:1',
+    }));
+
+    expect(job.status).toBe('succeeded');
+    expect(customHttpRequestMock.mock.calls[0][0].headers.Authorization).toBeUndefined();
+  });
+
+  it('blocks a signed-proxy config even when its declarative variant says JSON', async () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      extraParams: {
+        transport: 'signed',
+        needsProxy: true,
+        signedAuth: { required: true },
+        imageRequestContract: {
+          version: 1,
+          textToImage: {
+            endpointPath: '/generate',
+            bodyMode: 'json',
+            bodyTemplate: { model: '{{model}}', prompt: '{{prompt}}' },
+          },
+        },
+      },
+    })]);
+
+    const job = await waitForTerminalJob(await submitCustomProviderJob({
+      prompt: 'draw',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x1024',
+      aspect_ratio: '1:1',
+    }));
+
+    expect(job.status).toBe('failed');
+    expect(job.error).toContain('签名鉴权/代理路线');
+    expect(customHttpRequestMock).not.toHaveBeenCalled();
+  });
+
   it('rejects an empty compound upstream model before composing a request', () => {
     useCustomProvidersStore.getState().replaceAll([provider()]);
     expect(() => buildCustomProviderRequestDebugPreview({
@@ -167,9 +264,614 @@ describe('custom provider image request contracts', () => {
       ]),
     }));
   });
+
+  it('compiles a declarative JSON template with provider-specific ratio fields', () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      extraParams: {
+        imageRequestContract: {
+          version: 1,
+          textToImage: {
+            endpointPath: '/custom/generate',
+            method: 'POST',
+            bodyMode: 'json',
+            query: { channel: '{{extra.channel}}' },
+            bodyTemplate: {
+              model_name: '{{model}}',
+              input: { text: '{{prompt}}' },
+            },
+            responseImagePaths: ['payload.assets[0].src'],
+          },
+          ratioMappings: {
+            '16:9': {
+              ratio: 'landscape',
+              size: '3840x2160',
+              fields: {
+                'input.aspectRatio': '{{aspectRatio}}',
+                'input.output.size': '{{size}}',
+              },
+            },
+          },
+        },
+      },
+    })]);
+
+    const preview = buildCustomProviderRequestDebugPreview({
+      prompt: 'wide landscape',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '2K',
+      aspect_ratio: '16:9',
+      extra_params: { channel: 'web' },
+    });
+
+    expect(preview.url).toContain('/custom/generate?channel=%5Bredacted%5D');
+    expect(preview.body).toEqual({
+      model_name: 'gpt-image-2',
+      input: {
+        text: 'wide landscape',
+        aspectRatio: 'landscape',
+        output: { size: '3840x2160' },
+      },
+    });
+  });
+
+  it('supports explicit multipart repeat and array file field modes', () => {
+    const references = [
+      `data:image/png;base64,${'a'.repeat(400)}`,
+      `data:image/png;base64,${'b'.repeat(400)}`,
+    ];
+    useCustomProvidersStore.getState().replaceAll([provider({
+      endpointPath: '/legacy',
+      extraParams: {
+        imageRequestContract: {
+          version: 1,
+          imageToImage: {
+            endpointPath: '/custom/edit',
+            bodyMode: 'multipart',
+            bodyTemplate: { prompt: '{{prompt}}', model: '{{model}}' },
+            imageFields: [
+              { name: 'image', mode: 'repeat', encoding: 'base64' },
+              { name: 'mask', mode: 'array', encoding: 'data-url' },
+            ],
+          },
+        },
+      },
+    })]);
+
+    const preview = buildCustomProviderRequestDebugPreview({
+      ...imageEditRequest(),
+      reference_images: references,
+    });
+    const multipart = preview.multipart as {
+      fields: Array<{ name: string; value: string }>;
+      files: Array<{ name: string; base64?: string; dataUrl?: string }>;
+    };
+
+    expect(preview.url).toContain('/custom/edit');
+    expect(multipart.files.map((file) => file.name)).toEqual([
+      'image',
+      'image',
+      'mask[]',
+      'mask[]',
+    ]);
+    expect(multipart.fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'prompt', value: 'edit this image' }),
+      expect.objectContaining({ name: 'model', value: 'gpt-image-2' }),
+    ]));
+  });
+
+  it('keeps a declared generations endpoint for image-to-image instead of forcing images edits', () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      endpointPath: '/legacy',
+      extraParams: {
+        imageRequestContract: {
+          version: 1,
+          textToImage: {
+            endpointPath: '/images/generations',
+            bodyMode: 'json',
+            bodyTemplate: { model: '{{model}}', prompt: '{{prompt}}' },
+          },
+          imageToImage: {
+            endpointPath: '/images/generations',
+            bodyMode: 'multipart',
+            bodyTemplate: { model: '{{model}}', prompt: '{{prompt}}' },
+            imageFields: [{ name: 'image', mode: 'repeat', encoding: 'base64' }],
+          },
+        },
+      },
+    })]);
+
+    const preview = buildCustomProviderRequestDebugPreview(imageEditRequest());
+    const multipart = preview.multipart as {
+      fields: Array<{ name: string; value: string }>;
+      files: Array<{ name: string }>;
+    };
+
+    expect(preview.url).toContain('/images/generations');
+    expect(preview.url).not.toContain('/images/edits');
+    expect(multipart.files.map((file) => file.name)).toEqual(['image']);
+    expect(multipart.fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'model', value: 'gpt-image-2' }),
+      expect.objectContaining({ name: 'prompt', value: 'edit this image' }),
+    ]));
+  });
+
+  it('keeps form-urlencoded image arrays as repeated form values', () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      extraParams: {
+        imageRequestContract: {
+          version: 1,
+          imageToImage: {
+            endpointPath: '/custom/form-edit',
+            bodyMode: 'form-urlencoded',
+            bodyTemplate: { model: '{{model}}', prompt: '{{prompt}}' },
+            imageFields: [{ name: 'image', mode: 'repeat', encoding: 'url' }],
+          },
+        },
+      },
+    })]);
+
+    const preview = buildCustomProviderRequestDebugPreview({
+      ...imageEditRequest(),
+      reference_images: ['https://img.example.com/a.png', 'https://img.example.com/b.png'],
+    });
+
+    expect(preview.body).toEqual({
+      model: 'gpt-image-2',
+      prompt: 'edit this image',
+      image: ['https://img.example.com/a.png', 'https://img.example.com/b.png'],
+    });
+    expect(preview.bodyMode).toBe('form-urlencoded');
+  });
+
+  it('executes legacy nested requestBodyHints after reopening and saving a provider', () => {
+    const legacy = provider({
+      apiStyle: 'generic-json',
+      endpointPath: '/generate',
+      responseFormat: 'generic',
+      extraParams: {
+        requestBodyMode: 'form-urlencoded',
+        requestBodyHints: {
+          modelField: 'input.model',
+          promptField: 'input.prompt',
+          ratioField: 'input.aspect_ratio',
+          sizeField: 'input.size',
+          referenceImageField: 'input.images',
+        },
+      },
+    });
+    const reopened = customImageProviderConfigToDraft(legacy);
+    const saved = customImageProviderDraftToConfig(reopened, legacy.id).value!;
+    useCustomProvidersStore.getState().replaceAll([saved]);
+
+    const preview = buildCustomProviderRequestDebugPreview({
+      prompt: 'nested legacy request',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x576',
+      aspect_ratio: '16:9',
+      reference_images: [`data:image/png;base64,${'a'.repeat(400)}`],
+    });
+
+    expect(preview.bodyMode).toBe('form-urlencoded');
+    expect(preview.body).toEqual({
+      input: {
+        model: 'gpt-image-2',
+        prompt: 'nested legacy request',
+        aspect_ratio: '16:9',
+        size: '1024x576',
+        images: ['data:image/png;base64,[base64 400 chars]'],
+      },
+    });
+  });
+
+  it('keeps a migrated legacy multipart file field and nested scalar hints executable', () => {
+    const legacy = provider({
+      apiStyle: 'generic-json',
+      endpointPath: '/images/edits',
+      responseFormat: 'generic',
+      extraParams: {
+        requestBodyMode: 'multipart',
+        multipart: { enabled: true, fileField: 'upload[]' },
+        requestBodyHints: {
+          modelField: 'input.model',
+          promptField: 'input.prompt',
+          ratioField: 'input.aspect_ratio',
+          sizeField: 'input.size',
+          referenceImageField: 'upload[]',
+        },
+      },
+    });
+    const reopened = customImageProviderConfigToDraft(legacy);
+    const saved = customImageProviderDraftToConfig(reopened, legacy.id).value!;
+    useCustomProvidersStore.getState().replaceAll([saved]);
+
+    const preview = buildCustomProviderRequestDebugPreview({
+      prompt: 'multipart legacy request',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x576',
+      aspect_ratio: '16:9',
+      reference_images: [`data:image/png;base64,${'a'.repeat(400)}`],
+    });
+    const multipart = preview.multipart as {
+      fields: Array<{ name: string; value: string }>;
+      files: Array<{ name: string }>;
+    };
+
+    expect(multipart.files.map((file) => file.name)).toEqual(['upload[]']);
+    expect(multipart.fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'input.model', value: 'gpt-image-2' }),
+      expect.objectContaining({ name: 'input.prompt', value: 'multipart legacy request' }),
+      expect.objectContaining({ name: 'input.aspect_ratio', value: '16:9' }),
+      expect.objectContaining({ name: 'input.size', value: '1024x576' }),
+    ]));
+  });
+
+  it('does not resurrect legacy hints for a hand-authored versioned contract', () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      endpointPath: '/generate',
+      extraParams: {
+        requestBodyHints: {
+          modelField: 'input.model',
+          promptField: 'input.prompt',
+        },
+        imageRequestContract: {
+          version: 1,
+          textToImage: {
+            endpointPath: '/generate',
+            bodyMode: 'json',
+          },
+        },
+      },
+    })]);
+
+    const preview = buildCustomProviderRequestDebugPreview({
+      prompt: 'new contract request',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x1024',
+      aspect_ratio: '1:1',
+    });
+
+    expect(preview.body).toMatchObject({
+      model: 'gpt-image-2',
+      prompt: 'new contract request',
+    });
+    expect(preview.body).not.toHaveProperty('input');
+  });
+
+  it('rejects prototype-mutating legacy request-body hint paths before request composition', () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      apiStyle: 'generic-json',
+      extraParams: {
+        imageRequestContractLegacyFallback: true,
+        requestBodyHints: { modelField: '__proto__.polluted' },
+        imageRequestContract: {
+          version: 1,
+          textToImage: { bodyMode: 'json' },
+        },
+      },
+    })]);
+
+    expect(() => buildCustomProviderRequestDebugPreview({
+      prompt: 'safe request',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x1024',
+      aspect_ratio: '1:1',
+    })).toThrow(/不安全片段/);
+    expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it('rejects an invalid declarative contract before sending HTTP', async () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      extraParams: {
+        imageRequestContract: {
+          version: 1,
+          textToImage: {
+            method: 'DELETE',
+          },
+        },
+      },
+    })]);
+
+    const job = await waitForTerminalJob(await submitCustomProviderJob({
+      prompt: 'draw',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x1024',
+      aspect_ratio: '1:1',
+    }));
+
+    expect(job.status).toBe('failed');
+    expect(job.error).toContain('textToImage.method');
+    expect(customHttpRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('extracts a generated image through declarative response paths', async () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      extraParams: {
+        imageRequestContract: {
+          version: 1,
+          textToImage: {
+            bodyMode: 'json',
+            bodyTemplate: { prompt: '{{prompt}}', model: '{{model}}' },
+            responseImagePaths: ['payload.assets[0].src'],
+          },
+        },
+      },
+    })]);
+    customHttpRequestMock.mockImplementationOnce(() => response(200, {
+      payload: { assets: [{ src: 'a'.repeat(400) }] },
+    }));
+
+    const job = await waitForTerminalJob(await submitCustomProviderJob({
+      prompt: 'draw',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x1024',
+      aspect_ratio: '1:1',
+    }));
+
+    expect(job.status).toBe('succeeded');
+    expect(customHttpRequestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a reversed inline result and reports the requested-ratio mismatch', async () => {
+    class FakeImage {
+      naturalWidth = 2160;
+      naturalHeight = 3840;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+
+    vi.stubGlobal('Image', FakeImage);
+    try {
+      useCustomProvidersStore.getState().replaceAll([provider({
+        extraParams: {
+          imageRequestContract: {
+            version: 1,
+            textToImage: {
+              bodyMode: 'json',
+              bodyTemplate: { prompt: '{{prompt}}', model: '{{model}}' },
+              responseImagePaths: ['result.image'],
+            },
+          },
+        },
+      })]);
+      customHttpRequestMock.mockImplementationOnce(() => response(200, {
+        result: { image: `data:image/png;base64,${'a'.repeat(400)}` },
+      }));
+
+      const job = await waitForTerminalJob(await submitCustomProviderJob({
+        prompt: 'wide landscape',
+        model: 'custom:provider-1:gpt-image-2',
+        size: '1920x1080',
+        aspect_ratio: '16:9',
+      }));
+
+      expect(job.status).toBe('succeeded');
+      expect(job.result).toMatch(/^data:image\/png;base64,/);
+      expect(job.warning).toContain('上游返回比例方向与请求相反');
+      expect(customHttpRequestMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('polls an async contract and tries multiple declared response paths', async () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      extraParams: {
+        imageRequestContract: {
+          version: 1,
+          textToImage: {
+            endpointPath: '/submit',
+            bodyMode: 'json',
+            bodyTemplate: { prompt: '{{prompt}}', model: '{{model}}' },
+            responseImagePaths: ['result.primary', 'result.fallback'],
+            asyncTask: {
+              taskIdPath: 'task.id',
+              resultEndpointPath: '/jobs/{taskId}',
+              resultMethod: 'GET',
+              statusPath: 'status',
+              successValues: ['succeeded'],
+              failedValues: ['failed'],
+              errorPath: 'error.message',
+              intervalMs: 500,
+              timeoutMs: 5000,
+            },
+          },
+        },
+      },
+    })]);
+    customHttpRequestMock
+      .mockImplementationOnce(() => response(200, { task: { id: 'task-1' } }))
+      .mockImplementationOnce(() => response(200, {
+        status: 'succeeded',
+        result: { fallback: 'a'.repeat(400) },
+      }));
+
+    const job = await waitForTerminalJob(await submitCustomProviderJob({
+      prompt: 'draw',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x1024',
+      aspect_ratio: '1:1',
+    }));
+
+    expect(job.status).toBe('succeeded');
+    expect(customHttpRequestMock).toHaveBeenCalledTimes(2);
+    expect(customHttpRequestMock.mock.calls[1][0].url).toContain('/jobs/task-1');
+  });
+
+  it('uses the declared POST body while polling and replaces nested task id placeholders', async () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      extraParams: {
+        imageRequestContract: {
+          version: 1,
+          textToImage: {
+            endpointPath: '/submit',
+            bodyMode: 'json',
+            bodyTemplate: { prompt: '{{prompt}}', model: '{{model}}' },
+            responseImagePaths: ['result.image'],
+            asyncTask: {
+              taskIdPath: 'task.id',
+              resultEndpointPath: '/jobs/{taskId}',
+              resultMethod: 'POST',
+              requestBody: {
+                job: '{taskId}',
+                nested: { ids: ['{taskId}'] },
+              },
+              statusPath: 'status',
+              successValues: ['succeeded'],
+              intervalMs: 500,
+              timeoutMs: 5000,
+            },
+          },
+        },
+      },
+    })]);
+    customHttpRequestMock
+      .mockImplementationOnce(() => response(200, { task: { id: 'task-1' } }))
+      .mockImplementationOnce(() => response(200, {
+        status: 'succeeded',
+        result: { image: 'a'.repeat(400) },
+      }));
+
+    const job = await waitForTerminalJob(await submitCustomProviderJob({
+      prompt: 'draw',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x1024',
+      aspect_ratio: '1:1',
+    }));
+
+    expect(job.status).toBe('succeeded');
+    expect(customHttpRequestMock).toHaveBeenCalledTimes(2);
+    expect(customHttpRequestMock.mock.calls[1][0]).toMatchObject({
+      method: 'POST',
+      body: {
+        job: 'task-1',
+        nested: { ids: ['task-1'] },
+      },
+    });
+  });
+
+  it('uses the declared async error path without leaking secrets or base64', async () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      extraParams: {
+        imageRequestContract: {
+          version: 1,
+          textToImage: {
+            bodyTemplate: { prompt: '{{prompt}}', model: '{{model}}' },
+            asyncTask: {
+              taskIdPath: 'id',
+              resultEndpointPath: '/jobs/{taskId}',
+              statusPath: 'status',
+              failedValues: ['failed'],
+              errorPath: 'error',
+              intervalMs: 500,
+              timeoutMs: 5000,
+            },
+          },
+        },
+      },
+    })]);
+    const secretBase64 = 'a'.repeat(240);
+    customHttpRequestMock
+      .mockImplementationOnce(() => response(200, { id: 'task-2' }))
+      .mockImplementationOnce(() => response(200, {
+        status: 'failed',
+        error: `Authorization: Bearer top-secret data:image/png;base64,${secretBase64}`,
+      }));
+
+    const job = await waitForTerminalJob(await submitCustomProviderJob({
+      prompt: 'draw',
+      model: 'custom:provider-1:gpt-image-2',
+      size: '1024x1024',
+      aspect_ratio: '1:1',
+    }));
+
+    expect(job.status).toBe('failed');
+    expect(job.error).toContain('[redacted]');
+    expect(job.error).toContain('[data-url omitted]');
+    expect(job.error).not.toContain('top-secret');
+    expect(job.error).not.toContain(secretBase64);
+  });
 });
 
 describe('custom provider image edit compatibility negotiation', () => {
+  it('preserves legacy multipart negotiation after opening and saving the old config', async () => {
+    const legacy = provider({
+      endpointPath: '/images/edits',
+      extraParams: {
+        requestBodyMode: 'multipart',
+        requestBodyHints: { referenceImageField: 'image' },
+        multipart: { enabled: true, fileField: 'image' },
+      },
+    });
+    const reopened = customImageProviderConfigToDraft(legacy);
+    const saved = customImageProviderDraftToConfig(reopened, legacy.id).value!;
+    useCustomProvidersStore.getState().replaceAll([saved]);
+    customHttpRequestMock
+      .mockImplementationOnce(() => response(400, { error: { message: 'missing image file field' } }))
+      .mockImplementationOnce(() => response(200, { data: [{ b64_json: 'a'.repeat(400) }] }));
+
+    const job = await waitForTerminalJob(await submitCustomProviderJob(imageEditRequest()));
+
+    expect(job.status).toBe('succeeded');
+    expect(customHttpRequestMock).toHaveBeenCalledTimes(2);
+    expect(customHttpRequestMock.mock.calls.map(([request]) => request.multipart.files[0].name)).toEqual([
+      'image',
+      'image[]',
+    ]);
+  });
+
+  it('keeps legacy multipart negotiation available when a migrated contract has no wire-shape template', async () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      endpointPath: '/images/edits',
+      extraParams: {
+        // This is the versioned mirror produced by the legacy migration. It
+        // declares transport metadata, but not an explicit body/file shape.
+        imageRequestContract: {
+          version: 1,
+          imageToImage: {
+            endpointPath: '/images/edits',
+            method: 'POST',
+            bodyMode: 'multipart',
+            responseImagePaths: ['data[0].b64_json'],
+          },
+        },
+        requestBodyMode: 'multipart',
+        multipart: { enabled: true, fileField: 'image' },
+      },
+    })]);
+    customHttpRequestMock
+      .mockImplementationOnce(() => response(400, { error: { message: 'missing image file field' } }))
+      .mockImplementationOnce(() => response(200, { data: [{ b64_json: 'a'.repeat(400) }] }));
+
+    const job = await waitForTerminalJob(await submitCustomProviderJob(imageEditRequest()));
+
+    expect(job.status).toBe('succeeded');
+    expect(customHttpRequestMock).toHaveBeenCalledTimes(2);
+    expect(customHttpRequestMock.mock.calls.map(([request]) => request.multipart.files[0].name)).toEqual([
+      'image',
+      'image[]',
+    ]);
+  });
+
+  it('does not disable negotiation for an empty versioned contract', async () => {
+    useCustomProvidersStore.getState().replaceAll([provider({
+      endpointPath: '/images/edits',
+      extraParams: {
+        imageRequestContract: { version: 1 },
+        requestBodyMode: 'multipart',
+        multipart: { enabled: true, fileField: 'image' },
+      },
+    })]);
+    customHttpRequestMock
+      .mockImplementationOnce(() => response(400, { error: { message: 'missing image file field' } }))
+      .mockImplementationOnce(() => response(200, { data: [{ b64_json: 'a'.repeat(400) }] }));
+
+    expect((await waitForTerminalJob(await submitCustomProviderJob(imageEditRequest()))).status).toBe('succeeded');
+    expect(customHttpRequestMock).toHaveBeenCalledTimes(2);
+  });
+
   it('retries the same configured profile once for an empty-model rejection without learning an alternate', async () => {
     useCustomProvidersStore.getState().replaceAll([provider({
       endpointPath: '/images/edits',
@@ -423,5 +1125,40 @@ describe('custom provider image edit compatibility negotiation', () => {
     await waitForTerminalJob(await submitCustomProviderJob(request()));
 
     expect(customHttpRequestMock.mock.calls[0][0].multipart.files[0].name).toBe(expectedFileField);
+  });
+});
+
+describe('custom provider diagnostic source redaction', () => {
+  it('reads dimensions from inline image results when the browser decoder is available', async () => {
+    class FakeImage {
+      naturalWidth = 2160;
+      naturalHeight = 3840;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    vi.stubGlobal('Image', FakeImage);
+
+    await expect(detectInlineImageAspectRatio('data:image/png;base64,AAAA')).resolves.toBe('9:16');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('never includes data-url or long base64 payloads in materialization logs', () => {
+    const dataPayload = 'sensitive-image-payload';
+    const dataUrl = `data:image/png;base64,${dataPayload}`;
+    const longBase64 = 'secret'.repeat(80);
+
+    expect(summarizeMaterializedSourceForLog(dataUrl)).not.toContain(dataPayload);
+    expect(summarizeMaterializedSourceForLog(dataUrl)).toContain('data-url omitted');
+    expect(summarizeMaterializedSourceForLog(longBase64)).not.toContain(longBase64);
+    expect(summarizeMaterializedSourceForLog(longBase64)).toContain('base64 omitted');
+  });
+
+  it('summarizes remote and local sources without leaking query secrets or paths', () => {
+    expect(summarizeMaterializedSourceForLog('https://cdn.example.com/result.png?token=secret')).toBe('[remote-url omitted]');
+    expect(summarizeMaterializedSourceForLog('/Users/alice/private/result.png')).toBe('[local-file omitted]');
   });
 });

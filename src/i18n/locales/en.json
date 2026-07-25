@@ -790,7 +790,8 @@
       "selectToEdit": "Select this node and enter a prompt below to generate or edit image",
       "generationFailed": "Generation failed",
       "fetchResultFailed": "Failed to fetch generation result. Please retry.",
-      "generationElapsed": "Generation elapsed time"
+      "generationElapsed": "Generation elapsed time",
+      "providerWarning": "Upstream provider warning"
     },
     "imageEdit": {
       "promptRequired": "Please enter a prompt",
@@ -984,7 +985,8 @@
     "nodes": "Nodes",
     "noProjects": "No Projects",
     "empty": "No Projects",
-    "emptyHint": "Click the button above to create a new project"
+    "emptyHint": "Click the button above to create a new project",
+    "webStorageFallback": "Persistent browser storage is unavailable. Projects are only kept for this page session, so preserve important work before closing or refreshing."
   },
   "promptLibrary": {
     "title": "Prompt Center",
@@ -1097,6 +1099,184 @@
     "providers": "API Key",
     "providersDesc": "Configure AI provider API keys",
     "providerGuideText": "Different providers vary in model capability, queue speed, and stability. Switch providers based on your task, and follow each provider's recommended parameters.",
+    "imageProviderConfig": {
+      "preset": "Image Model Preset Configuration",
+      "fullCustom": "Fully Custom Image Model Configuration"
+    },
+    "addProviders": {
+      "title": "Add Provider",
+      "description": "Choose a generation type. Presets cover common protocols; full custom builds any declarative image request.",
+      "tabs": {
+        "imagePreset": "Common Images, Gemini, Fal, and related protocols",
+        "imageCustom": "Custom routes, fields, images, geometry, and polling",
+        "videoLabel": "Video Generation",
+        "chatLabel": "Text Chat",
+        "video": "OpenAI Videos API-compatible provider configuration",
+        "chat": "Responses, Chat Completions, Anthropic, and Gemini"
+      }
+    },
+    "customProviders": {
+      "assistant": {
+        "open": "Configure with AI",
+        "title": "AI Image Provider Configuration Assistant",
+        "securityTitle": "Public documentation only",
+        "securityDescription": "The app sends only a fixed schema instruction and the public documentation you paste. Existing API keys, configured headers, and image base64 are never sent. Returned JSON is scrubbed again and applied only as an editable draft.",
+        "model": "Text model",
+        "selectModel": "Select a configured text model",
+        "noUsableModel": "No usable text model is configured",
+        "noUsableModelHelp": "Add a usable model under chat provider settings first. You can still copy the external prompt and paste JSON returned by another AI below.",
+        "documentation": "Public provider docs / cURL",
+        "documentationPlaceholder": "Paste endpoint, method, request fields, image-to-image field rules, ratio mapping, polling, and response examples. Do not paste real credentials.",
+        "generate": "Generate configuration draft",
+        "generating": "Analyzing...",
+        "jsonDraft": "Editable JSON draft / external AI result",
+        "jsonPlaceholder": "The AI result appears here. You can also paste JSON returned by an external AI.",
+        "applyJson": "Apply to configuration",
+        "appliedNotice": "Applied to the configuration page. Verify endpoints, model fields, image fields, ratio mappings, and response paths before saving.",
+        "copyExternalPrompt": "Copy external AI prompt",
+        "promptCopied": "Prompt copied",
+        "fallbackTitle": "Use an external AI instead",
+        "fallbackDescription": "Copy the prompt to any AI and add the public provider documentation. Paste its JSON here to validate and continue."
+      },
+      "workbench": {
+        "chooseTitle": "Choose a creation method",
+        "chooseDescription": "Both methods enter the same workbench. This area contains no protocol presets and never runs scripts or plugin code.",
+        "aiRouteTitle": "Generate with AI",
+        "aiRouteDescription": "Paste public provider documentation and use a configured text model to create an editable draft.",
+        "manualRouteTitle": "Build manually",
+        "manualRouteDescription": "Compose a complete HTTP contract step by step: connection, request, images, response, and capabilities.",
+        "title": "Fully Custom Image Model Workbench",
+        "description": "Each step addresses one task. Review, test, and save at the end.",
+        "aiDraftNotice": "AI created this draft. Review endpoints, fields, image encoding, ratio mappings, and response paths step by step.",
+        "backToChoice": "Choose another method",
+        "previous": "Previous",
+        "next": "Next",
+        "test": "Test Connection",
+        "testing": "Testing...",
+        "testPassed": "The request succeeded and returned a usable image result.",
+        "save": "Save Configuration",
+        "saved": "Configuration saved under My Configurations.",
+        "steps": {
+          "connection": "Connection",
+          "request": "Generation Request",
+          "images": "Images & Geometry",
+          "response": "Response & Polling",
+          "capabilities": "Models & Capabilities",
+          "review": "Review & Save"
+        },
+        "stepTitles": {
+          "connection": "Connection and Authentication",
+          "request": "Text-to-Image Request",
+          "images": "Image-to-Image and Geometry",
+          "response": "Result Extraction and Async Polling",
+          "capabilities": "Models and UI Capabilities",
+          "review": "Review, Test, and Save"
+        },
+        "stepDescriptions": {
+          "connection": "Set the base URL and authentication. The API key can use Bearer, a custom header, or a query parameter.",
+          "request": "Define the endpoint, HTTP method, encoding, and an arbitrarily nested request body template.",
+          "images": "Optionally add a separate image-to-image request with explicit image cardinality, encoding, and ratio mappings.",
+          "response": "List synchronous image paths, or configure task IDs, status fields, and polling routes for async APIs.",
+          "capabilities": "Declare models, ratios, resolutions, versions, and notes shown to users.",
+          "review": "Inspect the declarative contract, optionally test a real request, then save."
+        },
+        "fields": {
+          "label": "Configuration Name",
+          "baseUrl": "API Base URL",
+          "apiKey": "API Key",
+          "authMode": "Authentication",
+          "authName": "Header / Query Field Name",
+          "authPrefix": "Key Prefix (Optional)",
+          "extraHeaders": "Extra Headers JSON",
+          "queryParams": "Fixed Query Parameters JSON",
+          "endpointPath": "Text-to-Image Endpoint",
+          "method": "HTTP Method",
+          "bodyMode": "Request Encoding",
+          "bodyTemplate": "Body Template JSON",
+          "defaultParams": "Default Request Parameters JSON",
+          "enableImageToImage": "Use a Separate Image-to-Image Request",
+          "imageEndpointPath": "Image-to-Image Endpoint",
+          "imageFieldName": "Image Field Name / Path",
+          "imageFieldMode": "Multi-Image Shape",
+          "imageEncoding": "Image Encoding",
+          "imageBodyTemplate": "Image-to-Image Body Template JSON",
+          "supportedRatios": "Selectable Ratios",
+          "supportedResolutions": "Selectable Resolutions",
+          "ratioMappings": "Ratio and Resolution Mapping JSON",
+          "responseImagePaths": "Text-to-Image Response Paths",
+          "imageResponsePaths": "Image-to-Image Response Paths",
+          "enableAsync": "Poll an Async Task After Submission",
+          "taskIdPath": "Task ID Path",
+          "resultEndpointPath": "Polling Endpoint Template",
+          "resultMethod": "Polling Method",
+          "statusPath": "Status Path",
+          "successValues": "Success States",
+          "pendingValues": "Pending States",
+          "failedValues": "Failure States",
+          "errorPath": "Error Message Path",
+          "imagePath": "Polling Result Image Path (Optional)",
+          "intervalMs": "Polling Interval (ms)",
+          "timeoutMs": "Polling Timeout (ms)",
+          "pollingRequestBody": "Polling POST Body JSON",
+          "models": "Model List",
+          "modelListEndpointPath": "Model List Endpoint (Optional)",
+          "supportedModelVersions": "Model Versions / Variants (Optional)",
+          "note": "Usage Notes (Optional)"
+        },
+        "authModes": {
+          "bearer": "Authorization: Bearer",
+          "header": "Custom Header",
+          "query": "Query Parameter",
+          "none": "No Authentication"
+        },
+        "help": {
+          "extraHeaders": "For example {\"Referer\":\"https://example.com\",\"X-Version\":\"2026-01\"}.",
+          "queryParams": "These fixed parameters are added to submission, polling, and model-list requests.",
+          "bodyTemplate": "Use {{model}}, {{prompt}}, {{size}}, {{aspectRatio}}, and {{extra.foo}}.",
+          "defaultParams": "Provides {{extra.foo}} values and remains available to compatibility request paths.",
+          "imageBodyTemplate": "Images are injected through the explicit image fields; do not paste base64 into this template.",
+          "ratioMappings": "For example {\"16:9\":{\"size\":\"3840x2160\",\"fields\":{\"input.ratio\":\"wide\"}}}.",
+          "pollingRequestBody": "Use {taskId} in string values when the polling endpoint requires a POST body."
+        },
+        "review": {
+          "label": "Configuration",
+          "baseUrl": "Base URL",
+          "models": "Model Count",
+          "requestVariants": "Request Capabilities"
+        }
+      },
+      "contract": {
+        "title": "Advanced Declarative Image Request Contract JSON",
+        "subtitle": "Text/image variants, templates, image fields, ratio mappings, polling, and response paths",
+        "editorLabel": "Declarative image request contract JSON editor",
+        "validationTitle": "Fix these fields",
+        "securityHint": "Only JSON and restricted template variables are allowed. Scripts, functions, and plugin code are never executed.",
+        "apply": "Validate and apply JSON",
+        "aiDraftNotice": "This contract was generated by AI and passed schema and secret-field validation. Review it manually before saving.",
+        "sections": {
+          "basicRequest": {
+            "title": "Basic request",
+            "description": "Endpoint, method, JSON / multipart / form"
+          },
+          "templates": {
+            "title": "Fields & templates",
+            "description": "Model, prompt, size, and safe variables"
+          },
+          "imageFields": {
+            "title": "Image fields",
+            "description": "Explicit single / array / repeat and encoding"
+          },
+          "ratioMappings": {
+            "title": "Ratio mappings",
+            "description": "Nested paths plus ratio or size mappings"
+          },
+          "asyncResponse": {
+            "title": "Async & response",
+            "description": "Task IDs, polling states, image paths, and errors"
+          }
+        }
+      }
+    },
     "customProviderHelp": {
       "title": "Not sure how to configure it?",
       "step1": "Click \"Copy tutorial prompt\" on the left, then paste it into the AI assistant you usually use.",
