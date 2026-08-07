@@ -304,8 +304,8 @@ function isLightweightRetryResultUrl(value: unknown): boolean {
     && !normalizedPrefix.startsWith('blob:')
     && !url.startsWith('/')
     && !/^file:\/\//i.test(url)
-    && !/^[a-zA-Z]:[\\/]/.test(url)
-    && !url.startsWith('\\\\')
+    && !/^[a-zA-Z]:[/]/.test(url)
+    && !url.startsWith('\\')
   );
 }
 
@@ -1054,6 +1054,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           return withManualSizeLock(node);
         });
       }
+
       const hasMeaningfulChange = changes.some((change) => change.type !== 'select');
       const hasDragMove = changes.some(
         (change) =>
@@ -1222,7 +1223,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   addNode: (type, position, data = {}) => {
     const state = get();
-    const newNode = canvasNodeFactory.createNode(type, position, data);
+
+    // ========== 新增时自动命名：AI 图片 1, AI 图片 2, ... ==========
+    const finalData = { ...data };
+    if (type === CANVAS_NODE_TYPES.imageEdit) {
+      const existingCount = state.nodes.filter(
+        (node) => node.type === CANVAS_NODE_TYPES.imageEdit
+      ).length;
+      finalData.displayName = `AI 图片 ${existingCount + 1}`;
+    }
+    // ========== 新增命名结束 ==========
+
+    const newNode = canvasNodeFactory.createNode(type, position, finalData);
     set({
       nodes: [...state.nodes, newNode],
       history: {
@@ -1236,7 +1248,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   addEdge: (source, target) => {
     const state = get();
-    // Check if both nodes exist
     const sourceNode = state.nodes.find((n) => n.id === source);
     const targetNode = state.nodes.find((n) => n.id === target);
     if (!sourceNode || !targetNode) {
@@ -1247,7 +1258,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
 
     const edgeId = `e-${source}-${target}`;
-    // Check if edge already exists
     if (state.edges.some((e) => e.id === edgeId)) {
       return edgeId;
     }
@@ -1275,7 +1285,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       return { x: 100, y: 100 };
     }
 
-    // Helper to check if a position collides with existing nodes.
     const collides = (x: number, y: number, width: number, height: number) => {
       return state.nodes.some((node) => {
         const nodeWidth = node.measured?.width ?? DEFAULT_NODE_WIDTH;
@@ -1375,9 +1384,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
     }
 
-    // If the local rings found a nearby out-of-view slot, prefer that over
-    // jumping to an unrelated visible corner. This keeps repeated batch
-    // generations clustered around their source node.
     if (!bestInView && !bestOutOfView && visibleBounds) {
       const padding = 8;
       const minX = visibleBounds.minX + padding;
@@ -1395,7 +1401,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           }
         }
 
-        // Ensure boundary positions are also considered.
         evaluateCandidate(minX, minY);
         evaluateCandidate(maxX, minY);
         evaluateCandidate(minX, maxY);
@@ -1925,10 +1930,37 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
 
       const deleteSet = collectNodeIdsWithDescendants(state.nodes, existingIds);
-      const nextNodes = state.nodes.filter((node) => !deleteSet.has(node.id));
+      let nextNodes = state.nodes.filter((node) => !deleteSet.has(node.id));
       const nextEdges = state.edges.filter(
         (edge) => !deleteSet.has(edge.source) && !deleteSet.has(edge.target)
       );
+
+      // ========== 删除后自动重新编号 ==========
+      const deletedHasImageEdit = state.nodes.some(
+        (node) => deleteSet.has(node.id) && node.type === CANVAS_NODE_TYPES.imageEdit
+      );
+      if (deletedHasImageEdit) {
+        let seq = 0;
+        nextNodes = nextNodes.map((node) => {
+          if (node.type !== CANVAS_NODE_TYPES.imageEdit) {
+            return node;
+          }
+          seq += 1;
+          const currentName = (node.data as Record<string, unknown>).displayName;
+          const newName = `AI 图片 ${seq}`;
+          if (currentName === newName) {
+            return node;
+          }
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              displayName: newName,
+            },
+          };
+        });
+      }
+      // ========== 重新编号结束 ==========
 
       return {
         nodes: nextNodes,
@@ -2168,7 +2200,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   setSelectedNode: (nodeId) => {
-    // Close any open panel when switching nodes
     usePanelStateStore.getState().closeAllPanels();
     set({ selectedNodeId: nodeId });
   },

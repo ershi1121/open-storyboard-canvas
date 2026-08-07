@@ -12,7 +12,6 @@ import {
 import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import { Bug, Check, ChevronRight, Copy, Sparkles, Video, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-
 import {
   AUTO_REQUEST_ASPECT_RATIO,
   CANVAS_NODE_TYPES,
@@ -118,17 +117,19 @@ interface PickerAnchor {
 const PICKER_FALLBACK_ANCHOR: PickerAnchor = { left: 8, top: 8 };
 const PICKER_Y_OFFSET_PX = 20;
 const FUNCTION_PICKER_WIDTH_PX = 280;
+
 const IMAGE_EDIT_NODE_MIN_WIDTH = 520;
 const IMAGE_EDIT_NODE_MIN_HEIGHT = 260;
 const IMAGE_EDIT_NODE_MAX_WIDTH = 1400;
 const IMAGE_EDIT_NODE_MAX_HEIGHT = 1000;
 const IMAGE_EDIT_NODE_DEFAULT_WIDTH = 680;
 const IMAGE_EDIT_NODE_DEFAULT_HEIGHT = 380;
+
 const TEXT_DRAFT_COMMIT_DELAY_MS = 650;
 const PASTED_REFERENCE_NODE_OFFSET_X = 280;
-const PROMPT_PRESET_GROUP_ID = '__prompt_presets__';
+const PROMPT_PRESET_GROUP_ID = 'prompt_presets';
 
-function getTextareaCaretOffset(
+function getTextareaCaretContentOffset(
   textarea: HTMLTextAreaElement,
   caretIndex: number
 ): PickerAnchor {
@@ -159,16 +160,33 @@ function getTextareaCaretOffset(
   mirror.appendChild(marker);
 
   document.body.appendChild(mirror);
-
-  const left = marker.offsetLeft - textarea.scrollLeft;
-  const top = marker.offsetTop - textarea.scrollTop;
-
+  const left = marker.offsetLeft;
+  const top = marker.offsetTop;
   document.body.removeChild(mirror);
 
   return {
     left: Math.max(0, left),
     top: Math.max(0, top),
   };
+}
+
+function getTextareaCaretOffset(
+  textarea: HTMLTextAreaElement,
+  caretIndex: number
+): PickerAnchor {
+  const contentOffset = getTextareaCaretContentOffset(textarea, caretIndex);
+
+  return {
+    left: Math.max(0, contentOffset.left - textarea.scrollLeft),
+    top: Math.max(0, contentOffset.top - textarea.scrollTop),
+  };
+}
+
+function getTextareaCaretContentTop(
+  textarea: HTMLTextAreaElement,
+  caretIndex: number
+): number {
+  return getTextareaCaretContentOffset(textarea, caretIndex).top;
 }
 
 function resolvePickerAnchor(
@@ -198,6 +216,7 @@ function renderPromptWithHighlights(prompt: string, maxImageCount: number): Reac
   const segments: ReactNode[] = [];
   let lastIndex = 0;
   const referenceTokens = findReferenceTokens(prompt, maxImageCount);
+
   for (const token of referenceTokens) {
     const matchStart = token.start;
     const matchText = token.token;
@@ -264,28 +283,35 @@ function normalizePromptForSourceComparison(prompt: string): string {
 export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageEditNodeProps) => {
   const { t } = useTranslation();
   const updateNodeInternals = useUpdateNodeInternals();
+
   const [error, setError] = useState<string | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const imageBoxRef = useRef<HTMLDivElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const promptHighlightRef = useRef<HTMLDivElement>(null);
+
   const [promptDraft, setPromptDraft] = useState(() => data.prompt ?? '');
   const promptDraftRef = useRef(promptDraft);
+
   const [showImagePicker, setShowImagePicker] = useState(false);
   const [pickerCursor, setPickerCursor] = useState<number | null>(null);
   const [pickerActiveIndex, setPickerActiveIndex] = useState(0);
   const [pickerAnchor, setPickerAnchor] = useState<PickerAnchor>(PICKER_FALLBACK_ANCHOR);
+
   const [showFunctionPicker, setShowFunctionPicker] = useState(false);
   const [functionPickerAnchor, setFunctionPickerAnchor] = useState<PickerAnchor>(PICKER_FALLBACK_ANCHOR);
   const [functionPickerActiveIndex, setFunctionPickerActiveIndex] = useState(0);
+
   const [showCameraControl, setShowCameraControl] = useState(false);
   const [generateCount, setGenerateCount] = useState(1);
   const [showCountPicker, setShowCountPicker] = useState(false);
   const [customCount, setCustomCount] = useState('');
   const countPickerRef = useRef<HTMLDivElement>(null);
+
   const promptCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastCommittedPromptRef = useRef(data.prompt ?? '');
+
   const [payloadDebugText, setPayloadDebugText] = useState<string | null>(null);
   const [payloadDebugCopied, setPayloadDebugCopied] = useState(false);
 
@@ -295,11 +321,13 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
   const incomingReferenceSignature = useCanvasStore((state) =>
     selectInputReferenceSignature(id, state.nodes, state.edges)
   );
+
   const setSelectedNode = useCanvasStore((state) => state.setSelectedNode);
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
   const addNode = useCanvasStore((state) => state.addNode);
   const findNodePositions = useCanvasStore((state) => state.findNodePositions);
   const addEdge = useCanvasStore((state) => state.addEdge);
+
   const grsaiNanoBananaProModel = useSettingsStore((state) => state.grsaiNanoBananaProModel);
   const promptPresets = useSettingsStore((state) => state.promptPresets);
   const showNodePayloadPreview = useSettingsStore((state) => state.showNodePayloadPreview);
@@ -308,6 +336,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
     () => parseInputImageSignature(incomingImageSignature),
     [incomingImageSignature]
   );
+
   const incomingReferences = useMemo(
     () => parseInputReferenceSignature(incomingReferenceSignature),
     [incomingReferenceSignature]
@@ -322,63 +351,77 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
       })),
     [incomingImages]
   );
+
   const incomingImageViewerList = useMemo(
     () => incomingImageItems.map((item) => resolveImageDisplayUrl(item.imageUrl)),
     [incomingImageItems]
   );
+
   const incomingReferenceItems = useMemo(
-    () => incomingReferences.map((reference) => ({
-      ...reference,
-      displayUrl: reference.kind === 'image' && reference.imageUrl
-        ? resolveImageDisplayUrl(reference.imageUrl)
-        : reference.kind === 'video' && reference.thumbnailUrl
-          ? resolveImageDisplayUrl(reference.thumbnailUrl)
-          : null,
-    })),
+    () =>
+      incomingReferences.map((reference) => ({
+        ...reference,
+        displayUrl:
+          reference.kind === 'image' && reference.imageUrl
+            ? resolveImageDisplayUrl(reference.imageUrl)
+            : reference.kind === 'video' && reference.thumbnailUrl
+              ? resolveImageDisplayUrl(reference.thumbnailUrl)
+              : null,
+      })),
     [incomingReferences]
   );
-  const functionPickerItems = useMemo(() => [
-    ...MULTI_FUNCTION_ITEMS.map((item) => ({
-      kind: 'function' as const,
-      id: item.id,
-      label: t(item.titleKey) as string,
-      description: t(item.descKey) as string,
-      icon: item.icon,
-    })),
-    ...(promptPresets.length > 0
-      ? [{
-        kind: 'presetGroup' as const,
-        id: PROMPT_PRESET_GROUP_ID,
-        label: t('nodeToolbar.promptPreset') as string,
-        description: t('nodeToolbar.promptPresetMenuTitle') as string,
-        icon: Sparkles,
-      }]
-      : []),
-  ], [promptPresets, t]);
+
+  const functionPickerItems = useMemo(
+    () => [
+      ...MULTI_FUNCTION_ITEMS.map((item) => ({
+        kind: 'function' as const,
+        id: item.id,
+        label: t(item.titleKey) as string,
+        description: t(item.descKey) as string,
+        icon: item.icon,
+      })),
+      ...(promptPresets.length > 0
+        ? [{
+            kind: 'presetGroup' as const,
+            id: PROMPT_PRESET_GROUP_ID,
+            label: t('nodeToolbar.promptPreset') as string,
+            description: t('nodeToolbar.promptPresetMenuTitle') as string,
+            icon: Sparkles,
+          }]
+        : []),
+    ],
+    [promptPresets, t]
+  );
+
   const selectedFunctionLabel = useMemo(() => {
     if (data.selectedPromptPresetId) {
       return promptPresets.find((preset) => preset.id === data.selectedPromptPresetId)?.name ?? null;
     }
+
     if (data.selectedFunctionChip) {
       const item = MULTI_FUNCTION_ITEMS.find((candidate) => candidate.id === data.selectedFunctionChip);
-      return item ? t(item.titleKey) as string : null;
+      return item ? (t(item.titleKey) as string) : null;
     }
+
     return null;
   }, [data.selectedFunctionChip, data.selectedPromptPresetId, promptPresets, t]);
+
   const catalog = useImageModelCatalog();
   const firstUsableCatalogEntry = useMemo(() => catalog.find((entry) => entry.usable), [catalog]);
+
   const nodeModelConfig = data.modelConfig ?? (firstUsableCatalogEntry
     ? {
-      entryId: firstUsableCatalogEntry.id,
-      ratio: firstUsableCatalogEntry.supportedRatios[0] ?? 'auto',
-      extraParams: {},
-    }
+        entryId: firstUsableCatalogEntry.id,
+        ratio: firstUsableCatalogEntry.supportedRatios[0] ?? 'auto',
+        extraParams: {},
+      }
     : undefined);
 
   const selectedModel = useMemo(() => {
     const modelId = data.model ?? DEFAULT_IMAGE_MODEL_ID;
     return getImageModel(modelId);
   }, [data.model]);
+
   const effectiveExtraParams = useMemo(
     () => ({
       ...(data.extraParams ?? {}),
@@ -431,9 +474,11 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
   const flushPromptDraft = useCallback((nextPrompt = promptDraftRef.current) => {
     clearPromptCommitTimer();
     promptDraftRef.current = nextPrompt;
+
     if (Object.is(lastCommittedPromptRef.current, nextPrompt)) {
       return;
     }
+
     lastCommittedPromptRef.current = nextPrompt;
     updateNodeData(id, { prompt: nextPrompt });
   }, [clearPromptCommitTimer, id, updateNodeData]);
@@ -441,15 +486,19 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
   const schedulePromptDraftCommit = useCallback((nextPrompt: string) => {
     promptDraftRef.current = nextPrompt;
     clearPromptCommitTimer();
+
     if (Object.is(lastCommittedPromptRef.current, nextPrompt)) {
       return;
     }
+
     promptCommitTimerRef.current = setTimeout(() => {
       promptCommitTimerRef.current = null;
       const latestPrompt = promptDraftRef.current;
+
       if (Object.is(lastCommittedPromptRef.current, latestPrompt)) {
         return null;
       }
+
       lastCommittedPromptRef.current = latestPrompt;
       updateNodeData(id, { prompt: latestPrompt });
     }, TEXT_DRAFT_COMMIT_DELAY_MS);
@@ -458,6 +507,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
   useEffect(() => {
     const externalPrompt = data.prompt ?? '';
     lastCommittedPromptRef.current = externalPrompt;
+
     if (externalPrompt !== promptDraftRef.current) {
       clearPromptCommitTimer();
       promptDraftRef.current = externalPrompt;
@@ -471,6 +521,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
         clearTimeout(promptCommitTimerRef.current);
         promptCommitTimerRef.current = null;
       }
+
       const latestPrompt = promptDraftRef.current;
       if (!Object.is(lastCommittedPromptRef.current, latestPrompt)) {
         lastCommittedPromptRef.current = latestPrompt;
@@ -480,10 +531,6 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
   }, [id, updateNodeData]);
 
   const handleCameraControlApply = useCallback((cameraControl: CameraControlOptions, _cameraPrompt: string) => {
-    // Only persist the structured options on the node — the camera prompt is
-    // NOT injected into the user's prompt textbox (it would pollute what the
-    // user sees/types). The prompt is assembled at submit time from
-    // `data.cameraControl` via `buildCameraPrompt(...)` inside SelectedNodeOverlay.
     updateNodeData(id, { cameraControl });
   }, [id, updateNodeData]);
 
@@ -565,24 +612,30 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
   const assembleImageGenerationRequest = useCallback(async (): Promise<ImageGenerationRequestAssembly | null> => {
     const currentPromptDraft = promptDraftRef.current;
     flushPromptDraft(currentPromptDraft);
+
     const latestCanvasState = useCanvasStore.getState();
     const latestNode = latestCanvasState.nodes.find((candidate) => candidate.id === id);
     const latestData = latestNode && isImageEditNode(latestNode) ? latestNode.data : data;
     const latestSettings = useSettingsStore.getState();
+
     const latestReferences = collectInputReferences(id, latestCanvasState.nodes, latestCanvasState.edges);
     const referenceContextPrompt = buildReferenceContextPrompt(latestReferences);
+
     const latestIncomingImages = latestReferences
       .filter((reference) => reference.kind === 'image' && reference.imageUrl)
       .map((reference) => reference.imageUrl as string);
+
     let basePrompt = currentPromptDraft.replace(/@(?=(?:图|视频|文本)\d+)/g, '').trim();
 
     const selectedPresetId = latestData.selectedPromptPresetId ?? null;
     const selectedFunctionChip = selectedPresetId ? null : latestData.selectedFunctionChip ?? null;
+
     if (selectedPresetId && latestData.selectedFunctionChip) {
       updateNodeData(id, { selectedFunctionChip: null });
     }
 
     let sourcePrompt = '';
+
     if (selectedPresetId) {
       const selectedPreset = latestSettings.promptPresets.find((preset) => preset.id === selectedPresetId);
       if (!selectedPreset) {
@@ -608,9 +661,11 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
           buildMultiFunctionPromptFromSettings(item.id, latestSettings)
         ),
       ];
+
       const basePromptIsStaleSourcePrompt = knownSourcePrompts.some((promptSource) =>
         normalizePromptForSourceComparison(promptSource) === normalizedBasePrompt
       );
+
       if (basePromptIsStaleSourcePrompt) {
         basePrompt = '';
       }
@@ -622,6 +677,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
       void showErrorDialog(errorMessage, t('common.error'));
       return null;
     }
+
     if (!basePrompt && sourcePrompt && latestIncomingImages.length === 0) {
       const errorMessage = t('node.imageEdit.referenceRequiredForPromptSource');
       setError(errorMessage);
@@ -629,8 +685,6 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
       return null;
     }
 
-    // Append the cinematography prompt at submit time (not into the user's
-    // textbox — see handleCameraControlApply).
     let prompt = sourcePrompt && basePrompt
       ? `${sourcePrompt}\n\n${t('node.imageEdit.userSupplementLabel')}${basePrompt}`
       : sourcePrompt || basePrompt;
@@ -644,25 +698,32 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
           focalLengthMm: cc.focalLength,
           apertureF: cc.aperture,
         }, latestSettings);
+
         if (cameraPrompt) prompt = `${prompt}, ${cameraPrompt}`;
-      } catch { /* fall back to current prompt */ }
+      } catch {
+        // fall back to current prompt
+      }
     }
 
-    // Resolve the panel-configured model (custom provider / Dreamina CLI) that
-    // the user picked via <ModelConfigPicker /> on this exact node. Built-in
-    // models no longer surface in the picker, so we go through the gateway's
-    // dispatch instead of the old `selectedModel.resolveRequest(...)` path.
     const latestNodeModelConfig = latestData.modelConfig ?? nodeModelConfig ?? null;
     const resolved = resolveActiveModelForPanel('aiImageNode', latestNodeModelConfig);
-    if ((resolved.entryId.startsWith('custom:') || resolved.entryId.startsWith('agnes:')) && resolved.requiresApiKey && !resolved.apiKey) {
+
+    if (
+      (resolved.entryId.startsWith('custom:') || resolved.entryId.startsWith('agnes:')) &&
+      resolved.requiresApiKey &&
+      !resolved.apiKey
+    ) {
       const msg = `服务商「${resolved.providerLabel}」未填写 API Key`;
       setError(msg);
       void showErrorDialog(msg, t('common.error'));
       return null;
     }
-    if (!resolved.entryId.startsWith('dreamina:') && !resolved.entryId.startsWith('custom:') && !resolved.entryId.startsWith('agnes:')) {
-      // Fallback: no custom provider configured and no Dreamina login. Prompt
-      // the user to set one up in 我的配置.
+
+    if (
+      !resolved.entryId.startsWith('dreamina:') &&
+      !resolved.entryId.startsWith('custom:') &&
+      !resolved.entryId.startsWith('agnes:')
+    ) {
       const msg = '请先在「设置 → 我的配置」里添加至少一个服务商，或在「Dreamina」里登录 CLI 后再生成。';
       setError(msg);
       void showErrorDialog(msg, t('common.error'));
@@ -673,11 +734,13 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
     const batchId = effectiveCount > 1 ? `batch-${Date.now()}` : undefined;
     const generationDurationMs = 60000;
     const generationStartedAt = Date.now();
+
     const firstGeneratedSequence = resolveNextGeneratedMediaSequence(
       'image',
       latestCanvasState.nodes
     );
     const generatedDateStamp = getLocalDateStamp();
+
     setError(null);
     setShowCountPicker(false);
 
@@ -693,6 +756,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
     }
 
     const effectiveExtraParamsRecord = effectiveExtraParams as Record<string, unknown>;
+
     const requestResolutionLabel =
       resolved.extraParams?.['resolutionType'] ??
       resolved.extraParams?.['size'] ??
@@ -700,6 +764,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
       effectiveExtraParamsRecord['size'] ??
       selectedResolution.value ??
       '2K';
+
     const geometry = normalizeImageRequestGeometry({
       selectedResolution: requestResolutionLabel,
       selectedAspectRatio: resolved.ratio,
@@ -707,11 +772,14 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
       supportedAspectRatios: resolved.supportedRatios,
       fallbackResolution: '2K',
     });
+
     const requestSize = geometry.requestSize;
     const resolvedRequestAspectRatio = geometry.requestAspectRatio;
+
     const promptWithReferenceContext = referenceContextPrompt
       ? `${referenceContextPrompt}\n\n${prompt}`
       : prompt;
+
     const promptForRequest = appendGenerationParameterConstraints(promptWithReferenceContext, {
       enabled: latestSettings.appendParameterConstraintsToPrompt,
       aspectRatio: geometry.promptAspectRatio,
@@ -724,6 +792,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
       ...resolved.extraParams,
       resolutionType: geometry.resolutionLabel,
     };
+
     return {
       promptForRequest,
       requestSize,
@@ -762,129 +831,141 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
     const releaseSubmitLock = acquireGenerationSubmitLock(
       generationSubmitLockKey(id, 'image-edit-node')
     );
+
     if (!releaseSubmitLock) {
       return;
     }
 
     try {
-    const assembled = await assembleImageGenerationRequest();
-    if (!assembled) {
-      return;
-    }
-    const {
-      promptForRequest,
-      requestSize,
-      resolvedRequestAspectRatio,
-      latestIncomingImages,
-      effectiveCount,
-      batchId,
-      firstGeneratedSequence,
-      generatedDateStamp,
-      generationStartedAt,
-      generationDurationMs,
-      resolved,
-      gatewayPayload,
-    } = assembled;
-    const runtimeDiagnostics = await getRuntimeDiagnostics();
-
-    if (resolved.builtinModel && resolved.apiKey) {
-      await canvasAiGateway.setApiKey(resolved.providerId, resolved.apiKey);
-    }
-
-    const buildDebugContext = (): GenerationDebugContext => ({
-      sourceType: 'imageEdit',
-      providerId: resolved.providerId,
-      requestModel: resolved.modelForGateway,
-      requestSize,
-      requestAspectRatio: resolvedRequestAspectRatio,
-      prompt: promptForRequest,
-      extraParams: gatewayPayload.extraParams,
-      referenceImageCount: latestIncomingImages.length,
-      referenceImagePlaceholders: createReferenceImagePlaceholders(latestIncomingImages.length),
-      appVersion: runtimeDiagnostics.appVersion,
-      osName: runtimeDiagnostics.osName,
-      osVersion: runtimeDiagnostics.osVersion,
-      osBuild: runtimeDiagnostics.osBuild,
-      userAgent: runtimeDiagnostics.userAgent,
-    });
-    const resultNodePositions = findNodePositions(
-      id,
-      effectiveCount,
-      EXPORT_RESULT_NODE_DEFAULT_WIDTH,
-      EXPORT_RESULT_NODE_LAYOUT_HEIGHT
-    );
-    const resultNodes: { nodeId: string }[] = [];
-
-    for (let i = 0; i < effectiveCount; i++) {
-      const generatedSequence = firstGeneratedSequence + i;
-      const newNodePosition = resultNodePositions[i] ?? resultNodePositions[0] ?? { x: 100, y: 100 };
-      const nodeTitle = resolveDefaultGeneratedImageDisplayName(generatedSequence, promptForRequest);
-      const newNodeId = addNode(
-        CANVAS_NODE_TYPES.exportImage,
-        newNodePosition,
-        {
-          isGenerating: true,
-          generationStartedAt,
-          generationDurationMs,
-          resultKind: 'generic',
-          displayName: nodeTitle,
-          sourcePrompt: promptForRequest,
-          generatedNamingMode: 'default',
-          generatedSequence,
-          generatedDateStamp,
-          generatedFileName: `${resolveDefaultGeneratedImageFileStem(generatedSequence, generatedDateStamp)}.png`,
-          batchId,
-          batchIndex: i,
-          batchTotal: effectiveCount,
-        }
-      );
-      addEdge(id, newNodeId);
-      resultNodes.push({ nodeId: newNodeId });
-    }
-
-    await Promise.allSettled(resultNodes.map(async ({ nodeId: newNodeId }) => {
-      try {
-        const jobId = await canvasAiGateway.submitGenerateImageJob({
-          ...gatewayPayload,
-          referenceImages: [...gatewayPayload.referenceImages],
-          extraParams: { ...gatewayPayload.extraParams },
-        });
-        const generationDebugContext = buildDebugContext();
-        updateNodeData(newNodeId, {
-          generationJobId: jobId,
-          generationSourceType: 'imageEdit',
-          generationProviderId: resolved.providerId,
-          generationClientSessionId: CURRENT_RUNTIME_SESSION_ID,
-          generationDebugContext,
-        });
-      } catch (generationError) {
-        const resolvedError = resolveErrorContent(generationError, t('ai.error'));
-        const generationDebugContext = buildDebugContext();
-        const reportText = buildGenerationErrorReport({
-          errorMessage: resolvedError.message,
-          errorDetails: resolvedError.details,
-          context: generationDebugContext,
-        });
-        setError(resolvedError.message);
-        void showErrorDialog(
-          resolvedError.message,
-          t('common.error'),
-          resolvedError.details,
-          reportText
-        );
-        updateNodeData(newNodeId, {
-          isGenerating: false,
-          generationStartedAt: null,
-          generationJobId: null,
-          generationProviderId: null,
-          generationClientSessionId: null,
-          generationError: resolvedError.message,
-          generationErrorDetails: resolvedError.details ?? null,
-          generationDebugContext,
-          generationElapsedMs: Math.max(0, Date.now() - generationStartedAt),
-        });
+      const assembled = await assembleImageGenerationRequest();
+      if (!assembled) {
+        return;
       }
-    }));
+
+      const {
+        promptForRequest,
+        requestSize,
+        resolvedRequestAspectRatio,
+        latestIncomingImages,
+        effectiveCount,
+        batchId,
+        firstGeneratedSequence,
+        generatedDateStamp,
+        generationStartedAt,
+        generationDurationMs,
+        resolved,
+        gatewayPayload,
+      } = assembled;
+
+      const runtimeDiagnostics = await getRuntimeDiagnostics();
+
+      if (resolved.builtinModel && resolved.apiKey) {
+        await canvasAiGateway.setApiKey(resolved.providerId, resolved.apiKey);
+      }
+
+      const buildDebugContext = (): GenerationDebugContext => ({
+        sourceType: 'imageEdit',
+        providerId: resolved.providerId,
+        requestModel: resolved.modelForGateway,
+        requestSize,
+        requestAspectRatio: resolvedRequestAspectRatio,
+        prompt: promptForRequest,
+        extraParams: gatewayPayload.extraParams,
+        referenceImageCount: latestIncomingImages.length,
+        referenceImagePlaceholders: createReferenceImagePlaceholders(latestIncomingImages.length),
+        appVersion: runtimeDiagnostics.appVersion,
+        osName: runtimeDiagnostics.osName,
+        osVersion: runtimeDiagnostics.osVersion,
+        osBuild: runtimeDiagnostics.osBuild,
+        userAgent: runtimeDiagnostics.userAgent,
+      });
+
+      const resultNodePositions = findNodePositions(
+        id,
+        effectiveCount,
+        EXPORT_RESULT_NODE_DEFAULT_WIDTH,
+        EXPORT_RESULT_NODE_LAYOUT_HEIGHT
+      );
+
+      const resultNodes: { nodeId: string }[] = [];
+
+      for (let i = 0; i < effectiveCount; i++) {
+        const generatedSequence = firstGeneratedSequence + i;
+        const newNodePosition = resultNodePositions[i] ?? resultNodePositions[0] ?? { x: 100, y: 100 };
+        const nodeTitle = resolveDefaultGeneratedImageDisplayName(generatedSequence, promptForRequest);
+
+        const newNodeId = addNode(
+          CANVAS_NODE_TYPES.exportImage,
+          newNodePosition,
+          {
+            isGenerating: true,
+            generationStartedAt,
+            generationDurationMs,
+            resultKind: 'generic',
+            displayName: nodeTitle,
+            sourcePrompt: promptForRequest,
+            generatedNamingMode: 'default',
+            generatedSequence,
+            generatedDateStamp,
+            generatedFileName: `${resolveDefaultGeneratedImageFileStem(generatedSequence, generatedDateStamp)}.png`,
+            batchId,
+            batchIndex: i,
+            batchTotal: effectiveCount,
+          }
+        );
+
+        addEdge(id, newNodeId);
+        resultNodes.push({ nodeId: newNodeId });
+      }
+
+      await Promise.allSettled(resultNodes.map(async ({ nodeId: newNodeId }) => {
+        try {
+          const jobId = await canvasAiGateway.submitGenerateImageJob({
+            ...gatewayPayload,
+            referenceImages: [...gatewayPayload.referenceImages],
+            extraParams: { ...gatewayPayload.extraParams },
+          });
+
+          const generationDebugContext = buildDebugContext();
+
+          updateNodeData(newNodeId, {
+            generationJobId: jobId,
+            generationSourceType: 'imageEdit',
+            generationProviderId: resolved.providerId,
+            generationClientSessionId: CURRENT_RUNTIME_SESSION_ID,
+            generationDebugContext,
+          });
+        } catch (generationError) {
+          const resolvedError = resolveErrorContent(generationError, t('ai.error'));
+          const generationDebugContext = buildDebugContext();
+
+          const reportText = buildGenerationErrorReport({
+            errorMessage: resolvedError.message,
+            errorDetails: resolvedError.details,
+            context: generationDebugContext,
+          });
+
+          setError(resolvedError.message);
+          void showErrorDialog(
+            resolvedError.message,
+            t('common.error'),
+            resolvedError.details,
+            reportText
+          );
+
+          updateNodeData(newNodeId, {
+            isGenerating: false,
+            generationStartedAt: null,
+            generationJobId: null,
+            generationProviderId: null,
+            generationClientSessionId: null,
+            generationError: resolvedError.message,
+            generationErrorDetails: resolvedError.details ?? null,
+            generationDebugContext,
+            generationElapsedMs: Math.max(0, Date.now() - generationStartedAt),
+          });
+        }
+      }));
     } finally {
       releaseSubmitLock();
     }
@@ -913,7 +994,9 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
       if (!assembled) {
         return;
       }
+
       const preview = await buildImageGenerationDebugPreview(assembled.gatewayPayload);
+
       setPayloadDebugText(serializeDebugJson({
         gatewayRequest: preview.gatewayRequest,
         route: preview.route,
@@ -935,6 +1018,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
     if (!payloadDebugText) {
       return;
     }
+
     try {
       await navigator.clipboard.writeText(payloadDebugText);
       setPayloadDebugCopied(true);
@@ -945,71 +1029,114 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
     }
   }, [payloadDebugText, t]);
 
-  const syncPromptHighlightScroll = () => {
+  const syncPromptHighlightScroll = useCallback(() => {
     if (!promptRef.current || !promptHighlightRef.current) {
       return;
     }
 
     promptHighlightRef.current.scrollTop = promptRef.current.scrollTop;
     promptHighlightRef.current.scrollLeft = promptRef.current.scrollLeft;
-  };
+  }, []);
+
+  const scrollPromptToCaret = useCallback((caretIndex: number) => {
+    const textarea = promptRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.setSelectionRange(caretIndex, caretIndex);
+
+    const caretContentTop = getTextareaCaretContentTop(textarea, caretIndex);
+    const viewportHeight = textarea.clientHeight;
+    const currentScrollTop = textarea.scrollTop;
+    const caretViewportTop = caretContentTop - currentScrollTop;
+
+    if (caretViewportTop < 24) {
+      textarea.scrollTop = Math.max(0, caretContentTop - 24);
+    } else if (caretViewportTop > viewportHeight - 44) {
+      textarea.scrollTop = Math.max(0, caretContentTop - Math.min(120, viewportHeight / 3));
+    }
+
+    if (promptHighlightRef.current) {
+      promptHighlightRef.current.scrollTop = textarea.scrollTop;
+      promptHighlightRef.current.scrollLeft = textarea.scrollLeft;
+    }
+  }, []);
+
+  const restorePromptCaret = useCallback((caretIndex: number) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const textarea = promptRef.current;
+        if (!textarea) {
+          return;
+        }
+
+        textarea.focus({ preventScroll: true });
+        scrollPromptToCaret(caretIndex);
+      });
+    });
+  }, [scrollPromptToCaret]);
 
   const insertGraphReference = useCallback((referenceIndex: number) => {
     const marker = incomingReferenceItems[referenceIndex]?.token;
     if (!marker) {
       return;
     }
+
     const currentPrompt = promptDraftRef.current;
     const cursor = pickerCursor ?? currentPrompt.length;
     const { nextText: nextPrompt, nextCursor } = insertReferenceToken(currentPrompt, cursor, marker);
 
     setPromptDraft(nextPrompt);
     flushPromptDraft(nextPrompt);
+
     setShowImagePicker(false);
     setPickerCursor(null);
     setPickerActiveIndex(0);
 
-    requestAnimationFrame(() => {
-      promptRef.current?.focus();
-      promptRef.current?.setSelectionRange(nextCursor, nextCursor);
-      syncPromptHighlightScroll();
-    });
-  }, [flushPromptDraft, incomingReferenceItems, pickerCursor]);
+    restorePromptCaret(nextCursor);
+  }, [flushPromptDraft, incomingReferenceItems, pickerCursor, restorePromptCaret]);
 
   const selectPromptPresetFromFunctionPicker = useCallback((presetId: string) => {
     updateNodeData(id, {
       selectedFunctionChip: null,
       selectedPromptPresetId: presetId,
     });
+
     setShowFunctionPicker(false);
     setFunctionPickerActiveIndex(0);
+
     requestAnimationFrame(() => {
-      promptRef.current?.focus();
+      promptRef.current?.focus({ preventScroll: true });
       syncPromptHighlightScroll();
     });
-  }, [id, updateNodeData]);
+  }, [id, syncPromptHighlightScroll, updateNodeData]);
 
   const selectFunctionPickerItem = useCallback((index: number) => {
     const item = functionPickerItems[index];
     if (!item) return;
+
     if (item.kind === 'function') {
       updateNodeData(id, {
         selectedFunctionChip: item.id,
         selectedPromptPresetId: null,
       });
+
       setShowFunctionPicker(false);
       setFunctionPickerActiveIndex(0);
+
       requestAnimationFrame(() => {
-        promptRef.current?.focus();
+        promptRef.current?.focus({ preventScroll: true });
         syncPromptHighlightScroll();
       });
       return;
     }
+
     const firstPreset = promptPresets[0];
     if (firstPreset) {
       selectPromptPresetFromFunctionPicker(firstPreset.id);
     }
-  }, [functionPickerItems, id, promptPresets, selectPromptPresetFromFunctionPicker, updateNodeData]);
+  }, [functionPickerItems, id, promptPresets, selectPromptPresetFromFunctionPicker, syncPromptHighlightScroll, updateNodeData]);
 
   const clearSelectedFunctionSource = useCallback(() => {
     updateNodeData(id, {
@@ -1033,10 +1160,13 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
 
       try {
         const prepared = await prepareNodeImageFromFile(imageFile);
+
         const latestNode = useCanvasStore
           .getState()
           .nodes.find((candidate) => candidate.id === id);
+
         const basePosition = latestNode?.position ?? { x: 0, y: 0 };
+
         const uploadNodeId = addNode(
           CANVAS_NODE_TYPES.upload,
           {
@@ -1050,6 +1180,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
             sourceFileName: imageFile.name,
           }
         );
+
         addEdge(uploadNodeId, id);
 
         const marker = `@图${incomingImages.length + 1}`;
@@ -1059,17 +1190,15 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
           cursor,
           marker
         );
+
         setPromptDraft(nextPrompt);
         flushPromptDraft(nextPrompt);
+
         setShowImagePicker(false);
         setPickerCursor(null);
         setPickerActiveIndex(0);
 
-        requestAnimationFrame(() => {
-          promptRef.current?.focus();
-          promptRef.current?.setSelectionRange(nextCursor, nextCursor);
-          syncPromptHighlightScroll();
-        });
+        restorePromptCaret(nextCursor);
       } catch (pasteError) {
         const resolvedError = resolveErrorContent(pasteError, t('common.error'));
         void showErrorDialog(
@@ -1079,7 +1208,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
         );
       }
     },
-    [addEdge, addNode, flushPromptDraft, id, incomingImages.length, t]
+    [addEdge, addNode, flushPromptDraft, id, incomingImages.length, restorePromptCaret, t]
   );
 
   const handlePromptKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1088,6 +1217,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
       const selectionStart = event.currentTarget.selectionStart ?? currentPrompt.length;
       const selectionEnd = event.currentTarget.selectionEnd ?? selectionStart;
       const deletionDirection = event.key === 'Backspace' ? 'backward' : 'forward';
+
       const deleteRange = resolveReferenceAwareDeleteRange(
         currentPrompt,
         selectionStart,
@@ -1095,24 +1225,25 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
         deletionDirection,
         incomingReferences.length
       );
+
       if (deleteRange) {
         event.preventDefault();
+
         const { nextText, nextCursor } = removeTextRange(currentPrompt, deleteRange);
+
         setPromptDraft(nextText);
         flushPromptDraft(nextText);
-        requestAnimationFrame(() => {
-          promptRef.current?.focus();
-          promptRef.current?.setSelectionRange(nextCursor, nextCursor);
-          syncPromptHighlightScroll();
-        });
+
+        restorePromptCaret(nextCursor);
         return;
       }
+
       if (
-        event.key === 'Backspace'
-        && !currentPrompt.trim()
-        && selectedFunctionLabel
-        && selectionStart === 0
-        && selectionEnd === 0
+        event.key === 'Backspace' &&
+        !currentPrompt.trim() &&
+        selectedFunctionLabel &&
+        selectionStart === 0 &&
+        selectionEnd === 0
       ) {
         event.preventDefault();
         clearSelectedFunctionSource();
@@ -1166,8 +1297,10 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
 
     if (event.key === '/' && functionPickerItems.length > 0) {
       event.preventDefault();
+
       const cursor = event.currentTarget.selectionStart ?? promptDraftRef.current.length;
       const anchor = resolvePickerAnchor(rootRef.current, event.currentTarget, cursor);
+
       setFunctionPickerAnchor({
         left: Math.max(8, Math.min(anchor.left, resolvedWidth - FUNCTION_PICKER_WIDTH_PX - 8)),
         top: anchor.top,
@@ -1181,7 +1314,9 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
 
     if (event.key === '@' && incomingReferenceItems.length > 0) {
       event.preventDefault();
+
       const cursor = event.currentTarget.selectionStart ?? promptDraftRef.current.length;
+
       setPickerAnchor(resolvePickerAnchor(rootRef.current, event.currentTarget, cursor));
       setPickerCursor(cursor);
       setShowImagePicker(true);
@@ -1208,12 +1343,11 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
   return (
     <div
       ref={rootRef}
-      className={`
-        group relative flex h-full flex-col overflow-visible rounded-[var(--node-radius)] border bg-[var(--canvas-node-bg)] p-2 shadow-[var(--canvas-node-shadow)] transition-colors duration-150
-        ${selected
+      className={`group relative flex h-full flex-col overflow-visible rounded-[var(--node-radius)] border bg-[var(--canvas-node-bg)] p-2 shadow-[var(--canvas-node-shadow)] transition-colors duration-150 ${
+        selected
           ? 'border-accent shadow-[0_0_0_1px_rgba(59,130,246,0.32)]'
-          : 'border-[var(--canvas-node-border)] hover:border-[var(--canvas-node-border-hover)]'}
-      `}
+          : 'border-[var(--canvas-node-border)] hover:border-[var(--canvas-node-border-hover)]'
+      }`}
       style={{ width: `${resolvedWidth}px`, height: `${resolvedHeight}px` }}
       onClick={() => setSelectedNode(id)}
     >
@@ -1255,7 +1389,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
                 onClick={(event) => {
                   event.stopPropagation();
                   clearSelectedFunctionSource();
-                  promptRef.current?.focus();
+                  promptRef.current?.focus({ preventScroll: true });
                 }}
                 className="ml-0.5 rounded p-0.5 text-accent/80 hover:bg-accent/20 hover:text-accent"
                 title="移除已选功能"
@@ -1264,6 +1398,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
               </button>
             </div>
           )}
+
           <div
             ref={promptHighlightRef}
             aria-hidden="true"
@@ -1315,10 +1450,11 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
                     insertGraphReference(index);
                   }}
                   onMouseEnter={() => setPickerActiveIndex(index)}
-                  className={`flex w-full items-center gap-2 border border-transparent bg-transparent px-2 py-2 text-left text-sm text-text-dark transition-colors hover:border-[var(--canvas-node-field-border)] hover:bg-[var(--canvas-node-menu-hover)] ${pickerActiveIndex === index
+                  className={`flex w-full items-center gap-2 border border-transparent bg-transparent px-2 py-2 text-left text-sm text-text-dark transition-colors hover:border-[var(--canvas-node-field-border)] hover:bg-[var(--canvas-node-menu-hover)] ${
+                    pickerActiveIndex === index
                       ? 'border-accent/35 bg-[var(--canvas-node-menu-active)]'
                       : ''
-                    }`}
+                  }`}
                 >
                   {item.kind === 'image' && item.displayUrl ? (
                     <CanvasNodeImage
@@ -1351,6 +1487,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
             <div className="px-2 py-1 text-[11px] font-medium text-text-muted">
               输入 / 快速选择功能
             </div>
+
             <div className="ui-scrollbar nowheel max-h-[260px] overflow-y-auto pr-1">
               {functionPickerItems.map((item, index) => {
                 const Icon = item.icon;
@@ -1358,6 +1495,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
                 const selected = item.kind === 'function'
                   ? data.selectedFunctionChip === item.id
                   : Boolean(data.selectedPromptPresetId);
+
                 return (
                   <button
                     key={`${item.kind}-${item.id}`}
@@ -1387,6 +1525,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
                 );
               })}
             </div>
+
             {functionPickerItems[functionPickerActiveIndex]?.kind === 'presetGroup' && (
               <div
                 className="nowheel absolute left-[calc(100%+8px)] w-[240px] overflow-hidden rounded-xl border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] p-1.5 shadow-2xl"
@@ -1397,9 +1536,11 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
                 <div className="px-2 py-1 text-[11px] font-medium text-text-muted">
                   我的提示词预设
                 </div>
+
                 <div className="ui-scrollbar nowheel max-h-[220px] overflow-y-auto pr-1">
                   {promptPresets.map((preset) => {
                     const presetSelected = data.selectedPromptPresetId === preset.id;
+
                     return (
                       <button
                         key={preset.id}
@@ -1434,11 +1575,6 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
       </div>
 
       <div className="mt-2 flex min-w-0 shrink-0 flex-nowrap items-center gap-1">
-        {/*
-         * AI 图片节点现在走「自主服务商时代」：只显示用户在「我的配置」里
-         * 添加的供应商 + 已登录的即梦 CLI。内置 KIE / FAL / GRSAI 不再直接
-         * 出现在选择器里，用户要用这些请作为 custom provider 添加。
-         */}
         <ModelConfigPicker
           panelKey="aiImageNode"
           className="flex-1"
@@ -1494,6 +1630,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
                   {count}
                 </button>
               ))}
+
               <div className="border-t border-[var(--canvas-node-divider)]">
                 <button
                   type="button"
@@ -1504,6 +1641,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
                 >
                   {t('node.imageEdit.customCount')}
                 </button>
+
                 <div className="px-3 py-2">
                   <input
                     type="number"
@@ -1590,6 +1728,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
         position={Position.Right}
         className="!h-2 !w-2 !border-surface-dark !bg-accent"
       />
+
       <NodeResizeHandle
         minWidth={IMAGE_EDIT_NODE_MIN_WIDTH}
         minHeight={IMAGE_EDIT_NODE_MIN_HEIGHT}
