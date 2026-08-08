@@ -93,6 +93,7 @@ CANVAS_NODE_TYPES.imageEdit,
 CANVAS_NODE_TYPES.aiVideo,
 CANVAS_NODE_TYPES.aiText,
 CANVAS_NODE_TYPES.storyboardGen,
+CANVAS_NODE_TYPES.tag,
 ]);
 
 interface PendingConnectStart {

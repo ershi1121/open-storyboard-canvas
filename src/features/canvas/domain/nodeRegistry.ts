@@ -26,6 +26,7 @@ import { DEFAULT_NODE_DISPLAY_NAME } from './nodeDisplay';
 import { DEFAULT_IMAGE_MODEL_ID } from '../models';
 
 export type MenuIconKey = 'upload' | 'sparkles' | 'layout' | 'text' | 'video' | 'audio';
+
 export type CanvasNodeSelectionToolbarMode = 'full' | 'deleteOnly' | 'none';
 
 export interface CanvasNodeCapabilities {
@@ -296,7 +297,8 @@ const tagNodeDefinition: CanvasNodeDefinition<TagNodeData> = {
   menuLabelKey: 'node.menu.tag',
   menuIcon: 'text',
   visibleInMenu: false,
-  capabilities: { toolbar: false, selectionToolbar: 'deleteOnly', promptInput: false },
+  // 关键修改：改为 'none'，关闭全局默认的删除工具栏，让 TagNode.tsx 内部的自定义工具栏独占显示
+  capabilities: { toolbar: false, selectionToolbar: 'none', promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
