@@ -17,6 +17,7 @@ import {
   type PanoramaNodeData,
   type StoryboardGenNodeData,
   type StoryboardSplitNodeData,
+  type TagNodeData,
   type TextAnnotationNodeData,
   type UploadImageNodeData,
   type VideoNodeData,
@@ -61,17 +62,11 @@ const uploadNodeDefinition: CanvasNodeDefinition<UploadImageNodeData> = {
   menuLabelKey: 'node.menu.uploadMaterial',
   menuIcon: 'upload',
   visibleInMenu: true,
-  capabilities: {
-    toolbar: true,
-    promptInput: false,
-  },
+  capabilities: { toolbar: true, promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: false,
-    connectMenu: {
-      fromSource: false,
-      fromTarget: true,
-    },
+    connectMenu: { fromSource: false, fromTarget: true },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.upload],
@@ -88,17 +83,11 @@ const imageEditNodeDefinition: CanvasNodeDefinition<ImageEditNodeData> = {
   menuLabelKey: 'node.menu.aiImageGeneration',
   menuIcon: 'sparkles',
   visibleInMenu: true,
-  capabilities: {
-    toolbar: true,
-    promptInput: false,
-  },
+  capabilities: { toolbar: true, promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: true,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: true, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.imageEdit],
@@ -124,18 +113,11 @@ const aiVideoNodeDefinition: CanvasNodeDefinition<AiVideoNodeData> = {
   menuLabelKey: 'node.menu.aiVideoGeneration',
   menuIcon: 'video',
   visibleInMenu: true,
-  capabilities: {
-    toolbar: true,
-    selectionToolbar: 'full',
-    promptInput: false,
-  },
+  capabilities: { toolbar: true, selectionToolbar: 'full', promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: true,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: true, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.aiVideo],
@@ -154,18 +136,11 @@ const aiTextNodeDefinition: CanvasNodeDefinition<AiTextNodeData> = {
   menuLabelKey: 'node.menu.aiTextGeneration',
   menuIcon: 'sparkles',
   visibleInMenu: true,
-  capabilities: {
-    toolbar: true,
-    selectionToolbar: 'deleteOnly',
-    promptInput: false,
-  },
+  capabilities: { toolbar: true, selectionToolbar: 'deleteOnly', promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: true,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: true, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.aiText],
@@ -188,22 +163,12 @@ const aiAudioNodeDefinition: CanvasNodeDefinition<AiAudioNodeData> = {
   menuLabelKey: 'node.menu.aiAudioGeneration',
   menuIcon: 'audio',
   visibleInMenu: true,
-  defaultSize: {
-    width: 640,
-    height: 340,
-  },
-  capabilities: {
-    toolbar: true,
-    selectionToolbar: 'deleteOnly',
-    promptInput: false,
-  },
+  defaultSize: { width: 640, height: 340 },
+  capabilities: { toolbar: true, selectionToolbar: 'deleteOnly', promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: true,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: true, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.aiAudio],
@@ -221,17 +186,11 @@ const exportImageNodeDefinition: CanvasNodeDefinition<ExportImageNodeData> = {
   menuLabelKey: 'node.menu.uploadImage',
   menuIcon: 'upload',
   visibleInMenu: false,
-  capabilities: {
-    toolbar: true,
-    promptInput: false,
-  },
+  capabilities: { toolbar: true, promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: false,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: false, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.exportImage],
@@ -257,22 +216,12 @@ const videoNodeDefinition: CanvasNodeDefinition<VideoNodeData> = {
   menuLabelKey: 'node.menu.uploadVideo',
   menuIcon: 'video',
   visibleInMenu: false,
-  defaultSize: {
-    width: 384,
-    height: 288,
-  },
-  capabilities: {
-    toolbar: true,
-    selectionToolbar: 'full',
-    promptInput: false,
-  },
+  defaultSize: { width: 384, height: 288 },
+  capabilities: { toolbar: true, selectionToolbar: 'full', promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: true,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: true, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.video],
@@ -299,22 +248,12 @@ const audioNodeDefinition: CanvasNodeDefinition<AudioNodeData> = {
   menuLabelKey: 'node.menu.audio',
   menuIcon: 'audio',
   visibleInMenu: false,
-  defaultSize: {
-    width: 360,
-    height: 160,
-  },
-  capabilities: {
-    toolbar: true,
-    selectionToolbar: 'full',
-    promptInput: false,
-  },
+  defaultSize: { width: 360, height: 160 },
+  capabilities: { toolbar: true, selectionToolbar: 'full', promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: true,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: true, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.audio],
@@ -340,21 +279,34 @@ const groupNodeDefinition: CanvasNodeDefinition<GroupNodeData> = {
   menuLabelKey: 'node.menu.storyboard',
   menuIcon: 'layout',
   visibleInMenu: false,
-  capabilities: {
-    toolbar: false,
-    promptInput: false,
-  },
+  capabilities: { toolbar: false, promptInput: false },
   connectivity: {
     sourceHandle: false,
     targetHandle: false,
-    connectMenu: {
-      fromSource: false,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: false, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.group],
     label: '分组',
+  }),
+};
+
+const tagNodeDefinition: CanvasNodeDefinition<TagNodeData> = {
+  type: CANVAS_NODE_TYPES.tag,
+  menuLabelKey: 'node.menu.tag',
+  menuIcon: 'text',
+  visibleInMenu: false,
+  capabilities: { toolbar: false, selectionToolbar: 'deleteOnly', promptInput: false },
+  connectivity: {
+    sourceHandle: true,
+    targetHandle: true,
+    connectMenu: { fromSource: true, fromTarget: true },
+  },
+  createDefaultData: () => ({
+    displayName: '新标签',
+    label: '新标签',
+    sourceId: null,
+    color: null,
   }),
 };
 
@@ -363,18 +315,11 @@ const textAnnotationNodeDefinition: CanvasNodeDefinition<TextAnnotationNodeData>
   menuLabelKey: 'node.menu.textAnnotation',
   menuIcon: 'text',
   visibleInMenu: true,
-  capabilities: {
-    toolbar: true,
-    selectionToolbar: 'deleteOnly',
-    promptInput: false,
-  },
+  capabilities: { toolbar: true, selectionToolbar: 'deleteOnly', promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: true,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: true, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.textAnnotation],
@@ -392,22 +337,12 @@ const jsonCardNodeDefinition: CanvasNodeDefinition<JsonCardNodeData> = {
   menuLabelKey: 'node.menu.jsonCard',
   menuIcon: 'text',
   visibleInMenu: true,
-  defaultSize: {
-    width: 760,
-    height: 420,
-  },
-  capabilities: {
-    toolbar: true,
-    selectionToolbar: 'deleteOnly',
-    promptInput: false,
-  },
+  defaultSize: { width: 760, height: 420 },
+  capabilities: { toolbar: true, selectionToolbar: 'deleteOnly', promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: true,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: true, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.jsonCard],
@@ -429,17 +364,11 @@ const storyboardSplitDefinition: CanvasNodeDefinition<StoryboardSplitNodeData> =
   menuLabelKey: 'node.menu.storyboard',
   menuIcon: 'layout',
   visibleInMenu: false,
-  capabilities: {
-    toolbar: false,
-    promptInput: false,
-  },
+  capabilities: { toolbar: false, promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: false,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: false, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.storyboardSplit],
@@ -468,17 +397,11 @@ const storyboardGenNodeDefinition: CanvasNodeDefinition<StoryboardGenNodeData> =
   menuLabelKey: 'node.menu.storyboardGen',
   menuIcon: 'sparkles',
   visibleInMenu: true,
-  capabilities: {
-    toolbar: true,
-    promptInput: false,
-  },
+  capabilities: { toolbar: true, promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: true,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: true, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.storyboardGen],
@@ -504,18 +427,11 @@ const panoramaNodeDefinition: CanvasNodeDefinition<PanoramaNodeData> = {
   menuLabelKey: 'node.menu.panorama',
   menuIcon: 'sparkles',
   visibleInMenu: true,
-  capabilities: {
-    toolbar: false,
-    selectionToolbar: 'deleteOnly',
-    promptInput: false,
-  },
+  capabilities: { toolbar: false, selectionToolbar: 'deleteOnly', promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: true,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: true, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.panorama],
@@ -545,18 +461,11 @@ const blueprintNodeDefinition: CanvasNodeDefinition<BlueprintNodeData> = {
   menuLabelKey: 'node.menu.blueprint',
   menuIcon: 'layout',
   visibleInMenu: false,
-  capabilities: {
-    toolbar: false,
-    selectionToolbar: 'deleteOnly',
-    promptInput: false,
-  },
+  capabilities: { toolbar: false, selectionToolbar: 'deleteOnly', promptInput: false },
   connectivity: {
     sourceHandle: true,
     targetHandle: true,
-    connectMenu: {
-      fromSource: false,
-      fromTarget: false,
-    },
+    connectMenu: { fromSource: false, fromTarget: false },
   },
   createDefaultData: () => ({
     displayName: DEFAULT_NODE_DISPLAY_NAME[CANVAS_NODE_TYPES.blueprint],
@@ -569,11 +478,7 @@ const blueprintNodeDefinition: CanvasNodeDefinition<BlueprintNodeData> = {
     aspectRatio: '16:9',
     aspectFrame: '16:9',
     screenshotResolution: '1080p',
-    camera: {
-      fov: 39.6,
-      lensDistance: 8,
-      activePreset: 'standard',
-    },
+    camera: { fov: 39.6, lensDistance: 8, activePreset: 'standard' },
     lighting: {
       enabled: true,
       mainIntensity: 0.65,
@@ -583,10 +488,7 @@ const blueprintNodeDefinition: CanvasNodeDefinition<BlueprintNodeData> = {
       ambientIntensity: 0.55,
       ambientColor: '#ffffff',
     },
-    grid: {
-      visible: true,
-      height: 0,
-    },
+    grid: { visible: true, height: 0 },
     viewSettings: {
       wheelZoomEnabled: true,
       reverseWheelZoom: false,
@@ -612,6 +514,7 @@ export const canvasNodeDefinitions: Record<CanvasNodeType, CanvasNodeDefinition>
   [CANVAS_NODE_TYPES.textAnnotation]: textAnnotationNodeDefinition,
   [CANVAS_NODE_TYPES.jsonCard]: jsonCardNodeDefinition,
   [CANVAS_NODE_TYPES.group]: groupNodeDefinition,
+  [CANVAS_NODE_TYPES.tag]: tagNodeDefinition,
   [CANVAS_NODE_TYPES.storyboardSplit]: storyboardSplitDefinition,
   [CANVAS_NODE_TYPES.storyboardGen]: storyboardGenNodeDefinition,
   [CANVAS_NODE_TYPES.panorama]: panoramaNodeDefinition,
@@ -627,16 +530,20 @@ export function getMenuNodeDefinitions(): CanvasNodeDefinition[] {
 }
 
 export function getNodeSelectionToolbarMode(type: CanvasNodeType): CanvasNodeSelectionToolbarMode {
-  const capabilities = canvasNodeDefinitions[type].capabilities;
+  const definition = canvasNodeDefinitions[type];
+  if (!definition) {
+    return 'none';
+  }
+  const capabilities = definition.capabilities;
   return capabilities.selectionToolbar ?? (capabilities.toolbar ? 'full' : 'none');
 }
 
 export function nodeHasSourceHandle(type: CanvasNodeType): boolean {
-  return canvasNodeDefinitions[type].connectivity.sourceHandle;
+  return canvasNodeDefinitions[type]?.connectivity?.sourceHandle ?? false;
 }
 
 export function nodeHasTargetHandle(type: CanvasNodeType): boolean {
-  return canvasNodeDefinitions[type].connectivity.targetHandle;
+  return canvasNodeDefinitions[type]?.connectivity?.targetHandle ?? false;
 }
 
 export function getConnectMenuNodeTypes(handleType: 'source' | 'target'): CanvasNodeType[] {

@@ -12,6 +12,7 @@ export const CANVAS_NODE_TYPES = {
   textAnnotation: 'textAnnotationNode',
   jsonCard: 'jsonCardNode',
   group: 'groupNode',
+  tag: 'tagNode',                                              // ← 新增
   storyboardSplit: 'storyboardNode',
   storyboardGen: 'storyboardGenNode',
   panorama: 'panoramaNode',
@@ -29,6 +30,7 @@ export const EXPORT_RESULT_NODE_MIN_WIDTH = 168;
 export const EXPORT_RESULT_NODE_MIN_HEIGHT = 168;
 
 export const IMAGE_SIZES = ['0.5K', '1K', '2K', '4K'] as const;
+
 export const IMAGE_ASPECT_RATIOS = [
   '1:1',
   '16:9',
@@ -93,6 +95,14 @@ export interface GroupNodeData extends NodeDisplayData {
   [key: string]: unknown;
 }
 
+// ← 新增：TagNodeData 接口
+export interface TagNodeData extends NodeDisplayData {
+  label: string;
+  sourceId?: string | null;
+  color?: string | null;
+  [key: string]: unknown;
+}
+
 export interface TextAnnotationNodeData extends NodeDisplayData {
   content: string;
   isGenerating?: boolean;
@@ -148,12 +158,12 @@ export interface ImageEditNodeData extends NodeImageData {
   batchTotal?: number;
   cameraControl?: CameraControlOptions;
   /** Case B (empty AI image node) shows multi-function sub-items directly as
-   *  toolbar chips. At most one is selected at a time; the chip's prompt
-   *  template is prepended to the user prompt on submit. Null/undefined = no
-   *  module selected (normal text-to-image path). */
+   * toolbar chips. At most one is selected at a time; the chip's prompt
+   * template is prepended to the user prompt on submit. Null/undefined = no
+   * module selected (normal text-to-image path). */
   selectedFunctionChip?: string | null;
-  /** Optional settings prompt preset selected from the node toolbar. Mutually
-   *  exclusive with selectedFunctionChip and resolved by id at submit time. */
+  /* Optional settings prompt preset selected from the node toolbar. Mutually
+   * exclusive with selectedFunctionChip and resolved by id at submit time. */
   selectedPromptPresetId?: string | null;
 }
 
@@ -383,8 +393,8 @@ export interface BlueprintItem {
   // and can still render as procedural placeholders in the Director Studio.
   category?: 'person' | 'object' | 'scene';
   /** Optional built-in preset id (man / woman / box / table / ...). When set,
-   *  the 3D editor renders a detailed SVG sprite instead of the generic
-   *  capsule/box. See `ui/blueprintPresets.ts` for the registry. */
+   * the 3D editor renders a detailed SVG sprite instead of the generic
+   * capsule/box. See `ui/blueprintPresets.ts` for the registry. */
   presetId?: string;
   // Freeform text capturing the relation to other items (@image tokens allowed).
   relation?: string;
@@ -448,11 +458,11 @@ export interface BlueprintActionPose {
   rightKnee?: { x?: number };
   head?: { x?: number; y?: number; z?: number };
   torso?: { x?: number };
-  /** Whole-figure scale Y (lets squats / stretches survive even custom poses). */
+  /* Whole-figure scale Y (lets squats / stretches survive even custom poses). */
   scaleY?: number;
-  /** Vertical offset on the whole figure (sit / jump / lie). */
+  /* Vertical offset on the whole figure (sit / jump / lie). */
   groupY?: number;
-  /** Whole-figure X rotation in radians (lie poses). */
+  /* Whole-figure X rotation in radians (lie poses). */
   groupRotX?: number;
 }
 
@@ -560,8 +570,8 @@ export interface BlueprintNodeData extends NodeDisplayData {
   referenceImages: BlueprintReferenceImageItem[];
   customActionPresets?: string[];
   /** Map of custom action name → bone-rotation pose authored in the
-   *  blueprint custom action modal. Only entries created by the user via
-   *  the pose editor live here; built-in keyword poses stay in code. */
+   * blueprint custom action modal. Only entries created by the user via
+   * the pose editor live here; built-in keyword poses stay in code. */
   customActionPoses?: Record<string, BlueprintActionPose>;
   basePrompt?: string;
   aspectRatio: string;
@@ -573,15 +583,15 @@ export interface BlueprintNodeData extends NodeDisplayData {
   aspectFrame?: DirectorStudioAspectFrame;
   screenshotResolution?: DirectorStudioScreenshotResolution;
   themeColor?: string;
-  /** PNG dataURL of the latest user-triggered 3D snapshot, used as a reference
-   *  image at generation submit time. */
+  /* PNG dataURL of the latest user-triggered 3D snapshot, used as a reference
+   * image at generation submit time. */
   snapshotUrl?: string | null;
-  /** Recent Director Studio screenshots, stored oldest to newest. */
+  /* Recent Director Studio screenshots, stored oldest to newest. */
   snapshotHistory?: string[];
   directorStudioProjects?: DirectorStudioProjectRecord[];
   activeDirectorStudioProjectId?: string | null;
-  /** One-shot UI flag used by Director Studio shortcuts. Cleared after the
-   *  fullscreen shell opens so saved projects do not auto-open on reload. */
+  /* One-shot UI flag used by Director Studio shortcuts. Cleared after the
+   * fullscreen shell opens so saved projects do not auto-open on reload. */
   openDirectorStudioOnCreate?: boolean;
   [key: string]: unknown;
 }
@@ -594,6 +604,7 @@ export type CanvasNodeData =
   | TextAnnotationNodeData
   | JsonCardNodeData
   | GroupNodeData
+  | TagNodeData                                                // ← 新增
   | ImageEditNodeData
   | AiVideoNodeData
   | AiTextNodeData
@@ -640,8 +651,8 @@ export interface ActiveToolDialog {
   nodeId: string;
   toolType: NodeToolType;
   /** Optional overrides for the tool's initial options. Used by GridSplitPanel
-   *  to pass the user's selected rows/cols so the split dialog opens with
-   *  the chosen grid size instead of the tool plugin's default (3x3). */
+   * to pass the user's selected rows/cols so the split dialog opens with
+   * the chosen grid size instead of the tool plugin's default (3x3). */
   initialOptionsOverride?: Record<string, unknown>;
 }
 
@@ -699,6 +710,13 @@ export function isGroupNode(
   return node?.type === CANVAS_NODE_TYPES.group;
 }
 
+// ← 新增：isTagNode 类型守卫
+export function isTagNode(
+  node: CanvasNode | null | undefined
+): node is Node<TagNodeData, typeof CANVAS_NODE_TYPES.tag> {
+  return node?.type === CANVAS_NODE_TYPES.tag;
+}
+
 export function isTextAnnotationNode(
   node: CanvasNode | null | undefined
 ): node is Node<TextAnnotationNodeData, typeof CANVAS_NODE_TYPES.textAnnotation> {
@@ -739,18 +757,14 @@ export function nodeHasImage(node: CanvasNode | null | undefined): boolean {
   if (!node) {
     return false;
   }
-
   if (isUploadNode(node) || isImageEditNode(node) || isExportImageNode(node)) {
     return Boolean(node.data.imageUrl);
   }
-
   if (isStoryboardSplitNode(node)) {
     return node.data.frames.some((frame) => Boolean(frame.imageUrl));
   }
-
   if (isStoryboardGenNode(node)) {
     return Boolean(node.data.imageUrl);
   }
-
   return false;
 }

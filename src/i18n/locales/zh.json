@@ -772,7 +772,8 @@
       "textAnnotation": "文本节点",
       "jsonCard": "JSON 卡片",
       "panorama": "全景图",
-      "blueprint": "导演台"
+      "blueprint": "导演台",
+      "tag": "标签"
     },
     "imageNode": {
       "title": "图片节点",

@@ -12,6 +12,7 @@ import { JsonCardNode } from './JsonCardNode';
 import { PanoramaNode } from './PanoramaNode';
 import { StoryboardGenNode } from './StoryboardGenNode';
 import { StoryboardNode } from './StoryboardNode';
+import { TagNode } from './TagNode';
 import { TextAnnotationNode } from './TextAnnotationNode';
 import { UploadNode } from './UploadNode';
 import { VideoNode } from './VideoNode';
@@ -30,6 +31,7 @@ export const nodeTypes: NodeTypes = {
   panoramaNode: withNodeRenderErrorBoundary(PanoramaNode),
   storyboardGenNode: withNodeRenderErrorBoundary(StoryboardGenNode),
   storyboardNode: withNodeRenderErrorBoundary(StoryboardNode),
+  tagNode: withNodeRenderErrorBoundary(TagNode),
   textAnnotationNode: withNodeRenderErrorBoundary(TextAnnotationNode),
   uploadNode: withNodeRenderErrorBoundary(UploadNode),
   videoNode: withNodeRenderErrorBoundary(VideoNode),
@@ -48,6 +50,7 @@ export {
   PanoramaNode,
   StoryboardGenNode,
   StoryboardNode,
+  TagNode,
   TextAnnotationNode,
   UploadNode,
   VideoNode,

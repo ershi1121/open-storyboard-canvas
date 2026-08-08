@@ -772,14 +772,15 @@ return getConnectMenuNodeTypes(handleType);
 }
 
 function canNodeTypeBeManualConnectionSource(type: CanvasNodeType): boolean {
-return type === CANVAS_NODE_TYPES.upload
-|| type === CANVAS_NODE_TYPES.imageEdit
-|| type === CANVAS_NODE_TYPES.exportImage
-|| type === CANVAS_NODE_TYPES.video
-|| type === CANVAS_NODE_TYPES.audio
-|| type === CANVAS_NODE_TYPES.aiText
-|| type === CANVAS_NODE_TYPES.textAnnotation
-|| type === CANVAS_NODE_TYPES.jsonCard;
+  return type === CANVAS_NODE_TYPES.upload
+    || type === CANVAS_NODE_TYPES.imageEdit
+    || type === CANVAS_NODE_TYPES.exportImage
+    || type === CANVAS_NODE_TYPES.video
+    || type === CANVAS_NODE_TYPES.audio
+    || type === CANVAS_NODE_TYPES.aiText
+    || type === CANVAS_NODE_TYPES.textAnnotation
+    || type === CANVAS_NODE_TYPES.jsonCard
+    || type === CANVAS_NODE_TYPES.tag;
 }
 
 function getGeneratedTextForConnection(sourceNode: CanvasNode, nodes: CanvasNode[]): string {

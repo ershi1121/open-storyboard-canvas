@@ -1,8 +1,7 @@
 import { memo, useCallback, useRef, useState, type ChangeEvent } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
-import { ImagePlus, Globe2, LayoutGrid, Images, Video, FileSpreadsheet } from 'lucide-react';
-
+import { ImagePlus, Globe2, LayoutGrid, Images, Video, FileSpreadsheet, Tags } from 'lucide-react';
 import { CANVAS_NODE_TYPES, type CanvasNodeData, type CanvasNodeType } from '@/features/canvas/domain/canvasNodes';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { ExcelImportDialog, type ExcelImportSelection } from '@/features/canvas/ui/ExcelImportDialog';
@@ -95,6 +94,36 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
     [addNode, reactFlow]
   );
 
+  const handleCreateTag = useCallback(() => {
+    const inputName = window.prompt('请输入标签名称', '新标签');
+    if (inputName === null) return;
+    const name = inputName.trim() || '新标签';
+
+    let position = { x: 240, y: 160 };
+    try {
+      const container = document.querySelector('.react-flow') as HTMLElement | null;
+      if (container) {
+        const rect = container.getBoundingClientRect();
+        const flowPos = reactFlow.screenToFlowPosition({
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        });
+        position = {
+          x: flowPos.x + (Math.random() - 0.5) * 80,
+          y: flowPos.y + (Math.random() - 0.5) * 80,
+        };
+      }
+    } catch {
+      /* fallback position already set */
+    }
+
+    addNode(CANVAS_NODE_TYPES.tag, position, {
+      displayName: name,
+      label: name,
+      sourceId: null,
+    });
+  }, [addNode, reactFlow]);
+
   const handlePickFile = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) setImportFile(file);
@@ -104,7 +133,6 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
   const handleConfirmImport = useCallback(
     async (selection: ExcelImportSelection) => {
       setImportFile(null);
-
       let origin = { x: 120, y: 120 };
       try {
         const container = document.querySelector('.react-flow') as HTMLElement | null;
@@ -119,7 +147,6 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
       } catch {
         /* keep default origin */
       }
-
       const { prompts } = selection;
       for (let index = 0; index < prompts.length; index++) {
         const col = index % IMPORT_GRID_COLS;
@@ -129,12 +156,10 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
           { x: origin.x + col * IMPORT_GAP_X, y: origin.y + row * IMPORT_GAP_Y },
           { prompt: prompts[index] }
         );
-
         if (index < prompts.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
       }
-
       alert(`导入成功！已按「${selection.label}」的顺序生成 ${prompts.length} 个 AI 图片节点。`);
     },
     [addNode, reactFlow]
@@ -168,6 +193,15 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
         })}
 
         <button
+          onClick={handleCreateTag}
+          className={RAIL_BUTTON_CLASS}
+          title={t('canvasToolbar.createTagTitle', '新建标签')}
+        >
+          <Tags className="h-5 w-5" />
+          <span>{t('canvasToolbar.createTag', '新建标签')}</span>
+        </button>
+
+        <button
           onClick={() => excelInputRef.current?.click()}
           className={RAIL_BUTTON_CLASS}
           title={t('canvasToolbar.importExcelTitle', '批量导入Excel提示词')}
@@ -175,6 +209,7 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
           <FileSpreadsheet className="h-5 w-5" />
           <span>{t('canvasToolbar.importExcel', '导入Excel')}</span>
         </button>
+
         <input
           ref={excelInputRef}
           type="file"
