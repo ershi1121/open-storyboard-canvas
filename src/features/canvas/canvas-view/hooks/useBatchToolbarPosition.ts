@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useCanvasStore } from '@/stores/canvasStore';
 import type { CanvasNode } from '@/features/canvas/domain/canvasNodes';
 import type { CanvasMarqueeRect } from '../types';
-import { escapeNodeDataId } from '../utils/geometry';
 import { collectNodeIdsWithDescendants } from '../utils/node-helpers';
 
 interface UseBatchToolbarPositionOptions {
@@ -12,6 +11,64 @@ interface UseBatchToolbarPositionOptions {
   isSingleSelectedGroup: boolean;
 }
 
+type NodeWithParent = CanvasNode & { parentId?: string | null };
+
+/**
+ * 读取节点渲染后的实际尺寸。
+ * React Flow v12 会把渲染尺寸写入 node.measured，旧数据可能带 width/height，做兜底。
+ */
+function getNodeSize(node: CanvasNode): { width: number; height: number } {
+  const record = node as CanvasNode & {
+    measured?: { width?: number; height?: number };
+    width?: number;
+    height?: number;
+  };
+  return {
+    width: record.measured?.width ?? record.width ?? 0,
+    height: record.measured?.height ?? record.height ?? 0,
+  };
+}
+
+/**
+ * 解析节点的画布绝对坐标。
+ * 分组(Group)内的子节点 position 是相对父节点的，
+ * 需要沿 parentId 链逐级累加，才能换算成绝对坐标。
+ */
+function resolveAbsolutePosition(
+  node: CanvasNode,
+  nodeMap: Map<string, CanvasNode>
+): { x: number; y: number } {
+  let x = node.position.x;
+  let y = node.position.y;
+
+  const visited = new Set<string>([node.id]);
+  let current: CanvasNode = node;
+  let parentId = (current as NodeWithParent).parentId ?? null;
+
+  while (parentId && nodeMap.has(parentId) && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = nodeMap.get(parentId)!;
+    x += parent.position.x;
+    y += parent.position.y;
+    current = parent;
+    parentId = (current as NodeWithParent).parentId ?? null;
+  }
+
+  return { x, y };
+}
+
+/**
+ * 批量工具栏定位 Hook（性能优化版）。
+ *
+ * 旧版实现：useEffect + requestAnimationFrame + DOM querySelector + getBoundingClientRect。
+ * 拖拽节点时 nodes 每帧变化，导致该 effect 每帧被销毁重建、DOM 测量被反复调度又取消，
+ * 表现为：拖拽过程中工具栏不跟随、松手后才跳过去，同时产生无谓的 CPU 开销。
+ *
+ * 新版实现：直接用 nodes 数据（position + measured 尺寸）与当前视口做纯数学计算（useMemo），
+ * 无 DOM 查询、无 rAF。拖拽过程中工具栏与选区高亮框平滑跟随，画布平移/缩放时也正确跟随。
+ *
+ * 入参与返回值结构与旧版完全一致，上游调用无需任何改动。
+ */
 export function useBatchToolbarPosition({
   wrapperRef,
   nodes,
@@ -22,62 +79,81 @@ export function useBatchToolbarPosition({
   selectionBoundsRect: CanvasMarqueeRect | null;
 } {
   const currentViewport = useCanvasStore((state) => state.currentViewport);
-  const [batchToolbarPosition, setBatchToolbarPosition] = useState<{ left: number; top: number } | null>(null);
-  const [selectionBoundsRect, setSelectionBoundsRect] = useState<CanvasMarqueeRect | null>(null);
 
+  // wrapperRef.current 要在组件挂载后才可用，
+  // 这里对齐旧版 useEffect「挂载后执行一次」的时机。
+  const [isMounted, setIsMounted] = useState(false);
   useEffect(() => {
-    if (selectedNodeIds.length <= 1 && !isSingleSelectedGroup) {
-      setBatchToolbarPosition(null);
-      setSelectionBoundsRect(null);
-      return;
-    }
-    const frameId = window.requestAnimationFrame(() => {
-      const containerRect = wrapperRef.current?.getBoundingClientRect();
-      if (!containerRect) {
-        setBatchToolbarPosition(null);
-        setSelectionBoundsRect(null);
-        return;
-      }
-      let minLeft = Number.POSITIVE_INFINITY;
-      let minTop = Number.POSITIVE_INFINITY;
-      let maxRight = Number.NEGATIVE_INFINITY;
-      let maxBottom = Number.NEGATIVE_INFINITY;
-      let hasRect = false;
-      const boundsNodeIds = collectNodeIdsWithDescendants(nodes, selectedNodeIds);
-      for (const nodeId of boundsNodeIds) {
-        const nodeElement = wrapperRef.current?.querySelector<HTMLElement>(
-          `.react-flow__node[data-id="${escapeNodeDataId(nodeId)}"]`
-        );
-        if (!nodeElement) {
-          continue;
-        }
-        const rect = nodeElement.getBoundingClientRect();
-        minLeft = Math.min(minLeft, rect.left);
-        minTop = Math.min(minTop, rect.top);
-        maxRight = Math.max(maxRight, rect.right);
-        maxBottom = Math.max(maxBottom, rect.bottom);
-        hasRect = true;
-      }
-      if (!hasRect) {
-        setBatchToolbarPosition(null);
-        setSelectionBoundsRect(null);
-        return;
-      }
-      setSelectionBoundsRect({
-        left: Math.max(0, minLeft - containerRect.left),
-        top: Math.max(0, minTop - containerRect.top),
-        width: Math.max(0, maxRight - minLeft),
-        height: Math.max(0, maxBottom - minTop),
-      });
-      setBatchToolbarPosition({
-        left: Math.max(12, Math.min(containerRect.width - 12, (minLeft + maxRight) / 2 - containerRect.left)),
-        top: Math.max(12, minTop - containerRect.top - 42),
-      });
-    });
-    return () => {
-      window.cancelAnimationFrame(frameId);
-    };
-  }, [currentViewport, isSingleSelectedGroup, nodes, selectedNodeIds, wrapperRef]);
+    setIsMounted(true);
+  }, []);
 
-  return { batchToolbarPosition, selectionBoundsRect };
+  return useMemo(() => {
+    // 显示条件与旧版一致：多选，或单选的是一个分组节点
+    if (selectedNodeIds.length <= 1 && !isSingleSelectedGroup) {
+      return { batchToolbarPosition: null, selectionBoundsRect: null };
+    }
+
+    if (!isMounted) {
+      return { batchToolbarPosition: null, selectionBoundsRect: null };
+    }
+
+    const containerRect = wrapperRef.current?.getBoundingClientRect();
+    if (!containerRect) {
+      return { batchToolbarPosition: null, selectionBoundsRect: null };
+    }
+
+    const nodeMap = new Map<string, CanvasNode>(
+      nodes.map((node) => [node.id, node] as [string, CanvasNode])
+    );
+
+    // 与旧版一致：选中分组时，包围盒要包含组内所有子孙节点
+    const boundsNodeIds = collectNodeIdsWithDescendants(nodes, selectedNodeIds);
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    let hasBounds = false;
+
+    for (const nodeId of boundsNodeIds) {
+      const node = nodeMap.get(nodeId);
+      if (!node) {
+        continue;
+      }
+      const { x, y } = resolveAbsolutePosition(node, nodeMap);
+      const { width, height } = getNodeSize(node);
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + width);
+      maxY = Math.max(maxY, y + height);
+      hasBounds = true;
+    }
+
+    if (!hasBounds) {
+      return { batchToolbarPosition: null, selectionBoundsRect: null };
+    }
+
+    const zoom = currentViewport?.zoom || 1;
+    const viewportX = currentViewport?.x ?? 0;
+    const viewportY = currentViewport?.y ?? 0;
+
+    // 流坐标 -> 容器坐标：screen = flow * zoom + viewport
+    const left = minX * zoom + viewportX;
+    const top = minY * zoom + viewportY;
+    const width = (maxX - minX) * zoom;
+    const height = (maxY - minY) * zoom;
+
+    return {
+      selectionBoundsRect: {
+        left: Math.max(0, left),
+        top: Math.max(0, top),
+        width: Math.max(0, width),
+        height: Math.max(0, height),
+      },
+      batchToolbarPosition: {
+        left: Math.max(12, Math.min(containerRect.width - 12, left + width / 2)),
+        top: Math.max(12, top - 42),
+      },
+    };
+  }, [currentViewport, isMounted, isSingleSelectedGroup, nodes, selectedNodeIds, wrapperRef]);
 }

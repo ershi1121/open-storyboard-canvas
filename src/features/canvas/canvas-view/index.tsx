@@ -64,6 +64,7 @@ export function Canvas() {
   const suppressNextEdgeClickRef = useRef(false);
   const suppressNextMarqueeSelectionClearRef = useRef(false);
   const nodesRef = useRef<CanvasNode[]>([]);
+  
   const [showNodeMenu, setShowNodeMenu] = useState(false);
   const [nodeContextMenu, setNodeContextMenu] = useState<NodeContextMenuState | null>(null);
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
@@ -88,6 +89,7 @@ export function Canvas() {
   const imageViewer = useCanvasStore((state) => state.imageViewer);
   const closeImageViewer = useCanvasStore((state) => state.closeImageViewer);
   const navigateImageViewer = useCanvasStore((state) => state.navigateImageViewer);
+
   const apiKeys = useSettingsStore((state) => state.apiKeys);
   const dreaminaStatus = useSettingsStore((state) => state.dreaminaStatus);
   const canvasMouseBindings = useSettingsStore((state) => state.canvasMouseBindings);
@@ -96,18 +98,21 @@ export function Canvas() {
 
   const providerIds = useMemo(() => listModelProviders().map((provider) => provider.id), []);
   const hasConfiguredProvider = useMemo(
-    () => hasConfiguredImageProvider({
-      apiKeys,
-      builtInProviderIds: providerIds,
-      customProviders,
-      dreaminaStatus,
-    }),
+    () =>
+      hasConfiguredImageProvider({
+        apiKeys,
+        builtInProviderIds: providerIds,
+        customProviders,
+        dreaminaStatus,
+      }),
     [apiKeys, customProviders, dreaminaStatus, providerIds]
   );
+
   const panOnDragButtons = useMemo(
-    () => CANVAS_MOUSE_BUTTONS.filter(
-      (button) => getCanvasMouseAction(canvasMouseBindings, button, 'drag') === 'panCanvas'
-    ),
+    () =>
+      CANVAS_MOUSE_BUTTONS.filter(
+        (button) => getCanvasMouseAction(canvasMouseBindings, button, 'drag') === 'panCanvas'
+      ),
     [canvasMouseBindings]
   );
 
@@ -152,7 +157,18 @@ export function Canvas() {
     };
   }, [setCanvasViewportSize]);
 
-  const connectFlow = useConnectFlow({
+  // ==========================================
+  // 🚨 BUG 1 修复区：解构 useState 提供的稳定 Setter
+  // ==========================================
+  const {
+    pendingConnectStart,
+    setPendingConnectStart,
+    previewConnectionVisual,
+    setPreviewConnectionVisual,
+    handleConnectStart,
+    handleConnectEnd,
+    handleCanvasPointerMove,
+  } = useConnectFlow({
     wrapperRef,
     nodes,
     lastCanvasPointerRef,
@@ -169,16 +185,17 @@ export function Canvas() {
     setShowNodeMenu(false);
     setNodeContextMenu(null);
     setMenuAllowedTypes(undefined);
-    connectFlow.setPendingConnectStart(null);
-    connectFlow.setPreviewConnectionVisual(null);
-  }, [connectFlow]);
+    setPendingConnectStart(null);
+    setPreviewConnectionVisual(null);
+  }, [setPendingConnectStart, setPreviewConnectionVisual]);
+  // ==========================================
 
-const selection = useCanvasSelection({ wrapperRef, nodesRef });
+  const selection = useCanvasSelection({ wrapperRef, nodesRef });
 
   const flowHandlers = useCanvasFlowHandlers({
     wrapperRef,
     nodes,
-    pendingConnectStart: connectFlow.pendingConnectStart,
+    pendingConnectStart,
     suppressNextMarqueeSelectionClearRef,
     suppressNextEdgeClickRef,
     isRestoringCanvasRef,
@@ -191,7 +208,7 @@ const selection = useCanvasSelection({ wrapperRef, nodesRef });
   const assetPanel = useCanvasAssetPanel({
     nodes,
     wrapperRef,
-    pendingConnectStart: connectFlow.pendingConnectStart,
+    pendingConnectStart,
     menuPosition,
     clearOverlays,
     scheduleCanvasPersist,
@@ -236,7 +253,7 @@ const selection = useCanvasSelection({ wrapperRef, nodesRef });
     selectSingleNode: selection.selectSingleNode,
     openContextMenuAtClientPosition: contextMenuActions.openContextMenuAtClientPosition,
     openNodeContextMenuAtClientPosition: contextMenuActions.openNodeContextMenuAtClientPosition,
-    openNodeMenuAtClientPosition: contextMenuActions.openNodeMenuAtClientPosition, 
+    openNodeMenuAtClientPosition: contextMenuActions.openNodeMenuAtClientPosition,
   });
 
   const { marqueeRect } = useMarqueeSelection({
@@ -272,7 +289,7 @@ const selection = useCanvasSelection({ wrapperRef, nodesRef });
 
   const handleNodeSelect = useCallback(
     (type: CanvasNodeType) => {
-      const pending = connectFlow.pendingConnectStart;
+      const pending = pendingConnectStart;
       const newNodeId = addNode(type, flowPosition);
       if (pending) {
         if (pending.handleType === 'source') {
@@ -308,7 +325,7 @@ const selection = useCanvasSelection({ wrapperRef, nodesRef });
     [
       addNode,
       clearOverlays,
-      connectFlow.pendingConnectStart,
+      pendingConnectStart,
       connectNodes,
       flowPosition,
       scheduleCanvasPersist,
@@ -372,7 +389,7 @@ const selection = useCanvasSelection({ wrapperRef, nodesRef });
       className="relative h-full w-full outline-none"
       tabIndex={0}
       onPointerDown={handleCanvasPointerDown}
-      onPointerMove={connectFlow.handleCanvasPointerMove}
+      onPointerMove={handleCanvasPointerMove}
       onContextMenu={mouseActions.handleCanvasContextMenu}
       onAuxClick={mouseActions.handleCanvasAuxClick}
     >
@@ -384,8 +401,8 @@ const selection = useCanvasSelection({ wrapperRef, nodesRef });
         onEdgeClick={flowHandlers.handleEdgeClick}
         onEdgeDoubleClick={flowHandlers.handleEdgeDoubleClick}
         onConnect={flowHandlers.handleConnect}
-        onConnectStart={connectFlow.handleConnectStart}
-        onConnectEnd={connectFlow.handleConnectEnd}
+        onConnectStart={handleConnectStart}
+        onConnectEnd={handleConnectEnd}
         onNodeDragStart={altDrag.handleNodeDragStart}
         onNodeDrag={altDrag.handleNodeDrag}
         onNodeDragStop={altDrag.handleNodeDragStop}
@@ -427,7 +444,7 @@ const selection = useCanvasSelection({ wrapperRef, nodesRef });
       </ReactFlow>
 
       <SelectionOverlays marqueeRect={marqueeRect} selectionBoundsRect={selectionBoundsRect} />
-
+      
       <BatchToolbar
         position={batchToolbarPosition}
         selectedCount={selection.batchToolbarSelectedCount}
@@ -440,9 +457,9 @@ const selection = useCanvasSelection({ wrapperRef, nodesRef });
         onTrigger={handleBatchTrigger}
         onDelete={handleBatchDelete}
       />
-
+      
       <CanvasSideToolbar onOpenAssets={assetPanel.handleOpenAssetPanel} />
-
+      
       <AssetPanel
         isOpen={assetPanel.isAssetPanelOpen}
         assets={assetPanel.assetPanelAssets}
@@ -454,17 +471,17 @@ const selection = useCanvasSelection({ wrapperRef, nodesRef });
         onActivate={assetPanel.handleActivateAsset}
         onRename={assetPanel.assetPanelMode === 'browse' ? assetPanel.handleRenameAsset : undefined}
       />
-
+      
       {nodes.length === 0 && <EmptyHint hasConfiguredProvider={hasConfiguredProvider} />}
-
+      
       {nodes.length > 0 && !hasConfiguredProvider && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6">
           <MissingApiKeyHint />
         </div>
       )}
-
-      {showNodeMenu && <ConnectionPreview visual={connectFlow.previewConnectionVisual} />}
-
+      
+      {showNodeMenu && <ConnectionPreview visual={previewConnectionVisual} />}
+      
       <ContextMenu
         state={nodeContextMenu}
         onCopySelectedText={() => void contextMenuActions.handleContextMenuCopySelectedText()}
@@ -473,7 +490,7 @@ const selection = useCanvasSelection({ wrapperRef, nodesRef });
         onPaste={() => void clipboard.handleContextMenuPaste()}
         onDeleteNode={contextMenuActions.handleNodeContextMenuDelete}
       />
-
+      
       {showNodeMenu && (
         <NodeSelectionMenu
           position={menuPosition}
@@ -484,9 +501,9 @@ const selection = useCanvasSelection({ wrapperRef, nodesRef });
           onClose={clearOverlays}
         />
       )}
-
+      
       <NodeToolDialog />
-
+      
       <ImageViewerModal
         open={imageViewer.isOpen}
         imageUrl={imageViewer.currentImageUrl || ''}
