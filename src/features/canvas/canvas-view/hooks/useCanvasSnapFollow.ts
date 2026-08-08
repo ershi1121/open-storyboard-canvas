@@ -57,10 +57,7 @@ export function useCanvasSnapFollow() {
 
   const nodes = useCanvasStore((s) => s.nodes);
 
-  /* 拖动开始：
-     - Alt + 拖动 → 让位给原有复制逻辑
-     - Shift + 拖动 → 完全自由移动（无吸附、无跟随）
-     - 普通拖动 → 边缘吸附 + 跟随 */
+  /* Alt+拖动 → 原有复制；Shift+拖动 → 完全自由；普通拖动 → 边缘吸附+跟随 */
   const onNodeDragStart = useCallback((event: ReactMouseEvent, node: CanvasNode) => {
     if (event.altKey) {
       dragRef.current = null;
@@ -80,7 +77,7 @@ export function useCanvasSnapFollow() {
     setGuides([]);
   }, []);
 
-  /* 核心：仅边缘吸附 + 跟随注入（不改动选中态） */
+  /* 仅边缘吸附 + 跟随注入（不改动选中态） */
   const processNodeChanges = useCallback((changes: NodeChange<CanvasNode>[]) => {
     const drag = dragRef.current;
     if (!drag) return changes;
@@ -94,7 +91,6 @@ export function useCanvasSnapFollow() {
 
     const dRect = getNodeRect({ ...dragged, position: (draggedChange as any).position } as CanvasNode);
 
-    // ===== 边缘吸附（不含中心吸附） =====
     let dx = 0;
     let dy = 0;
     if (drag.snapEnabled) {
@@ -107,7 +103,7 @@ export function useCanvasSnapFollow() {
       let bestY: { offset: number; line: number } | null = null;
 
       for (const t of targets) {
-        // 只比对边缘：左/右对齐、左右互相贴合
+        // 只比对边缘（左/右对齐、左右贴合），无中心吸附
         const xCands: Array<[number, number]> = [
           [t.left - dRect.left, t.left],
           [t.right - dRect.right, t.right],
@@ -117,7 +113,6 @@ export function useCanvasSnapFollow() {
         for (const [off, line] of xCands) {
           if (Math.abs(off) <= thX && (!bestX || Math.abs(off) < Math.abs(bestX.offset))) bestX = { offset: off, line };
         }
-        // 只比对边缘：上/下对齐、上下互相贴合
         const yCands: Array<[number, number]> = [
           [t.top - dRect.top, t.top],
           [t.bottom - dRect.bottom, t.bottom],
@@ -145,7 +140,6 @@ export function useCanvasSnapFollow() {
       }
     }
 
-    // ===== 跟随移动 =====
     const basePos = (draggedChange as any).position;
     const deltaX = basePos.x + dx - dragged.position.x;
     const deltaY = basePos.y + dy - dragged.position.y;
