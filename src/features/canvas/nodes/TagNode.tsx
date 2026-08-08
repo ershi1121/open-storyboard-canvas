@@ -42,11 +42,9 @@ function getTagPalette(name: string, sourceId: string | null): TagPalette {
   const contentKey = `${(name || '').trim()}::${sourceId || ''}`;
   const hueHash = hashString(contentKey, '#hue');
   const toneHash = hashString(contentKey, '#tone');
-
   const hue = hueHash % 360;
   const sat = 55 + (toneHash % 25); // 55–80%
   const light = 40 + ((toneHash >> 8) % 14); // 40–54%
-
   return {
     border: `hsl(${hue}, ${sat}%, ${light}%)`,
     text: `hsl(${hue}, ${Math.min(sat + 10, 92)}%, ${Math.max(light - 10, 26)}%)`,
@@ -70,11 +68,9 @@ export const TagNode = memo((props: any) => {
   const { id, data, selected, width, height } = props;
   const name = data?.displayName || data?.label || '新标签';
   const sourceId = (data?.sourceId as string | null) || null;
-
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(name);
   const [isBatchConnectOpen, setIsBatchConnectOpen] = useState(false);
-
   const updateNodeData = useCanvasStore((s) => s.updateNodeData);
   const deleteNode = useCanvasStore((s) => s.deleteNode);
   const setSelectedNode = useCanvasStore((s) => s.setSelectedNode);
@@ -82,8 +78,17 @@ export const TagNode = memo((props: any) => {
   const sourceNode = useCanvasStore((s) => s.nodes.find((n) => n.id === id)) as
     | CanvasNode
     | undefined;
-
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const resolvedWidth = typeof width === 'number' && width > 0 ? width : undefined;
+  const resolvedHeight = typeof height === 'number' && height > 0 ? height : undefined;
+
+  // 是否被手动缩放过：决定编辑框的尺寸策略
+  // - 缩放过：编辑框按内容撑高，但用 max-h-full 封顶（超出滚动），
+  //   这样外层 flex items-center 才能把编辑框垂直居中（textarea 文字本身是顶部对齐的，
+  //   如果用 h-full 撑满，文字就会贴顶）
+  // - 未缩放：编辑框按内容自动撑高，胶囊随文字长高（保留原行为）
+  const hasFixedHeight = resolvedHeight !== undefined;
 
   // 编辑框按内容自动撑高（包含自动换行产生的行，不只是手动换行符）
   const autoGrowTextarea = useCallback(() => {
@@ -135,9 +140,6 @@ export const TagNode = memo((props: any) => {
 
   // 颜色只由内容决定：文字 + 源节点 完全一致才会同色
   const palette = useMemo(() => getTagPalette(name, sourceId), [name, sourceId]);
-
-  const resolvedWidth = typeof width === 'number' && width > 0 ? width : undefined;
-  const resolvedHeight = typeof height === 'number' && height > 0 ? height : undefined;
 
   // 之前"第二行文字漏出来"的根因：容器只是 overflow-hidden + 固定像素高度，
   // 一旦这个高度不是行高的整数倍（比如刚好够 1.3 行），浏览器会把下一行"切一半"露出来，
@@ -204,12 +206,14 @@ export const TagNode = memo((props: any) => {
 
       {/* 外层容器：不裁剪，保证两侧圆形锚点完整可见。
           minWidth/minHeight 必须和下面 NodeResizeControl 的下限保持一致（72×22，正好容纳图标+4个字）——
-          否则未手动缩放过的标签会比缩放下限还窄，第一次拖拽缩放时就会突然"跳变"到最小宽度 */}
+          否则未手动缩放过的标签会比缩放下限还窄，第一次拖拽缩放时就会突然"跳变"到最小宽度。
+          修复：height 不再随 isEditing 变化，显示/编辑两种状态几何尺寸完全一致，
+          彻底解决"双击编辑时标签缩小"的跳变问题 */}
       <div
         className="relative"
         style={{
           width: resolvedWidth,
-          height: isEditing ? undefined : resolvedHeight,
+          height: resolvedHeight,
           minWidth: 72,
           minHeight: 22,
         }}
@@ -233,9 +237,11 @@ export const TagNode = memo((props: any) => {
             aria-hidden
             strokeWidth={2.5}
           />
-
           {isEditing ? (
-            // 编辑态：按内容自动撑高，换行/超长文字都完整展开
+            // 编辑态：
+            // - 未缩放过：按内容自动撑高，换行/超长文字都完整展开
+            // - 缩放过：按内容撑高但 max-h-full 封顶（超出滚动），
+            //   比胶囊矮时由外层 flex items-center 垂直居中，文字不再贴顶
             <textarea
               ref={inputRef}
               autoFocus
@@ -257,7 +263,9 @@ export const TagNode = memo((props: any) => {
                   e.currentTarget.blur();
                 }
               }}
-              className="w-full min-w-0 flex-1 resize-none overflow-hidden break-words bg-transparent text-center text-[10px] font-semibold leading-snug tracking-tight outline-none nodrag"
+              className={`w-full min-w-0 flex-1 resize-none break-words bg-transparent text-center text-[10px] font-semibold leading-snug tracking-tight outline-none nodrag ${
+                hasFixedHeight ? 'max-h-full overflow-y-auto' : 'overflow-hidden'
+              }`}
               style={{ color: palette.text }}
             />
           ) : (

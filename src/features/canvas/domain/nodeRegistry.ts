@@ -17,15 +17,23 @@ import {
   type PanoramaNodeData,
   type StoryboardGenNodeData,
   type StoryboardSplitNodeData,
+  type TagGroupNodeData,
   type TagNodeData,
   type TextAnnotationNodeData,
   type UploadImageNodeData,
   type VideoNodeData,
 } from './canvasNodes';
+
 import { DEFAULT_NODE_DISPLAY_NAME } from './nodeDisplay';
 import { DEFAULT_IMAGE_MODEL_ID } from '../models';
 
-export type MenuIconKey = 'upload' | 'sparkles' | 'layout' | 'text' | 'video' | 'audio';
+export type MenuIconKey =
+  | 'upload'
+  | 'sparkles'
+  | 'layout'
+  | 'text'
+  | 'video'
+  | 'audio';
 
 export type CanvasNodeSelectionToolbarMode = 'full' | 'deleteOnly' | 'none';
 
@@ -297,7 +305,6 @@ const tagNodeDefinition: CanvasNodeDefinition<TagNodeData> = {
   menuLabelKey: 'node.menu.tag',
   menuIcon: 'text',
   visibleInMenu: false,
-  // 关键修改：改为 'none'，关闭全局默认的删除工具栏，让 TagNode.tsx 内部的自定义工具栏独占显示
   capabilities: { toolbar: false, selectionToolbar: 'none', promptInput: false },
   connectivity: {
     sourceHandle: true,
@@ -309,6 +316,24 @@ const tagNodeDefinition: CanvasNodeDefinition<TagNodeData> = {
     label: '新标签',
     sourceId: null,
     color: null,
+  }),
+};
+
+const tagGroupNodeDefinition: CanvasNodeDefinition<TagGroupNodeData> = {
+  type: CANVAS_NODE_TYPES.tagGroup,
+  menuLabelKey: '标签组',
+  menuIcon: 'layout',
+  visibleInMenu: true,
+  defaultSize: { width: 300, height: 220 },
+  capabilities: { toolbar: false, selectionToolbar: 'none', promptInput: false },
+  connectivity: {
+    sourceHandle: true,
+    targetHandle: true,
+    connectMenu: { fromSource: true, fromTarget: true },
+  },
+  createDefaultData: () => ({
+    displayName: '标签组',
+    sources: [],
   }),
 };
 
@@ -517,6 +542,7 @@ export const canvasNodeDefinitions: Record<CanvasNodeType, CanvasNodeDefinition>
   [CANVAS_NODE_TYPES.jsonCard]: jsonCardNodeDefinition,
   [CANVAS_NODE_TYPES.group]: groupNodeDefinition,
   [CANVAS_NODE_TYPES.tag]: tagNodeDefinition,
+  [CANVAS_NODE_TYPES.tagGroup]: tagGroupNodeDefinition,
   [CANVAS_NODE_TYPES.storyboardSplit]: storyboardSplitDefinition,
   [CANVAS_NODE_TYPES.storyboardGen]: storyboardGenNodeDefinition,
   [CANVAS_NODE_TYPES.panorama]: panoramaNodeDefinition,
@@ -536,6 +562,7 @@ export function getNodeSelectionToolbarMode(type: CanvasNodeType): CanvasNodeSel
   if (!definition) {
     return 'none';
   }
+
   const capabilities = definition.capabilities;
   return capabilities.selectionToolbar ?? (capabilities.toolbar ? 'full' : 'none');
 }
@@ -550,6 +577,7 @@ export function nodeHasTargetHandle(type: CanvasNodeType): boolean {
 
 export function getConnectMenuNodeTypes(handleType: 'source' | 'target'): CanvasNodeType[] {
   const fromSource = handleType === 'source';
+
   return Object.values(canvasNodeDefinitions)
     .filter((definition) => (fromSource
       ? definition.connectivity.connectMenu.fromSource

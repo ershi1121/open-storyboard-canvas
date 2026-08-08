@@ -6,12 +6,15 @@ import {
   isImageEditNode,
   isJsonCardNode,
   isTagNode,
+  isTagGroupNode, // ← 新增：标签组类型守卫
   isTextAnnotationNode,
   isUploadNode,
   isVideoNode,
   type CanvasEdge,
   type CanvasNode,
+  type TagGroupNodeData, // ← 新增：标签组数据类型
 } from '@/features/canvas/domain/canvasNodes';
+
 import { resolveNodeDisplayName } from '@/features/canvas/domain/nodeDisplay';
 
 export type GraphReferenceKind = 'image' | 'video' | 'audio' | 'text';
@@ -30,6 +33,12 @@ export interface GraphReferenceItem {
   title: string;
 }
 
+// 内部辅助接口：用于在穿透过程中携带自定义别名
+interface ResolvedSource {
+  node: CanvasNode;
+  customLabel?: string;
+}
+
 function getNodeTitle(node: CanvasNode): string {
   return resolveNodeDisplayName(node.type, node.data) || node.id;
 }
@@ -38,6 +47,7 @@ function getTextContentForNode(node: CanvasNode, nodesById: Map<string, CanvasNo
   if (isTextAnnotationNode(node)) {
     return typeof node.data.content === 'string' ? node.data.content.trim() : '';
   }
+
   if (isJsonCardNode(node)) {
     if (node.data.parsedJson !== null && node.data.parsedJson !== undefined) {
       try {
@@ -48,19 +58,24 @@ function getTextContentForNode(node: CanvasNode, nodesById: Map<string, CanvasNo
     }
     return typeof node.data.rawContent === 'string' ? node.data.rawContent.trim() : '';
   }
+
   if (isAiTextNode(node)) {
     const resultNodeId = typeof node.data.resultNodeId === 'string' ? node.data.resultNodeId : '';
     const resultNode = resultNodeId ? nodesById.get(resultNodeId) : null;
+
     if (resultNode && isTextAnnotationNode(resultNode)) {
       return typeof resultNode.data.content === 'string' ? resultNode.data.content.trim() : '';
     }
+
     const fallbackResult = Array.from(nodesById.values()).find((candidate) => (
       isTextAnnotationNode(candidate) && candidate.data.sourceAiNodeId === node.id
     ));
+
     return fallbackResult && isTextAnnotationNode(fallbackResult)
       ? (typeof fallbackResult.data.content === 'string' ? fallbackResult.data.content.trim() : '')
       : '';
   }
+
   return '';
 }
 
@@ -71,7 +86,9 @@ function extractReferenceFromNode(
   if (!node) {
     return null;
   }
+
   const title = getNodeTitle(node);
+
   if (isUploadNode(node) || isImageEditNode(node) || isExportImageNode(node)) {
     const imageUrl = node.data.imageUrl || node.data.previewImageUrl || '';
     if (!imageUrl) {
@@ -85,6 +102,7 @@ function extractReferenceFromNode(
       title,
     };
   }
+
   if (isVideoNode(node)) {
     const videoUrl = node.data.localVideoUrl || node.data.videoUrl || '';
     if (!videoUrl) {
@@ -98,6 +116,7 @@ function extractReferenceFromNode(
       title,
     };
   }
+
   if (isAudioNode(node)) {
     const audioUrl = node.data.localAudioUrl || node.data.audioUrl || '';
     if (!audioUrl) {
@@ -110,6 +129,7 @@ function extractReferenceFromNode(
       title,
     };
   }
+
   if (
     node.type === CANVAS_NODE_TYPES.textAnnotation ||
     node.type === CANVAS_NODE_TYPES.jsonCard ||
@@ -126,6 +146,7 @@ function extractReferenceFromNode(
       title,
     };
   }
+
   return null;
 }
 
@@ -143,31 +164,64 @@ function labelPrefixForKind(kind: GraphReferenceKind): string {
   }
 }
 
-// ← 新增：标签穿透遍历。
-// 当直连上游是标签节点时，顺着标签的入边递归向上，
-// 找到它背后真实的引用节点（图/视频/音频/文本）。
-// visited 集合防止连线成环导致死循环。
+/**
+ * 核心穿透逻辑：
+ * 1. 单标签 (TagNode)：继续向上穿透。
+ * 2. 标签组 (TagGroupNode)：只穿透 enabled=true 的源，并携带 customLabel。
+ * 3. 普通节点：直接返回。
+ */
 function collectReferenceSourceNodes(
   nodeId: string,
   nodesById: Map<string, CanvasNode>,
   edges: CanvasEdge[],
   visited: Set<string>,
-): CanvasNode[] {
-  const sources: CanvasNode[] = [];
+  inheritedLabel?: string
+): ResolvedSource[] {
+  const sources: ResolvedSource[] = [];
+
   edges
     .filter((edge) => edge.target === nodeId)
     .forEach((edge) => {
       const sourceNode = nodesById.get(edge.source);
+      
+      // 防止死循环
       if (!sourceNode || visited.has(sourceNode.id)) {
         return;
       }
       visited.add(sourceNode.id);
+
       if (isTagNode(sourceNode)) {
-        sources.push(...collectReferenceSourceNodes(sourceNode.id, nodesById, edges, visited));
+        // 单标签：继续向上穿透
+        sources.push(...collectReferenceSourceNodes(sourceNode.id, nodesById, edges, visited, inheritedLabel));
+      } else if (isTagGroupNode(sourceNode)) {
+        // 标签组：处理内部启用的源
+        const groupData = sourceNode.data as TagGroupNodeData;
+        const enabledSources = (groupData.sources || []).filter(s => s.enabled);
+        
+        // 找到连接到该标签组的所有入边
+        const groupIncomingEdges = edges.filter(e => e.target === sourceNode.id);
+
+        enabledSources.forEach(enabledSource => {
+          // 根据 edgeId 匹配实际的连线
+          const actualEdge = groupIncomingEdges.find(e => e.id === enabledSource.edgeId);
+          if (actualEdge) {
+            // 递归穿透，传递 customLabel
+            const nestedSources = collectReferenceSourceNodes(
+              actualEdge.source, 
+              nodesById, 
+              edges, 
+              visited, 
+              enabledSource.customLabel
+            );
+            sources.push(...nestedSources);
+          }
+        });
       } else {
-        sources.push(sourceNode);
+        // 普通节点：收集
+        sources.push({ node: sourceNode, customLabel: inheritedLabel });
       }
     });
+
   return sources;
 }
 
@@ -185,27 +239,33 @@ export function collectInputReferences(
   };
   const seen = new Set<string>();
   const references: GraphReferenceItem[] = [];
-  // ← 修改：不再直接遍历直连边，而是用穿透后的真实源节点列表
+
   collectReferenceSourceNodes(nodeId, nodesById, edges, new Set<string>())
-    .forEach((sourceNode) => {
-      const extracted = extractReferenceFromNode(sourceNode, nodesById);
+    .forEach((sourceItem) => {
+      const extracted = extractReferenceFromNode(sourceItem.node, nodesById);
       if (!extracted) {
         return;
       }
-      // 按"源节点"去重：同一个源节点连多条边也只算一个引用
-      const dedupeKey = `${extracted.kind}:${extracted.sourceNodeId}`;
+
+      // 优化去重：如果同一个源节点有不同的自定义别名，允许共存
+      const dedupeKey = `${extracted.kind}:${extracted.sourceNodeId}:${sourceItem.customLabel || ''}`;
       if (seen.has(dedupeKey)) {
         return;
       }
       seen.add(dedupeKey);
+
       counts[extracted.kind] += 1;
-      const label = `${labelPrefixForKind(extracted.kind)}${counts[extracted.kind]}`;
+      
+      // 核心改动：优先使用自定义别名作为 Label
+      const label = sourceItem.customLabel || `${labelPrefixForKind(extracted.kind)}${counts[extracted.kind]}`;
+      
       references.push({
         ...extracted,
         label,
         token: `@${label}`,
       });
     });
+
   return references;
 }
 
@@ -224,6 +284,7 @@ export function buildReferenceContextPrompt(references: GraphReferenceItem[]): s
   if (contextual.length === 0) {
     return '';
   }
+
   const lines = contextual.map((reference) => {
     if (reference.kind === 'video') {
       return `- ${reference.token}：视频参考「${reference.title}」。请将它作为动作、节奏、镜头或场景连续性参考；支持视频引用的模型会收到对应视频 URL。`;
@@ -231,9 +292,11 @@ export function buildReferenceContextPrompt(references: GraphReferenceItem[]): s
     if (reference.kind === 'audio') {
       return `- ${reference.token}：音频参考「${reference.title}」。请将它作为对白、旁白、音乐、音色或节奏参考；支持音频引用的模型会收到对应音频 URL。`;
     }
+
     const content = (reference.content ?? '').trim();
     const excerpt = content.length > 1200 ? `${content.slice(0, 1200)}...` : content;
     return `- ${reference.token}：文本参考「${reference.title}」\n${excerpt}`;
   });
+
   return `## 连接参考说明\n${lines.join('\n')}`;
 }
