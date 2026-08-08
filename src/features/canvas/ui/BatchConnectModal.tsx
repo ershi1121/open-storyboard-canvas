@@ -15,6 +15,11 @@ import {
   Search,
   Play,
   Info,
+  CheckCheck,
+  RotateCcw,
+  Tag,
+  Pencil,
+  Sparkles,
 } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { CANVAS_NODE_TYPES, type CanvasNode } from '@/features/canvas/domain/canvasNodes';
@@ -27,12 +32,10 @@ interface BatchConnectModalProps {
 
 const EMPTY_SET = new Set<string>();
 
-// 🌟 悬停超大预览浮层尺寸（560px 宽，媒体最高 680px / 72vh）
 const HOVER_PREVIEW_WIDTH = 560;
 const HOVER_PREVIEW_MAX_HEIGHT = 760;
 const HOVER_DELAY_MS = 250;
 
-// 类型兜底名称（与画布资产命名保持一致）
 function getTypeLabel(type: string): string {
   switch (type) {
     case CANVAS_NODE_TYPES.upload: return '上传图';
@@ -48,12 +51,12 @@ function getTypeLabel(type: string): string {
     case CANVAS_NODE_TYPES.textAnnotation: return '文本标注';
     case CANVAS_NODE_TYPES.jsonCard: return 'JSON 卡片';
     case CANVAS_NODE_TYPES.blueprint: return '导演台';
+    case CANVAS_NODE_TYPES.tag: return '标签';
     case CANVAS_NODE_TYPES.group: return '组';
     default: return type || '节点';
   }
 }
 
-// 读取用户命名的节点名称
 function getNodeDisplayName(node: CanvasNode): string {
   const data = (node.data ?? {}) as Record<string, unknown>;
   if (typeof data.displayName === 'string' && data.displayName.trim()) return data.displayName.trim();
@@ -83,6 +86,8 @@ function getNodeIconStyle(type: string): { icon: typeof Circle; color: string } 
       return { icon: FileText, color: 'bg-green-500' };
     case CANVAS_NODE_TYPES.blueprint:
       return { icon: LayoutGrid, color: 'bg-orange-500' };
+    case CANVAS_NODE_TYPES.tag:
+      return { icon: Tag, color: 'bg-amber-600' };
     default:
       return { icon: Circle, color: 'bg-gray-500' };
   }
@@ -95,7 +100,6 @@ function pickText(...candidates: unknown[]): string {
   return '';
 }
 
-// 解析节点宽高比（如 "9:16"），用于按比例完整显示预览图
 function parseAspectRatio(value: unknown): number | null {
   if (typeof value !== 'string') return null;
   const parts = value.split(':');
@@ -106,7 +110,6 @@ function parseAspectRatio(value: unknown): number | null {
   return w / h;
 }
 
-// 源节点预览容器尺寸：竖图定高、横图定宽，永远不裁切
 function getSourcePreviewStyle(node: CanvasNode): React.CSSProperties {
   const data = (node.data ?? {}) as Record<string, unknown>;
   const ratio = parseAspectRatio(data.aspectRatio);
@@ -117,7 +120,6 @@ function getSourcePreviewStyle(node: CanvasNode): React.CSSProperties {
   return { height: '170px', aspectRatio: `${ratio}`, margin: '0 auto' };
 }
 
-// 预览信息：有图显图，没图显提示词；视频额外带可播放的视频源
 interface NodePreviewInfo {
   kind: 'image' | 'video' | 'text' | 'none';
   src?: string;
@@ -129,7 +131,6 @@ function getNodePreviewInfo(node: CanvasNode): NodePreviewInfo {
   const data = (node.data ?? {}) as Record<string, any>;
   const type = node.type as string;
 
-  // 图片类：优先缩略图；未生成时回退显示 prompt
   if (
     type === CANVAS_NODE_TYPES.upload ||
     type === CANVAS_NODE_TYPES.imageEdit ||
@@ -143,7 +144,6 @@ function getNodePreviewInfo(node: CanvasNode): NodePreviewInfo {
     return { kind: 'none' };
   }
 
-  // 故事板类：取第一帧做封面
   if (type === CANVAS_NODE_TYPES.storyboardSplit || type === CANVAS_NODE_TYPES.storyboardGen) {
     const frames = Array.isArray(data.frames) ? data.frames : [];
     const first = frames.find((frame: any) => frame && pickText(frame.imageUrl));
@@ -153,7 +153,6 @@ function getNodePreviewInfo(node: CanvasNode): NodePreviewInfo {
     return { kind: 'none' };
   }
 
-  // 视频类：封面 + 可播放视频源 + prompt
   if (type === CANVAS_NODE_TYPES.video || type === CANVAS_NODE_TYPES.aiVideo) {
     const raw = pickText(data.thumbnailUrl, data.previewImageUrl, data.imageUrl);
     const videoRaw = pickText(data.localVideoUrl, data.videoUrl);
@@ -166,7 +165,6 @@ function getNodePreviewInfo(node: CanvasNode): NodePreviewInfo {
     };
   }
 
-  // 文本类：内容摘要
   if (
     type === CANVAS_NODE_TYPES.aiText ||
     type === CANVAS_NODE_TYPES.textAnnotation ||
@@ -182,7 +180,166 @@ function getNodePreviewInfo(node: CanvasNode): NodePreviewInfo {
   return { kind: 'none' };
 }
 
-// 分类筛选：图片资产 与 AI 生成 拆分
+function getNodeSummaryText(node: CanvasNode): string {
+  const data = (node.data ?? {}) as Record<string, any>;
+  const type = node.type as string;
+  if (type === CANVAS_NODE_TYPES.blueprint) return pickText(data.basePrompt);
+  if (type === CANVAS_NODE_TYPES.aiText || type === CANVAS_NODE_TYPES.textAnnotation) {
+    return pickText(data.content, data.prompt, data.rawContent);
+  }
+  if (type === CANVAS_NODE_TYPES.jsonCard) {
+    if (data.parsedJson !== null && data.parsedJson !== undefined) {
+      try { return JSON.stringify(data.parsedJson); } catch { return ''; }
+    }
+    return pickText(data.content, data.rawContent);
+  }
+  if (type === CANVAS_NODE_TYPES.audio) return pickText(data.sourceFileName, data.displayName);
+  return pickText(data.prompt, data.sourcePrompt, data.basePrompt, data.content);
+}
+
+// 🚀 与 TagNode.tsx 的 getTagColor 完全一致：标签颜色由「名称::sourceId」哈希实时计算
+function getTagColor(node: CanvasNode): string {
+  const data = (node.data ?? {}) as Record<string, unknown>;
+  const name = (data.displayName as string) || (data.label as string) || '新标签';
+  const sourceId = (data.sourceId as string) || null;
+  const key = `${(name || '').trim()}::${sourceId || ''}`;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 65%, 45%)`;
+}
+
+// ===================== 模拟画布真实节点样式的预览 =====================
+// 右侧列表：迷你节点卡片（标签节点 = 动态颜色胶囊）
+function NodeMiniCard({ node }: { node: CanvasNode }) {
+  const type = node.type as string;
+  const displayName = getNodeDisplayName(node) || getTypeLabel(type);
+
+  // 标签节点：与画布一致的胶囊样式（颜色与画布实时同步）
+  if (type === CANVAS_NODE_TYPES.tag) {
+    const tagColor = getTagColor(node);
+    return (
+      <div className="w-full h-full flex items-center justify-center">
+        <div
+          className="max-w-full px-2 py-1 rounded-full border-2 bg-[var(--canvas-node-bg,#fff)] shadow-sm flex items-center gap-1"
+          style={{ borderColor: tagColor }}
+        >
+          <Tag className="w-2.5 h-2.5 shrink-0" style={{ color: tagColor }} />
+          <span className="text-[9px] font-bold truncate" style={{ color: tagColor }}>{displayName}</span>
+        </div>
+      </div>
+    );
+  }
+
+  const iconStyle = getNodeIconStyle(type);
+  const Icon = iconStyle.icon;
+  const preview = getNodePreviewInfo(node);
+
+  return (
+    <div className="w-full h-full flex flex-col rounded-[5px] overflow-hidden border border-[var(--canvas-node-border,#d4d4d8)] bg-[var(--canvas-node-bg,#fff)] shadow-sm">
+      {/* 节点标题栏 */}
+      <div className="h-[14px] shrink-0 flex items-center gap-1 px-1.5 border-b border-[var(--canvas-node-border,#e4e4e7)] bg-[var(--canvas-rail-button-bg,#f4f4f5)]">
+        <Icon className="w-2.5 h-2.5 opacity-60 shrink-0" />
+        <span className="text-[8px] leading-none opacity-70 truncate">{getTypeLabel(type)}</span>
+      </div>
+      {/* 内容区 */}
+      <div className="flex-1 min-h-0 relative flex items-center justify-center p-0.5">
+        {preview.src ? (
+          <>
+            <img src={preview.src} alt="" draggable={false} className="max-h-full max-w-full object-contain" />
+            {preview.kind === 'video' && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
+                <Play className="w-3 h-3 text-white" />
+              </div>
+            )}
+          </>
+        ) : (
+          <Icon className="w-3.5 h-3.5 opacity-30" />
+        )}
+      </div>
+      {/* 底部工具栏（模拟画布节点） */}
+      <div className="h-[10px] shrink-0 flex items-center justify-between px-1 border-t border-[var(--canvas-node-border,#e4e4e7)] bg-[var(--canvas-rail-button-bg,#f4f4f5)]">
+        <div className="h-[4px] w-5 rounded-full bg-current opacity-20" />
+        <div className="h-[5px] w-4 rounded-[2px] bg-blue-500 opacity-80" />
+      </div>
+    </div>
+  );
+}
+
+// 左侧源节点：大尺寸节点卡片（标签节点 = 大胶囊 + 两侧圆点，动态颜色）
+function SourceNodeCard({ node }: { node: CanvasNode }) {
+  const type = node.type as string;
+  const displayName = getNodeDisplayName(node) || getTypeLabel(type);
+  const summary = getNodeSummaryText(node);
+
+  // 标签节点：与画布一致的大胶囊（颜色与画布实时同步）
+  if (type === CANVAS_NODE_TYPES.tag) {
+    const tagColor = getTagColor(node);
+    return (
+      <div className="w-full flex justify-center py-3">
+        <div
+          className="relative px-6 py-2.5 rounded-full border-2 bg-[var(--canvas-node-bg,#fff)] shadow-lg flex items-center gap-2"
+          style={{ borderColor: tagColor }}
+        >
+          <div className="absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full" style={{ background: tagColor }} />
+          <Tag className="w-4 h-4 shrink-0" style={{ color: tagColor }} />
+          <span className="text-sm font-bold truncate max-w-[120px]" style={{ color: tagColor }}>{displayName}</span>
+          <div className="absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full" style={{ background: tagColor }} />
+        </div>
+      </div>
+    );
+  }
+
+  const iconStyle = getNodeIconStyle(type);
+  const Icon = iconStyle.icon;
+  const isImageLike =
+    type === CANVAS_NODE_TYPES.imageEdit ||
+    type === CANVAS_NODE_TYPES.upload ||
+    type === CANVAS_NODE_TYPES.exportImage;
+
+  return (
+    <div className="w-full rounded-lg overflow-hidden border border-[var(--canvas-node-border,#d4d4d8)] bg-[var(--canvas-node-bg,#fff)] shadow-lg">
+      {/* 标题栏 */}
+      <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-[var(--canvas-node-border,#e4e4e7)]">
+        <Icon className="w-3.5 h-3.5 opacity-70 shrink-0" />
+        <span className="text-xs font-medium truncate">{displayName}</span>
+        <Pencil className="w-3 h-3 opacity-40 ml-auto shrink-0" />
+      </div>
+      {/* 内容区 */}
+      <div className="px-2.5 py-3 min-h-[72px] max-h-[96px] overflow-hidden">
+        {summary ? (
+          <p className="text-[10px] leading-relaxed opacity-60 break-all whitespace-pre-wrap">
+            {summary.length > 100 ? summary.slice(0, 100) + '…' : summary}
+          </p>
+        ) : (
+          <p className="text-[10px] opacity-40">
+            {isImageLike ? '描述任何你想要生成或编辑的内容' : '暂无内容'}
+          </p>
+        )}
+      </div>
+      {/* 底部工具栏（模拟画布节点） */}
+      {isImageLike ? (
+        <div className="flex items-center gap-1 px-2 py-1.5 border-t border-[var(--canvas-node-border,#e4e4e7)] bg-[var(--canvas-rail-button-bg,#f4f4f5)]">
+          <div className="h-4 px-1.5 rounded-[4px] border border-[var(--canvas-node-border,#e4e4e7)] text-[8px] flex items-center opacity-60">模型</div>
+          <div className="h-4 px-1.5 rounded-[4px] border border-[var(--canvas-node-border,#e4e4e7)] text-[8px] flex items-center opacity-60">参数</div>
+          <div className="ml-auto h-4 px-2 rounded-[4px] bg-blue-500 text-white text-[8px] flex items-center gap-0.5">
+            <Sparkles className="w-2 h-2" />
+            生成
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between px-2 py-1.5 border-t border-[var(--canvas-node-border,#e4e4e7)] bg-[var(--canvas-rail-button-bg,#f4f4f5)]">
+          <div className="h-[4px] w-8 rounded-full bg-current opacity-20" />
+          <div className="h-[4px] w-4 rounded-full bg-current opacity-20" />
+        </div>
+      )}
+    </div>
+  );
+}
+// ===================== 节点样式预览结束 =====================
+
 const CATEGORY_FILTERS = [
   { key: 'all', label: '全部' },
   { key: 'image', label: '图片' },
@@ -192,6 +349,7 @@ const CATEGORY_FILTERS = [
   { key: 'text', label: '文本' },
   { key: 'other', label: '其他' },
 ] as const;
+
 type CategoryKey = (typeof CATEGORY_FILTERS)[number]['key'];
 
 function getNodeCategory(type: string): Exclude<CategoryKey, 'all'> {
@@ -227,37 +385,42 @@ interface HoverPreviewState {
 export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProps) {
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
-  const addEdge = useCanvasStore((state) => state.addEdge);
-  const deleteEdge = useCanvasStore((state) => state.deleteEdge);
+  const batchConnect = useCanvasStore((state) => state.batchConnect);
 
-  // 源节点可在弹窗内切换（右侧拖拽到左侧）
   const [sourceId, setSourceId] = useState(sourceNode.id);
   const currentSourceNode = useMemo(
     () => nodes.find((n) => n.id === sourceId) ?? sourceNode,
     [nodes, sourceId, sourceNode]
   );
 
-  // 每个源节点各自保留待操作的勾选状态
   const [togglesBySource, setTogglesBySource] = useState<Record<string, Set<string>>>({});
   const toggledIds = togglesBySource[sourceId] ?? EMPTY_SET;
 
   const [isDragging, setIsDragging] = useState(false);
-  const [dragLine, setDragLine] = useState({ x1: 0, y1: 0, x2: 0, y2: 0 });
   const [dragOverSource, setDragOverSource] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<CategoryKey>('all');
-  // 悬停超大预览浮层
+
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const hoveredNodeIdRef = useRef<string | null>(null);
+
   const [hoverPreview, setHoverPreview] = useState<HoverPreviewState | null>(null);
   const hoverTimerRef = useRef<number | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  // SVG 画线层的坐标基准容器（内容区），线条起点/终点必须相对它计算
+  const contentRef = useRef<HTMLDivElement>(null);
   const sourceHandleRef = useRef<HTMLDivElement>(null);
+
+  const svgLineRef = useRef<SVGLineElement>(null);
+  const dragCoords = useRef({ x1: 0, y1: 0, x2: 0, y2: 0 });
+  const rafId = useRef<number | null>(null);
+  const isDraggingRef = useRef(false);
 
   useEffect(() => () => {
     if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
   }, []);
 
-  // 悬停进入：延迟弹出超大浮层；side 决定浮层出现在锚点左侧还是右侧
   const handleHoverEnter = useCallback(
     (e: React.MouseEvent<HTMLDivElement>, node: CanvasNode, side: 'left' | 'right') => {
       const info = getNodePreviewInfo(node);
@@ -285,7 +448,6 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
     setHoverPreview(null);
   }, []);
 
-  // 分类数量统计（不含当前源节点）
   const categoryCounts = useMemo(() => {
     const counts: Record<Exclude<CategoryKey, 'all'>, number> = {
       image: 0, aiImage: 0, video: 0, audio: 0, text: 0, other: 0,
@@ -302,7 +464,6 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
     [categoryCounts]
   );
 
-  // 目标节点列表：分类过滤 + 名称/ID/提示词搜索
   const targetNodes = useMemo(() => {
     const keyword = searchText.trim().toLowerCase();
     return nodes.filter((n) => {
@@ -336,7 +497,6 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
     [toggledIds, existingConnections]
   );
 
-  // 所有源节点的总待操作数（底部统计）
   const totalPending = useMemo(() => {
     let adds = 0;
     let removes = 0;
@@ -363,39 +523,99 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
     });
   }, [sourceId]);
 
-  // 拖拽右侧节点到左侧：切换源节点
+  const handleSelectAllFiltered = () => {
+    setTogglesBySource((prev) => {
+      const current = prev[sourceId] ?? new Set<string>();
+      const next = new Set(current);
+      targetNodes.forEach((n) => next.add(n.id));
+      return { ...prev, [sourceId]: next };
+    });
+  };
+
+  const handleClearAllFiltered = () => {
+    setTogglesBySource((prev) => {
+      const current = prev[sourceId] ?? new Set<string>();
+      const next = new Set(current);
+      targetNodes.forEach((n) => next.delete(n.id));
+      return { ...prev, [sourceId]: next };
+    });
+  };
+
   const changeSource = useCallback((nextId: string) => {
     setSourceId((prev) => (prev === nextId ? prev : nextId));
   }, []);
 
+  // 坐标相对 contentRef（SVG 父容器）计算，线条精确从蓝点出发、跟随指针
   const handleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     setIsDragging(true);
+    isDraggingRef.current = true;
     setHoverPreview(null);
-    const rect = containerRef.current?.getBoundingClientRect();
+    const rect = contentRef.current?.getBoundingClientRect();
     const handleRect = sourceHandleRef.current?.getBoundingClientRect();
     if (rect && handleRect) {
-      setDragLine({
+      dragCoords.current = {
         x1: handleRect.left - rect.left + handleRect.width / 2,
         y1: handleRect.top - rect.top + handleRect.height / 2,
         x2: e.clientX - rect.left,
         y2: e.clientY - rect.top,
-      });
+      };
+      if (svgLineRef.current) {
+        svgLineRef.current.setAttribute('x1', dragCoords.current.x1.toString());
+        svgLineRef.current.setAttribute('y1', dragCoords.current.y1.toString());
+        svgLineRef.current.setAttribute('x2', dragCoords.current.x2.toString());
+        svgLineRef.current.setAttribute('y2', dragCoords.current.y2.toString());
+        svgLineRef.current.style.display = 'block';
+      }
     }
   };
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (!isDragging) return;
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (rect) {
-      setDragLine((prev) => ({ ...prev, x2: e.clientX - rect.left, y2: e.clientY - rect.top }));
-    }
-  }, [isDragging]);
+    const rect = contentRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    dragCoords.current.x2 = e.clientX - rect.left;
+    dragCoords.current.y2 = e.clientY - rect.top;
+
+    if (rafId.current) cancelAnimationFrame(rafId.current);
+    rafId.current = requestAnimationFrame(() => {
+      if (!isDraggingRef.current) return;
+
+      if (svgLineRef.current) {
+        svgLineRef.current.setAttribute('x1', dragCoords.current.x1.toString());
+        svgLineRef.current.setAttribute('y1', dragCoords.current.y1.toString());
+        svgLineRef.current.setAttribute('x2', dragCoords.current.x2.toString());
+        svgLineRef.current.setAttribute('y2', dragCoords.current.y2.toString());
+        svgLineRef.current.style.display = 'block';
+      }
+
+      // 仅高亮检测，不吸附
+      const target = document.elementFromPoint(e.clientX, e.clientY);
+      const nodeElement = target?.closest('[data-batch-node-id]');
+      const targetId = nodeElement ? nodeElement.getAttribute('data-batch-node-id') : null;
+
+      if (targetId && targetId !== currentSourceNode.id) {
+        if (hoveredNodeIdRef.current !== targetId) {
+          hoveredNodeIdRef.current = targetId;
+          setHoveredNodeId(targetId);
+        }
+      } else {
+        if (hoveredNodeIdRef.current !== null) {
+          hoveredNodeIdRef.current = null;
+          setHoveredNodeId(null);
+        }
+      }
+    });
+  }, [currentSourceNode.id]);
 
   const handleMouseUp = useCallback(
     (e: MouseEvent) => {
-      if (!isDragging) return;
       setIsDragging(false);
+      isDraggingRef.current = false;
+      setHoveredNodeId(null);
+      hoveredNodeIdRef.current = null;
+      if (svgLineRef.current) svgLineRef.current.style.display = 'none';
+
       const target = document.elementFromPoint(e.clientX, e.clientY);
       const nodeElement = target?.closest('[data-batch-node-id]');
       if (nodeElement) {
@@ -403,42 +623,51 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
         if (targetId && targetId !== currentSourceNode.id) toggleConnection(targetId);
       }
     },
-    [isDragging, currentSourceNode.id, toggleConnection]
+    [currentSourceNode.id, toggleConnection]
   );
+
+  const handleMouseLeaveWindow = useCallback((e: MouseEvent) => {
+    if (!isDraggingRef.current) return;
+    if (e.clientY <= 0 || e.clientX <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+      setIsDragging(false);
+      isDraggingRef.current = false;
+      setHoveredNodeId(null);
+      hoveredNodeIdRef.current = null;
+      if (svgLineRef.current) svgLineRef.current.style.display = 'none';
+    }
+  }, []);
 
   useEffect(() => {
     if (isDragging) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('mouseout', handleMouseLeaveWindow);
     } else {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mouseout', handleMouseLeaveWindow);
     }
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mouseout', handleMouseLeaveWindow);
+      if (rafId.current) cancelAnimationFrame(rafId.current);
     };
-  }, [isDragging, handleMouseMove, handleMouseUp]);
+  }, [isDragging, handleMouseMove, handleMouseUp, handleMouseLeaveWindow]);
 
-  // 确认：对所有源节点的待操作统一生效
   const handleConfirm = () => {
-    Object.entries(togglesBySource).forEach(([src, targets]) => {
-      targets.forEach((targetId) => {
-        const edge = edges.find((e) => e.source === src && e.target === targetId);
-        if (edge) deleteEdge(edge.id);
-        else addEdge(src, targetId);
-      });
-    });
+    if (totalPending.adds + totalPending.removes === 0) {
+      onClose();
+      return;
+    }
+    batchConnect(togglesBySource);
     onClose();
   };
 
   const sourceName = getNodeDisplayName(currentSourceNode) || getTypeLabel(currentSourceNode.type);
   const sourceTypeLabel = getTypeLabel(currentSourceNode.type);
-  const sourceIconStyle = getNodeIconStyle(currentSourceNode.type);
-  const SourceIcon = sourceIconStyle.icon;
   const sourcePreview = getNodePreviewInfo(currentSourceNode);
 
-  // 悬停浮层渲染数据
   const hoverNode = hoverPreview ? nodes.find((n) => n.id === hoverPreview.nodeId) ?? null : null;
   const hoverInfo = hoverNode ? getNodePreviewInfo(hoverNode) : null;
   const showHoverPreview = Boolean(hoverPreview && hoverNode && hoverInfo && (hoverInfo.src || hoverInfo.videoSrc));
@@ -460,9 +689,9 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
           </button>
         </div>
 
-        {/* Content Area */}
-        <div className="relative flex min-h-0 flex-1">
-          {/* Left Side: 源节点 + 操作说明 */}
+        {/* Content Area（contentRef：画线坐标基准） */}
+        <div ref={contentRef} className="relative flex min-h-0 flex-1">
+          {/* Left Side */}
           <div
             className={`w-1/3 flex flex-col p-4 relative border-r border-[var(--canvas-node-border,#333)] bg-[var(--canvas-rail-button-bg,#181818)] transition-colors ${
               dragOverSource ? 'bg-blue-500/10' : ''
@@ -482,57 +711,50 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
               if (droppedId && droppedId !== sourceId) changeSource(droppedId);
             }}
           >
-            {/* 源节点区域（居中） */}
             <div className="flex-1 min-h-0 flex flex-col items-center justify-center">
               <div className="mb-2 opacity-60 text-xs">源节点（拖拽右侧圆点）</div>
-
               <div
-                className={`w-52 p-3 rounded-lg border shadow-lg flex flex-col items-center transition-all ${
+                className={`w-52 transition-all ${
                   dragOverSource
-                    ? 'border-blue-500 ring-2 ring-blue-500/40 bg-blue-500/10'
-                    : 'border-[var(--canvas-node-border,#333)] bg-[var(--canvas-node-bg,#252525)]'
+                    ? 'rounded-lg border border-blue-500 ring-2 ring-blue-500/40 bg-blue-500/10 p-2'
+                    : sourcePreview.src
+                      ? 'rounded-lg border border-[var(--canvas-node-border,#333)] bg-[var(--canvas-node-bg,#252525)] p-3 shadow-lg'
+                      : ''
                 }`}
                 onMouseEnter={(e) => handleHoverEnter(e, currentSourceNode, 'right')}
                 onMouseLeave={handleHoverLeave}
               >
                 {sourcePreview.src ? (
-                  <div
-                    className="mb-2 overflow-hidden rounded-md border border-black/10 bg-black/10 flex items-center justify-center relative w-full"
-                    style={getSourcePreviewStyle(currentSourceNode)}
-                  >
-                    <img
-                      src={sourcePreview.src}
-                      alt=""
-                      className="max-h-full max-w-full object-contain"
-                      draggable={false}
-                    />
-                    {sourcePreview.kind === 'video' && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
-                        <Play className="h-7 w-7 text-white" />
+                  <div className="flex flex-col items-center">
+                    <div
+                      className="mb-2 overflow-hidden rounded-md border border-black/10 bg-black/10 flex items-center justify-center relative w-full"
+                      style={getSourcePreviewStyle(currentSourceNode)}
+                    >
+                      <img src={sourcePreview.src} alt="" className="max-h-full max-w-full object-contain" draggable={false} />
+                      {sourcePreview.kind === 'video' && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
+                          <Play className="h-7 w-7 text-white" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="font-medium text-center truncate w-full text-sm" title={sourceName}>
+                      {sourceName}
+                    </div>
+                    <div className="text-xs opacity-50 mt-0.5 truncate w-full text-center">{sourceTypeLabel}</div>
+                    {sourcePreview.text && (
+                      <div className="mt-1.5 w-full max-h-[32px] overflow-hidden break-all whitespace-pre-wrap text-center text-[10px] leading-relaxed opacity-60" title={sourcePreview.text}>
+                        {sourcePreview.text}
                       </div>
                     )}
                   </div>
                 ) : (
-                  <div className={`mb-2 w-12 h-12 rounded-lg flex items-center justify-center ${sourceIconStyle.color}`}>
-                    <SourceIcon className="w-6 h-6 text-white" />
-                  </div>
-                )}
-                <div className="font-medium text-center truncate w-full text-sm" title={sourceName}>
-                  {sourceName}
-                </div>
-                <div className="text-xs opacity-50 mt-0.5 truncate w-full text-center">{sourceTypeLabel}</div>
-                {sourcePreview.text && (
-                  <div
-                    className="mt-1.5 w-full max-h-[32px] overflow-hidden break-all whitespace-pre-wrap text-center text-[10px] leading-relaxed opacity-60"
-                    title={sourcePreview.text}
-                  >
-                    {sourcePreview.text}
-                  </div>
+                  /* 无图片时：显示与画布一致的节点样式 */
+                  <SourceNodeCard node={currentSourceNode} />
                 )}
               </div>
             </div>
 
-            {/* 🌟 左下方操作说明卡片 */}
+            {/* 操作说明卡片 */}
             <div className="mt-3 w-full shrink-0 rounded-lg border border-[var(--canvas-node-border,#333)] bg-[var(--canvas-node-bg,#1e1e1e)]/60 p-2.5">
               <div className="mb-1.5 flex items-center gap-1 text-[11px] font-medium opacity-80">
                 <Info className="w-3 h-3 text-blue-500" />
@@ -567,9 +789,8 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
             )}
           </div>
 
-          {/* Right Side: Target Nodes List */}
+          {/* Right Side */}
           <div className="flex min-h-0 w-2/3 flex-col bg-[var(--canvas-node-bg,#121212)]">
-            {/* 搜索栏 */}
             <div className="px-4 pt-3 pb-2 flex items-center gap-3">
               <div className="relative flex-1">
                 <Search className="w-4 h-4 opacity-50 absolute left-2.5 top-1/2 -translate-y-1/2" />
@@ -585,7 +806,6 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
               </span>
             </div>
 
-            {/* 分类筛选标签 */}
             <div className="flex items-center gap-1.5 flex-wrap px-4 pb-2">
               {CATEGORY_FILTERS.map((filter) => {
                 const count = filter.key === 'all' ? totalListCount : categoryCounts[filter.key];
@@ -605,6 +825,22 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
                   </button>
                 );
               })}
+              <div className="ml-auto flex items-center gap-2">
+                <button
+                  onClick={handleSelectAllFiltered}
+                  className="flex items-center gap-1 text-[11px] text-green-400 hover:text-green-300 opacity-80 hover:opacity-100 transition-colors"
+                  title="将当前筛选出的节点全部标记为连接/断开"
+                >
+                  <CheckCheck className="w-3.5 h-3.5" /> 全选当前
+                </button>
+                <button
+                  onClick={handleClearAllFiltered}
+                  className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-300 opacity-80 hover:opacity-100 transition-colors"
+                  title="清空当前筛选出的节点的标记"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> 清空当前
+                </button>
+              </div>
             </div>
 
             <div
@@ -613,8 +849,6 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
             >
               <div className="grid grid-cols-2 gap-3">
                 {targetNodes.map((node) => {
-                  const iconStyle = getNodeIconStyle(node.type);
-                  const Icon = iconStyle.icon;
                   const displayName = getNodeDisplayName(node);
                   const typeLabel = getTypeLabel(node.type);
                   const isExisting = existingConnections.has(node.id);
@@ -622,6 +856,7 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
                   const isConnected = isExisting !== isToggled;
                   const willDisconnect = isExisting && isToggled;
                   const preview = getNodePreviewInfo(node);
+                  const isHovered = hoveredNodeId === node.id;
 
                   return (
                     <div
@@ -641,40 +876,19 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
                           : isConnected
                             ? 'border-blue-500 bg-blue-500/10 shadow-inner'
                             : 'border-[var(--canvas-node-border,#333)] bg-[var(--canvas-rail-button-bg,#252525)] hover:border-blue-500/50'
-                      }`}
+                      } ${isHovered ? 'ring-2 ring-blue-500 ring-offset-2 ring-offset-[var(--canvas-node-bg,#121212)] scale-[1.02]' : ''}`}
                       onClick={() => toggleConnection(node.id)}
                       title={`${displayName || typeLabel}（点击切换连接 · 拖到左侧设为源节点 · 悬停查看大图）`}
                     >
-                      {/* 缩略图完整显示 */}
-                      <div className="relative w-12 h-12 shrink-0 overflow-hidden rounded-md border border-black/10 bg-black/10 flex items-center justify-center">
-                        {preview.src ? (
-                          <img
-                            src={preview.src}
-                            alt=""
-                            loading="lazy"
-                            draggable={false}
-                            className="max-h-full max-w-full object-contain"
-                          />
-                        ) : (
-                          <div className={`w-full h-full flex items-center justify-center ${iconStyle.color}`}>
-                            <Icon className="w-5 h-5 text-white" />
-                          </div>
-                        )}
-                        {preview.kind === 'video' && (
-                          <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
-                            <Play className="w-4 h-4 text-white" />
-                          </div>
-                        )}
+                      {/* 缩略图：模拟画布真实节点样式 */}
+                      <div className="relative w-14 h-14 shrink-0">
+                        <NodeMiniCard node={node} />
                       </div>
-
                       {/* 名称 + 提示词/内容摘要 */}
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium truncate">{displayName || typeLabel}</div>
                         {preview.text ? (
-                          <div
-                            className="mt-0.5 max-h-[34px] overflow-hidden break-all whitespace-pre-wrap text-xs leading-relaxed opacity-60"
-                            title={preview.text}
-                          >
+                          <div className="mt-0.5 max-h-[34px] overflow-hidden break-all whitespace-pre-wrap text-xs leading-relaxed opacity-60" title={preview.text}>
                             {preview.text}
                           </div>
                         ) : (
@@ -684,7 +898,6 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
                           </div>
                         )}
                       </div>
-
                       {/* 状态图标 */}
                       <div className="shrink-0 mt-1">
                         {willDisconnect ? (
@@ -709,17 +922,7 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
 
           {/* SVG 画线层 */}
           <svg className="absolute inset-0 pointer-events-none z-20" width="100%" height="100%">
-            {isDragging && (
-              <line
-                x1={dragLine.x1}
-                y1={dragLine.y1}
-                x2={dragLine.x2}
-                y2={dragLine.y2}
-                stroke="#3b82f6"
-                strokeWidth="2"
-                strokeDasharray="4 4"
-              />
-            )}
+            <line ref={svgLineRef} x1={0} y1={0} x2={0} y2={0} stroke="#3b82f6" strokeWidth="2" strokeDasharray="4 4" style={{ display: 'none' }} />
           </svg>
         </div>
 
@@ -751,7 +954,7 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
         </div>
       </div>
 
-      {/* 🌟 悬停超大预览浮层（560px 宽，媒体最高 680px / 72vh） */}
+      {/* 悬停超大预览浮层 */}
       {showHoverPreview && hoverPreview && hoverNode && hoverInfo && (
         <div
           className="pointer-events-none fixed z-[1600] w-[560px] overflow-hidden rounded-lg border border-[var(--canvas-node-border,#333)] bg-[var(--canvas-node-bg,#1e1e1e)] shadow-2xl"

@@ -216,6 +216,27 @@ export function useAltDragCopy({
       if (allChanges.length > 0) {
         applyNodesChange(allChanges);
       }
+
+      // ============================================================
+      // 修复：拖拽结束后清除复制节点上的临时高层级（zIndex 污染修复）
+      // ============================================================
+      useCanvasStore.setState((state) => ({
+        nodes: state.nodes.map((currentNode) => {
+          if (!altCopyState.copiedNodeIds.includes(currentNode.id)) {
+            return currentNode;
+          }
+          // 移除临时注入的 zIndex
+          const { zIndex: _removedZIndex, style, ...rest } = currentNode;
+          const nextStyle = { ...(style ?? {}) };
+          delete nextStyle.zIndex;
+          return {
+            ...rest,
+            style: nextStyle,
+          };
+        }),
+      }));
+      // ============================================================
+
       if (altCopyState.copiedNodeIds.length > 0) {
         setSelectedNode(altCopyState.copiedNodeIds[0]);
       }

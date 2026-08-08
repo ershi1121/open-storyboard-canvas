@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useCanvasStore } from '@/stores/canvasStore';
 import type { CanvasNode } from '@/features/canvas/domain/canvasNodes';
 import type { CanvasMarqueeRect } from '../types';
-import { collectNodeIdsWithDescendants } from '../utils/node-helpers';
+// 修复：导入 node-helpers 中带 DEFAULT_NODE_WIDTH 兜底的 getNodeSize，
+// 替换原本地定义的兜底为 0 的版本，避免离屏未渲染节点尺寸计算为 0
+import { collectNodeIdsWithDescendants, getNodeSize } from '../utils/node-helpers';
 
 interface UseBatchToolbarPositionOptions {
   wrapperRef: { current: HTMLDivElement | null };
@@ -12,22 +14,6 @@ interface UseBatchToolbarPositionOptions {
 }
 
 type NodeWithParent = CanvasNode & { parentId?: string | null };
-
-/**
- * 读取节点渲染后的实际尺寸。
- * React Flow v12 会把渲染尺寸写入 node.measured，旧数据可能带 width/height，做兜底。
- */
-function getNodeSize(node: CanvasNode): { width: number; height: number } {
-  const record = node as CanvasNode & {
-    measured?: { width?: number; height?: number };
-    width?: number;
-    height?: number;
-  };
-  return {
-    width: record.measured?.width ?? record.width ?? 0,
-    height: record.measured?.height ?? record.height ?? 0,
-  };
-}
 
 /**
  * 解析节点的画布绝对坐标。
