@@ -7,6 +7,8 @@ import {
   BackgroundVariant,
   SelectionMode,
   useReactFlow,
+  useViewport,
+  ViewportPortal,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useCanvasStore } from '@/stores/canvasStore';
@@ -50,11 +52,39 @@ import { useCanvasFlowHandlers } from './hooks/useCanvasFlowHandlers';
 import { useCanvasSelection } from './hooks/useCanvasSelection';
 import { useContextMenuActions } from './hooks/useContextMenuActions';
 import { useCanvasMouseActions } from './hooks/useCanvasMouseActions';
+// 🧲 自动吸附 + 跟随移动（SnapGuides 在本文件内定义，JSX 只存在于 .tsx）
+import { useCanvasSnapFollow, type SnapGuide } from './hooks/useCanvasSnapFollow';
 import { SelectionOverlays } from './components/SelectionOverlays';
 import { ConnectionPreview } from './components/ConnectionPreview';
 import { EmptyHint } from './components/EmptyHint';
 import { BatchToolbar } from './components/BatchToolbar';
 import { ContextMenu } from './components/ContextMenu';
+
+// 🧲 吸附参考线（zoom 补偿线宽，屏幕恒定 1px 细线）
+function SnapGuides({ guides }: { guides: SnapGuide[] }) {
+  const { zoom } = useViewport();
+  const thickness = Math.max(0.5, 1 / zoom);
+  if (guides.length === 0) return null;
+  return (
+    <ViewportPortal>
+      {guides.map((g) =>
+        g.orientation === 'vertical' ? (
+          <div
+            key={g.id}
+            className="pointer-events-none absolute z-50 bg-fuchsia-500/80"
+            style={{ left: g.position, top: -100000, width: thickness, height: 200000 }}
+          />
+        ) : (
+          <div
+            key={g.id}
+            className="pointer-events-none absolute z-50 bg-fuchsia-500/80"
+            style={{ top: g.position, left: -100000, height: thickness, width: 200000 }}
+          />
+        )
+      )}
+    </ViewportPortal>
+  );
+}
 
 export function Canvas() {
   const reactFlowInstance = useReactFlow();
@@ -64,7 +94,7 @@ export function Canvas() {
   const suppressNextEdgeClickRef = useRef(false);
   const suppressNextMarqueeSelectionClearRef = useRef(false);
   const nodesRef = useRef<CanvasNode[]>([]);
-  
+
   const [showNodeMenu, setShowNodeMenu] = useState(false);
   const [nodeContextMenu, setNodeContextMenu] = useState<NodeContextMenuState | null>(null);
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
@@ -107,7 +137,6 @@ export function Canvas() {
       }),
     [apiKeys, customProviders, dreaminaStatus, providerIds]
   );
-
   const panOnDragButtons = useMemo(
     () =>
       CANVAS_MOUSE_BUTTONS.filter(
@@ -157,9 +186,6 @@ export function Canvas() {
     };
   }, [setCanvasViewportSize]);
 
-  // ==========================================
-  // 🚨 BUG 1 修复区：解构 useState 提供的稳定 Setter
-  // ==========================================
   const {
     pendingConnectStart,
     setPendingConnectStart,
@@ -188,7 +214,6 @@ export function Canvas() {
     setPendingConnectStart(null);
     setPreviewConnectionVisual(null);
   }, [setPendingConnectStart, setPreviewConnectionVisual]);
-  // ==========================================
 
   const selection = useCanvasSelection({ wrapperRef, nodesRef });
 
@@ -280,6 +305,9 @@ export function Canvas() {
     scheduleCanvasPersist,
   });
 
+  // 🧲 自动吸附 + 跟随移动
+  const snapFollow = useCanvasSnapFollow();
+
   const handleCanvasPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (shouldIgnoreCanvasMarqueeTarget(event.target)) {
       return;
@@ -304,7 +332,10 @@ export function Canvas() {
               (node) => node.id === pending.nodeId
             );
             if (sourceNode) {
-              const sourceText = getGeneratedTextForConnection(sourceNode, useCanvasStore.getState().nodes);
+              const sourceText = getGeneratedTextForConnection(
+                sourceNode,
+                useCanvasStore.getState().nodes
+              );
               if (sourceText) {
                 updateNodeData(newNodeId, { content: sourceText } as Partial<CanvasNodeData>);
               }
@@ -396,16 +427,25 @@ export function Canvas() {
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodesChange={flowHandlers.handleNodesChange}
+        // 🧲 修改1：吸附逻辑先处理 changes，再交给原有处理逻辑
+        onNodesChange={(changes) => flowHandlers.handleNodesChange(snapFollow.processNodeChanges(changes))}
         onEdgesChange={flowHandlers.handleEdgesChange}
         onEdgeClick={flowHandlers.handleEdgeClick}
         onEdgeDoubleClick={flowHandlers.handleEdgeDoubleClick}
         onConnect={flowHandlers.handleConnect}
         onConnectStart={handleConnectStart}
         onConnectEnd={handleConnectEnd}
-        onNodeDragStart={altDrag.handleNodeDragStart}
+        // 🧲 修改2：先执行跟随编组，再执行原有的 Alt 拖动复制逻辑
+        onNodeDragStart={(event, node) => {
+          snapFollow.onNodeDragStart(event, node);
+          altDrag.handleNodeDragStart(event, node);
+        }}
         onNodeDrag={altDrag.handleNodeDrag}
-        onNodeDragStop={altDrag.handleNodeDragStop}
+        // 🧲 修改3：先清理跟随状态，再执行原有的拖动结束逻辑
+        onNodeDragStop={(event, node) => {
+          snapFollow.onNodeDragStop();
+          altDrag.handleNodeDragStop(event, node);
+        }}
         onNodeClick={mouseActions.handleNodeClick}
         onNodeContextMenu={mouseActions.handleNodeContextMenu}
         onPaneClick={mouseActions.handlePaneClick}
@@ -431,6 +471,8 @@ export function Canvas() {
         proOptions={{ hideAttribution: true }}
         className="canvas-flow"
       >
+        {/* 🧲 修改4：渲染吸附参考线 */}
+        <SnapGuides guides={snapFollow.guides} />
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--canvas-grid-dot)" />
         <MiniMap
           className="canvas-minimap nopan nowheel"
@@ -442,9 +484,7 @@ export function Canvas() {
         />
         <SelectedNodeOverlay />
       </ReactFlow>
-
       <SelectionOverlays marqueeRect={marqueeRect} selectionBoundsRect={selectionBoundsRect} />
-      
       <BatchToolbar
         position={batchToolbarPosition}
         selectedCount={selection.batchToolbarSelectedCount}
@@ -457,31 +497,27 @@ export function Canvas() {
         onTrigger={handleBatchTrigger}
         onDelete={handleBatchDelete}
       />
-      
       <CanvasSideToolbar onOpenAssets={assetPanel.handleOpenAssetPanel} />
-      
       <AssetPanel
         isOpen={assetPanel.isAssetPanelOpen}
         assets={assetPanel.assetPanelAssets}
         buttonRect={assetPanel.assetButtonRect}
         mode={assetPanel.assetPanelMode}
         title={assetPanel.assetPanelMode === 'select' ? '资产' : undefined}
-        subtitle={assetPanel.assetPanelMode === 'select' ? '选择一张现有图片连接到 AI 图片节点' : undefined}
+        subtitle={
+          assetPanel.assetPanelMode === 'select' ? '选择一张现有图片连接到 AI 图片节点' : undefined
+        }
         onClose={assetPanel.closeAssetPanel}
         onActivate={assetPanel.handleActivateAsset}
         onRename={assetPanel.assetPanelMode === 'browse' ? assetPanel.handleRenameAsset : undefined}
       />
-      
       {nodes.length === 0 && <EmptyHint hasConfiguredProvider={hasConfiguredProvider} />}
-      
       {nodes.length > 0 && !hasConfiguredProvider && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6">
           <MissingApiKeyHint />
         </div>
       )}
-      
       {showNodeMenu && <ConnectionPreview visual={previewConnectionVisual} />}
-      
       <ContextMenu
         state={nodeContextMenu}
         onCopySelectedText={() => void contextMenuActions.handleContextMenuCopySelectedText()}
@@ -490,7 +526,6 @@ export function Canvas() {
         onPaste={() => void clipboard.handleContextMenuPaste()}
         onDeleteNode={contextMenuActions.handleNodeContextMenuDelete}
       />
-      
       {showNodeMenu && (
         <NodeSelectionMenu
           position={menuPosition}
@@ -501,9 +536,7 @@ export function Canvas() {
           onClose={clearOverlays}
         />
       )}
-      
       <NodeToolDialog />
-      
       <ImageViewerModal
         open={imageViewer.isOpen}
         imageUrl={imageViewer.currentImageUrl || ''}

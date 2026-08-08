@@ -1,6 +1,6 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Handle, Position, NodeToolbar, NodeResizeControl } from '@xyflow/react';
-import { Link2, Trash2 } from 'lucide-react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Handle, NodeResizeControl, NodeToolbar, Position } from '@xyflow/react';
+import { Link2, Tag, Trash2 } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { UiChipButton, UiPanel } from '@/components/ui';
 import { BatchConnectModal } from '@/features/canvas/ui/BatchConnectModal';
@@ -15,17 +15,46 @@ import type { CanvasNode } from '@/features/canvas/domain/canvasNodes';
 const TOOLBAR_NEUTRAL_BUTTON_CLASS =
   'border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] text-text-dark shadow-sm hover:border-[var(--canvas-node-border-hover)] hover:bg-[var(--canvas-node-menu-hover)]';
 
-function getTagColor(name: string, sourceId?: string | null): string {
-  const key = `${(name || '').trim()}::${sourceId || ''}`;
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) {
-    hash = (hash * 31 + key.charCodeAt(i)) | 0;
+/**
+ * 🎨 配色规则：颜色只由「标签内容」决定 —— 文字 + 源节点 完全相同才会同色，
+ * 哪怕只差一个字，或者源节点不同，颜色都必然不同。
+ * 用两个互相独立的哈希（一个算色相，一个算饱和度/明度）来尽量拉开色彩差异，
+ * 减少不同内容撞到相近颜色的概率。
+ */
+function hashString(str: string, salt = ''): number {
+  const input = str + salt;
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
   }
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 65%, 45%)`;
+  return Math.abs(hash);
 }
 
-// 与项目连接把手一致的边对象
+interface TagPalette {
+  border: string;
+  text: string;
+  dot: string;
+  ring: string;
+}
+
+function getTagPalette(name: string, sourceId: string | null): TagPalette {
+  const contentKey = `${(name || '').trim()}::${sourceId || ''}`;
+  const hueHash = hashString(contentKey, '#hue');
+  const toneHash = hashString(contentKey, '#tone');
+
+  const hue = hueHash % 360;
+  const sat = 55 + (toneHash % 25); // 55–80%
+  const light = 40 + ((toneHash >> 8) % 14); // 40–54%
+
+  return {
+    border: `hsl(${hue}, ${sat}%, ${light}%)`,
+    text: `hsl(${hue}, ${Math.min(sat + 10, 92)}%, ${Math.max(light - 10, 26)}%)`,
+    dot: `hsl(${hue}, ${sat}%, ${Math.max(light - 4, 30)}%)`,
+    ring: `hsla(${hue}, ${sat}%, ${light}%, 0.3)`,
+  };
+}
+
 function buildEdgeItem(source: string, target: string) {
   return {
     id: `e-${source}-${target}`,
@@ -41,24 +70,35 @@ export const TagNode = memo((props: any) => {
   const { id, data, selected, width, height } = props;
   const name = data?.displayName || data?.label || '新标签';
   const sourceId = (data?.sourceId as string | null) || null;
+
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(name);
   const [isBatchConnectOpen, setIsBatchConnectOpen] = useState(false);
+
   const updateNodeData = useCanvasStore((s) => s.updateNodeData);
   const deleteNode = useCanvasStore((s) => s.deleteNode);
-  // 关键：点击时向 store 上报选中态，Ctrl+C 等快捷键才能识别标签
   const setSelectedNode = useCanvasStore((s) => s.setSelectedNode);
   const edges = useCanvasStore((s) => s.edges);
   const sourceNode = useCanvasStore((s) => s.nodes.find((n) => n.id === id)) as
     | CanvasNode
     | undefined;
-  const inputRef = useRef<HTMLInputElement>(null);
+
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // 编辑框按内容自动撑高（包含自动换行产生的行，不只是手动换行符）
+  const autoGrowTextarea = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
 
   // ① 实时记录上游源节点到 data.sourceId，复制时能继承
   const incomingSource = useMemo(
     () => edges.find((e) => e.target === id)?.source ?? null,
     [edges, id]
   );
+
   useEffect(() => {
     if (incomingSource && incomingSource !== sourceId) {
       updateNodeData(id, { sourceId: incomingSource });
@@ -85,26 +125,38 @@ export const TagNode = memo((props: any) => {
     setDraft(name);
   }, [name]);
 
-  // 进入重命名时自动聚焦并全选文字
   useEffect(() => {
     if (isEditing && inputRef.current) {
       inputRef.current.focus();
       inputRef.current.select();
+      autoGrowTextarea();
     }
-  }, [isEditing]);
+  }, [isEditing, autoGrowTextarea]);
 
-  const color = getTagColor(name, sourceId);
+  // 颜色只由内容决定：文字 + 源节点 完全一致才会同色
+  const palette = useMemo(() => getTagPalette(name, sourceId), [name, sourceId]);
 
-  // 与 ImageNode 一致：真实宽高（拖拽后回传并持久化），未拖拽前按内容自适应
   const resolvedWidth = typeof width === 'number' && width > 0 ? width : undefined;
   const resolvedHeight = typeof height === 'number' && height > 0 ? height : undefined;
 
-  const saveName = () => {
+  // 之前"第二行文字漏出来"的根因：容器只是 overflow-hidden + 固定像素高度，
+  // 一旦这个高度不是行高的整数倍（比如刚好够 1.3 行），浏览器会把下一行"切一半"露出来，
+  // 而不是完整隐藏。这里改成按当前像素高度算出能完整容纳几行，用 -webkit-line-clamp 硬性按整行裁切，
+  // 保证永远不会露出半行文字；容纳不下的部分会显示省略号。
+  const PILL_VERTICAL_PADDING = 6; // py-0.5 上下内边距合计
+  const TEXT_LINE_HEIGHT = 14; // text-[10px] + leading-snug 的行高
+  const maxTextLines = useMemo(() => {
+    if (!resolvedHeight) return undefined; // 未手动缩放：胶囊随文字自动撑高，不需要裁切
+    const available = resolvedHeight - PILL_VERTICAL_PADDING;
+    return Math.max(1, Math.floor(available / TEXT_LINE_HEIGHT));
+  }, [resolvedHeight]);
+
+  const saveName = useCallback(() => {
     setIsEditing(false);
     const nextName = draft.trim() || '新标签';
     setDraft(nextName);
     updateNodeData(id, { displayName: nextName, label: nextName });
-  };
+  }, [draft, id, updateNodeData]);
 
   return (
     <>
@@ -143,7 +195,6 @@ export const TagNode = memo((props: any) => {
         </UiPanel>
       </NodeToolbar>
 
-      {/* 批量连接功能框 */}
       {isBatchConnectOpen && sourceNode && (
         <BatchConnectModal
           sourceNode={sourceNode}
@@ -151,75 +202,113 @@ export const TagNode = memo((props: any) => {
         />
       )}
 
+      {/* 外层容器：不裁剪，保证两侧圆形锚点完整可见。
+          minWidth/minHeight 必须和下面 NodeResizeControl 的下限保持一致（72×22，正好容纳图标+4个字）——
+          否则未手动缩放过的标签会比缩放下限还窄，第一次拖拽缩放时就会突然"跳变"到最小宽度 */}
       <div
-        className="relative flex items-center justify-center gap-2 whitespace-nowrap rounded-2xl border-2 bg-white px-3 py-1.5 shadow-md hover:shadow-lg dark:bg-gray-800"
+        className="relative"
         style={{
           width: resolvedWidth,
-          height: resolvedHeight,
-          minHeight: 28,
-          borderColor: selected ? 'var(--accent, #3b82f6)' : color,
-          boxShadow: selected ? '0 0 0 2px rgba(59,130,246,0.32)' : undefined,
+          height: isEditing ? undefined : resolvedHeight,
+          minWidth: 72,
+          minHeight: 22,
         }}
         onClick={() => setSelectedNode(id)}
       >
-        {/* 关键修复：id="target"，让边的 targetHandle: 'target' 能找到锚点 */}
+        {/* 内层胶囊：文字支持自动换行，缩放时会跟着容器宽高实时重排。
+            手动缩放到装不下时，用 line-clamp 按整行裁切并显示省略号，不会再露出半行文字 */}
+        <div
+          className="flex h-full w-full items-center gap-1 overflow-hidden rounded-lg border bg-white px-1 py-0.5 shadow-sm transition-shadow duration-150 hover:shadow-md dark:bg-gray-800"
+          style={{
+            borderColor: selected ? 'var(--accent, #3b82f6)' : palette.border,
+            boxShadow: selected
+              ? '0 0 0 3px rgba(59,130,246,0.22)'
+              : `0 0 0 3px ${palette.ring}, 0 1px 2px rgba(0,0,0,0.08)`,
+          }}
+        >
+          {/* 标签图标：颜色与内容一一对应，内容不同则颜色必然不同 */}
+          <Tag
+            className="h-2.5 w-2.5 shrink-0 select-none"
+            style={{ color: palette.dot }}
+            aria-hidden
+            strokeWidth={2.5}
+          />
+
+          {isEditing ? (
+            // 编辑态：按内容自动撑高，换行/超长文字都完整展开
+            <textarea
+              ref={inputRef}
+              autoFocus
+              value={draft}
+              rows={1}
+              onMouseDown={(e) => e.stopPropagation()}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                autoGrowTextarea();
+              }}
+              onBlur={saveName}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  saveName();
+                } else if (e.key === 'Escape') {
+                  setDraft(name);
+                  e.currentTarget.blur();
+                }
+              }}
+              className="w-full min-w-0 flex-1 resize-none overflow-hidden break-words bg-transparent text-center text-[10px] font-semibold leading-snug tracking-tight outline-none nodrag"
+              style={{ color: palette.text }}
+            />
+          ) : (
+            // 展示态：容器未被手动缩放时随文字自动撑高；被缩放过、装不下时按整行裁切 + 省略号
+            <span
+              onDoubleClick={() => setIsEditing(true)}
+              onMouseDown={(e) => e.stopPropagation()}
+              title={name}
+              className="min-w-0 flex-1 cursor-text whitespace-normal break-words text-center text-[10px] font-semibold leading-snug tracking-tight nodrag"
+              style={{
+                color: palette.text,
+                ...(maxTextLines
+                  ? {
+                      display: '-webkit-box',
+                      WebkitLineClamp: maxTextLines,
+                      WebkitBoxOrient: 'vertical' as const,
+                      overflow: 'hidden',
+                    }
+                  : {}),
+              }}
+            >
+              {name}
+            </span>
+          )}
+        </div>
+
+        {/* 锚点放在外层，不会被内层裁剪 */}
         <Handle
           id="target"
           type="target"
           position={Position.Left}
-          className="!h-4 !w-4 !border-2 !border-white"
-          style={{ background: color }}
+          className="!h-2.5 !w-2.5 !border-2 !border-white"
+          style={{ background: palette.dot }}
         />
-        <span className="select-none text-sm">🏷️</span>
-        {isEditing ? (
-          <input
-            ref={inputRef}
-            onMouseDown={(e) => e.stopPropagation()}
-            onFocus={(e) => e.target.select()}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={saveName}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.currentTarget.blur();
-              } else if (e.key === 'Escape') {
-                setDraft(name);
-                e.currentTarget.blur();
-              }
-            }}
-            className="w-full min-w-0 flex-1 bg-transparent text-center text-sm font-bold outline-none nodrag"
-            style={{ color }}
-          />
-        ) : (
-          <span
-            onDoubleClick={() => setIsEditing(true)}
-            onMouseDown={(e) => e.stopPropagation()}
-            title="双击修改标签名称"
-            className="min-w-0 flex-1 cursor-text truncate text-center text-sm font-bold nodrag"
-            style={{ color }}
-          >
-            {name}
-          </span>
-        )}
-        {/* 关键修复：id="source"，让边的 sourceHandle: 'source' 能找到锚点 */}
         <Handle
           id="source"
           type="source"
           position={Position.Right}
-          className="!h-4 !w-4 !border-2 !border-white"
-          style={{ background: color }}
+          className="!h-2.5 !w-2.5 !border-2 !border-white"
+          style={{ background: palette.dot }}
         />
 
-        {/* 与 ImageNode 同款缩放手柄：可自由拉伸成正方形/长方形 */}
         <NodeResizeControl
           position="bottom-right"
-          minWidth={90}
-          minHeight={28}
+          minWidth={72}
+          minHeight={22}
           maxWidth={640}
           maxHeight={480}
-          className="!h-5 !w-5 !min-h-0 !min-w-0 !rounded-none !border-0 !bg-transparent !p-0 !opacity-0 transition-opacity duration-100 hover:!opacity-100 focus-within:!opacity-100"
+          className="!h-4 !w-4 !min-h-0 !min-w-0 !rounded-none !border-0 !bg-transparent !p-0 !opacity-0 transition-opacity duration-100 hover:!opacity-100 focus-within:!opacity-100"
         >
-          <div className="pointer-events-none absolute bottom-0 right-0 h-3 w-3 border-b border-r border-black/30 transition-colors dark:border-white/35" />
+          <div className="pointer-events-none absolute bottom-0 right-0 h-2.5 w-2.5 border-b border-r border-black/30 transition-colors dark:border-white/35" />
         </NodeResizeControl>
       </div>
     </>
