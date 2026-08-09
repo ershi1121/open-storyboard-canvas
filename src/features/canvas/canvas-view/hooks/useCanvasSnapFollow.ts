@@ -202,7 +202,8 @@ export function useCanvasSnapFollow() {
       if (!drag) return changes;
 
       const posChanges = changes.filter(
-        (c) => c.type === 'position' && (c as any).position !== undefined
+        (c): c is Extract<NodeChange<CanvasNode>, { type: 'position' }> =>
+          c.type === 'position' && (c as any).position !== undefined
       );
       if (posChanges.length === 0) return changes;
 
@@ -210,9 +211,9 @@ export function useCanvasSnapFollow() {
       const draggedChange =
         posChanges.find((c) => c.id === drag.nodeId) ?? posChanges[0];
 
-      if (!dragged || !(draggedChange as any).position) return changes;
+      if (!dragged || !draggedChange.position) return changes;
 
-      const proposedPos = (draggedChange as any).position as { x: number; y: number };
+      const proposedPos = draggedChange.position;
 
       let dx = 0;
       let dy = 0;
@@ -282,9 +283,7 @@ export function useCanvasSnapFollow() {
 
       if (deltaX === 0 && deltaY === 0) return modified;
 
-      const existingPosIds = new Set(
-        changes.filter((c) => c.type === 'position').map((c) => c.id)
-      );
+      const existingPosIds = new Set(posChanges.map((c) => c.id));
 
       const followChanges: any[] = [];
 

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
-import { ViewportPortal, useReactFlow, type NodeChange } from '@xyflow/react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
+import { useReactFlow, type NodeChange } from '@xyflow/react';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { DEFAULT_NODE_WIDTH, type CanvasNode } from '@/features/canvas/domain/canvasNodes';
 
@@ -51,12 +52,11 @@ export function useCanvasSnapFollow() {
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const lastGuideKeyRef = useRef('');
   const dragRef = useRef<{ nodeId: string; cluster: Set<string>; autoSelected: string[] } | null>(null);
-  
   const nodes = useCanvasStore((s) => s.nodes);
   const applyNodesChange = useCanvasStore((s) => s.onNodesChange);
 
   /* 拖动开始：编组跟随 (避开 Alt 拖动复制) */
-  const onNodeDragStart = useCallback((event: React.MouseEvent, node: CanvasNode) => {
+  const onNodeDragStart = useCallback((event: ReactMouseEvent, node: CanvasNode) => {
     if (event.altKey) {
       dragRef.current = null; // Alt 键由原有的 handleNodeDragStart 接管
       return;
@@ -64,7 +64,7 @@ export function useCanvasSnapFollow() {
     const cluster = collectFollowCluster(node.id, nodes);
     const autoSelected: string[] = [];
     if (cluster.size > 1) {
-      const changes: NodeChange[] = [];
+      const changes: Array<Extract<NodeChange<CanvasNode>, { type: 'select' }>> = [];
       for (const id of cluster) {
         const n = nodes.find((nn) => nn.id === id);
         if (n && !n.selected) {
@@ -81,7 +81,9 @@ export function useCanvasSnapFollow() {
   const onNodeDragStop = useCallback(() => {
     const drag = dragRef.current;
     if (drag?.autoSelected.length) {
-      applyNodesChange(drag.autoSelected.map((id) => ({ type: 'select', id, selected: false } as NodeChange)));
+      applyNodesChange(
+        drag.autoSelected.map((id) => ({ type: 'select', id, selected: false }) as Extract<NodeChange<CanvasNode>, { type: 'select' }>)
+      );
     }
     dragRef.current = null;
     lastGuideKeyRef.current = '';
@@ -92,21 +94,19 @@ export function useCanvasSnapFollow() {
   const processNodeChanges = useCallback((changes: NodeChange<CanvasNode>[]) => {
     const drag = dragRef.current;
     if (!drag) return changes;
-
-    const posChanges = changes.filter((c) => c.type === 'position' && (c as any).dragging && (c as any).position);
+    const posChanges = changes.filter(
+      (c): c is Extract<NodeChange<CanvasNode>, { type: 'position' }> =>
+        c.type === 'position' && (c as any).dragging && typeof (c as any).position === 'object'
+    );
     if (posChanges.length === 0) return changes;
-
     const dragged = nodes.find((n) => n.id === drag.nodeId);
     const draggedChange = posChanges.find((c) => c.id === drag.nodeId) ?? posChanges[0];
-    if (!dragged || !(draggedChange as any).position) return changes;
-
-    const dRect = getNodeRect({ ...dragged, position: (draggedChange as any).position } as CanvasNode);
+    if (!dragged || !draggedChange.position) return changes;
+    const dRect = getNodeRect({ ...dragged, position: draggedChange.position } as CanvasNode);
     const targets = nodes.filter((n) => !drag.cluster.has(n.id)).map(getNodeRect);
-
     const threshold = SNAP_THRESHOLD_PX / getZoom();
     let bestX: { offset: number; line: number } | null = null;
     let bestY: { offset: number; line: number } | null = null;
-
     for (const t of targets) {
       const xCands: Array<[number, number]> = [
         [t.left - dRect.left, t.left], [t.right - dRect.right, t.right],
@@ -125,24 +125,20 @@ export function useCanvasSnapFollow() {
         if (Math.abs(off) <= threshold && (!bestY || Math.abs(off) < Math.abs(bestY.offset))) bestY = { offset: off, line };
       }
     }
-
     const dx = bestX?.offset ?? 0;
     const dy = bestY?.offset ?? 0;
-
     const nextGuides: SnapGuide[] = [];
     if (bestX) nextGuides.push({ id: 'gx', orientation: 'vertical', position: bestX.line });
     if (bestY) nextGuides.push({ id: 'gy', orientation: 'horizontal', position: bestY.line });
-
     const guideKey = nextGuides.map((g) => `${g.orientation}:${Math.round(g.position)}`).join('|');
     if (guideKey !== lastGuideKeyRef.current) {
       lastGuideKeyRef.current = guideKey;
       setGuides(nextGuides);
     }
-
     if (dx !== 0 || dy !== 0) {
       return changes.map((c) =>
-        c.type === 'position' && (c as any).dragging && (c as any).position
-          ? ({ ...c, position: { x: (c as any).position.x + dx, y: (c as any).position.y + dy } } as any)
+        c.type === 'position' && (c as any).dragging && c.position
+          ? ({ ...c, position: { x: c.position.x + dx, y: c.position.y + dy } } as Extract<NodeChange<CanvasNode>, { type: 'position' }>)
           : c
       );
     }
@@ -150,19 +146,4 @@ export function useCanvasSnapFollow() {
   }, [nodes, getZoom]);
 
   return { guides, processNodeChanges, onNodeDragStart, onNodeDragStop };
-}
-
-export function SnapGuides({ guides }: { guides: SnapGuide[] }) {
-  if (guides.length === 0) return null;
-  return (
-    <ViewportPortal>
-      {guides.map((g) =>
-        g.orientation === 'vertical' ? (
-          <div key={g.id} className="pointer-events-none absolute z-50 w-px bg-fuchsia-500" style={{ left: g.position, top: -100000, height: 200000 }} />
-        ) : (
-          <div key={g.id} className="pointer-events-none absolute z-50 h-px bg-fuchsia-500" style={{ top: g.position, left: -100000, width: 200000 }} />
-        )
-      )}
-    </ViewportPortal>
-  );
 }

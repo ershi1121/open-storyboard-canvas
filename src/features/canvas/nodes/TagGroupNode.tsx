@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { NodeHeader, NODE_HEADER_FLOATING_POSITION_CLASS } from '@/features/canvas/ui/NodeHeader';
 import { useCanvasStore } from '@/stores/canvasStore';
+import { useThemeStore } from '@/stores/themeStore';
 import { UiCheckbox, UiChipButton, UiInput, UiPanel } from '@/components/ui';
 import { BatchConnectModal } from '@/features/canvas/ui/BatchConnectModal';
 import {
@@ -169,34 +170,37 @@ function hslToHex(h: number, s: number, l: number): string {
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
-/**
- * 🎨 标签组配色规则：由「连接的源节点集合」决定——
- * 连接相同的一批源才会同色；只有相同源节点才允许相同颜色。
- * 未连接源时退化为按组名计算；名称也为空时用回退色。
- */
-function getGroupAutoColor(data: TagGroupNodeData): string {
+function resolveTagGroupColorKey(data: TagGroupNodeData): string {
   const sourceIds = (data.sources || [])
     .map((s) => s.sourceNodeId)
     .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
     .sort();
 
-  let contentKey: string;
   if (sourceIds.length > 0) {
-    contentKey = `src:${sourceIds.join('|')}`;
-  } else {
-    const name = (data.displayName || '').trim();
-    if (!name) {
-      return FALLBACK_TAG_GROUP_COLOR;
-    }
-    contentKey = `text:${name}`;
+    return `src:${sourceIds.join('|')}`;
   }
 
-  const hueHash = hashString(contentKey, '#hue');
-  const satHash = hashString(contentKey, '#sat');
-  const lightHash = hashString(contentKey, '#light');
+  const name = (data.displayName || '').trim();
+  return name ? `text:${name}` : '';
+}
+
+/**
+ * 🎨 标签组配色规则：由「连接的源节点集合」决定——
+ * 连接相同的一批源才会同色；只有相同源节点才允许相同颜色。
+ * 未连接源时退化为按组名计算；名称也为空时用回退色。
+ */
+function getGroupAutoColor(data: TagGroupNodeData, isDark: boolean): string {
+  const colorKey = resolveTagGroupColorKey(data);
+  if (!colorKey) {
+    return FALLBACK_TAG_GROUP_COLOR;
+  }
+
+  const hueHash = hashString(colorKey, '#hue');
+  const satHash = hashString(colorKey, '#sat');
+  const lightHash = hashString(colorKey, '#light');
   const hue = hueHash % 360;
   const sat = 55 + (satHash % 25); // 55–80%
-  const light = 40 + (lightHash % 14); // 40–54%
+  const light = isDark ? 55 + ((lightHash >> 8) % 14) : 40 + (lightHash % 14);
   return hslToHex(hue, sat, light);
 }
 
@@ -242,6 +246,7 @@ export const TagGroupNode = memo((props: any) => {
   const deleteEdge = useCanvasStore((s) => s.deleteEdge);
   const deleteNode = useCanvasStore((s) => s.deleteNode);
   const nodes = useCanvasStore((s) => s.nodes);
+  const isDark = useThemeStore((s) => s.theme) === 'dark';
   const updateNodeInternals = useUpdateNodeInternals();
   const edges = useEdges();
   const [preview, setPreview] = useState<{ url: string; left: number; top: number } | null>(null);
@@ -399,8 +404,8 @@ export const TagGroupNode = memo((props: any) => {
     if (typeof data.color === 'string' && isValidHexColor(data.color)) {
       return data.color.trim();
     }
-    return getGroupAutoColor(data);
-  }, [data]);
+    return getGroupAutoColor(data, isDark);
+  }, [data, isDark]);
 
   const sources = data.sources || [];
   const borderColor = selected ? accentColor : hexToRgba(accentColor, 0.55);

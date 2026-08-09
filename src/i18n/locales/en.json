@@ -773,7 +773,8 @@
       "jsonCard": "JSON Card",
       "panorama": "Panorama",
       "blueprint": "Director Studio",
-      "tag": "Tag"
+      "tag": "Tag",
+      "tagGroup": "Tag Group"
     },
     "imageNode": {
       "title": "Image Node",

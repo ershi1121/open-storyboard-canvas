@@ -773,7 +773,8 @@
       "jsonCard": "JSON 卡片",
       "panorama": "全景图",
       "blueprint": "导演台",
-      "tag": "标签"
+      "tag": "标签",
+      "tagGroup": "标签组"
     },
     "imageNode": {
       "title": "图片节点",

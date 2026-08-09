@@ -23,6 +23,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvasStore';
+import { useThemeStore } from '@/stores/themeStore';
 import { CANVAS_NODE_TYPES, type CanvasNode } from '@/features/canvas/domain/canvasNodes';
 import { resolveImageDisplayUrl } from '@/features/canvas/application/imageData';
 
@@ -243,25 +244,25 @@ function hslToHex(h: number, s: number, l: number): string {
  * - 只根据文字计算颜色（不含 sourceId）
  * - 饱和度 55–80%，明度 40–54%
  */
-function getTagColor(node: CanvasNode): string {
+function resolveTagColorKey(name: string, sourceId: string | null): string {
+  if (sourceId) return `src:${sourceId}`;
+  return `text:${(name || '').trim()}`;
+}
+
+function getTagColor(node: CanvasNode, isDark: boolean): string {
   const data = (node.data ?? {}) as Record<string, unknown>;
   const name = (data.displayName as string) || (data.label as string) || '新标签';
   const sourceId = (data.sourceId as string) || null;
-  const contentKey = sourceId ? `src:${sourceId}` : `text:${(name || '').trim()}`;
+  const contentKey = resolveTagColorKey(name, sourceId);
   const hueHash = hashString(contentKey, '#hue');
   const toneHash = hashString(contentKey, '#tone');
   const hue = hueHash % 360;
   const sat = 55 + (toneHash % 25);
-  const light = 40 + ((toneHash >> 8) % 14);
+  const light = isDark ? 55 + ((toneHash >> 8) % 14) : 40 + ((toneHash >> 8) % 14);
   return `hsl(${hue}, ${sat}%, ${light}%)`;
 }
 
-/**
- * ✅ 与 TagGroupNode.tsx 的 getGroupAutoColor 完全一致：
- * - 使用 FNV-1a 哈希
- * - 只根据 displayName 计算颜色
- */
-function getTagGroupColor(node: CanvasNode): string {
+function resolveTagGroupColorKey(node: CanvasNode): string {
   const data = (node.data ?? {}) as Record<string, unknown>;
   const sources = Array.isArray(data.sources)
     ? (data.sources as Array<{ sourceNodeId?: string }>)
@@ -271,34 +272,37 @@ function getTagGroupColor(node: CanvasNode): string {
     .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
     .sort();
 
-  let contentKey: string;
   if (sourceIds.length > 0) {
-    contentKey = `src:${sourceIds.join('|')}`;
-  } else {
-    const name = typeof data.displayName === 'string' ? data.displayName.trim() : '';
-    if (!name) return '#3b82f6';
-    contentKey = `text:${name}`;
+    return `src:${sourceIds.join('|')}`;
   }
+
+  const name = typeof data.displayName === 'string' ? data.displayName.trim() : '';
+  return name ? `text:${name}` : '';
+}
+
+function getTagGroupColor(node: CanvasNode, isDark: boolean): string {
+  const contentKey = resolveTagGroupColorKey(node);
+  if (!contentKey) return '#3b82f6';
 
   const hueHash = hashString(contentKey, '#hue');
   const satHash = hashString(contentKey, '#sat');
   const lightHash = hashString(contentKey, '#light');
   const hue = hueHash % 360;
   const sat = 55 + (satHash % 25);
-  const light = 40 + (lightHash % 14);
+  const light = isDark ? 55 + ((lightHash >> 8) % 14) : 40 + (lightHash % 14);
   return hslToHex(hue, sat, light);
 }
 
 // ===================== 模拟画布真实节点样式的预览 =====================
 
 // 右侧列表：迷你节点卡片
-function NodeMiniCard({ node }: { node: CanvasNode }) {
+function NodeMiniCard({ node, isDark }: { node: CanvasNode; isDark: boolean }) {
   const type = node.type as string;
   const displayName = getNodeDisplayName(node) || getTypeLabel(type);
 
   // 标签节点：与画布一致的胶囊样式
   if (type === CANVAS_NODE_TYPES.tag) {
-    const tagColor = getTagColor(node);
+    const tagColor = getTagColor(node, isDark);
     return (
       <div className="w-full h-full flex items-center justify-center">
         <div
@@ -314,7 +318,7 @@ function NodeMiniCard({ node }: { node: CanvasNode }) {
 
   // ✅ 新增：标签组节点预览
   if (type === CANVAS_NODE_TYPES.tagGroup) {
-    const groupColor = getTagGroupColor(node);
+    const groupColor = getTagGroupColor(node, isDark);
     const data = (node.data ?? {}) as Record<string, unknown>;
     const sources = Array.isArray(data.sources) ? data.sources : [];
     return (
@@ -374,14 +378,14 @@ function NodeMiniCard({ node }: { node: CanvasNode }) {
 }
 
 // 左侧源节点：大尺寸节点卡片
-function SourceNodeCard({ node }: { node: CanvasNode }) {
+function SourceNodeCard({ node, isDark }: { node: CanvasNode; isDark: boolean }) {
   const type = node.type as string;
   const displayName = getNodeDisplayName(node) || getTypeLabel(type);
   const summary = getNodeSummaryText(node);
 
   // 标签节点：与画布一致的大胶囊
   if (type === CANVAS_NODE_TYPES.tag) {
-    const tagColor = getTagColor(node);
+    const tagColor = getTagColor(node, isDark);
     return (
       <div className="w-full flex justify-center py-3">
         <div
@@ -399,7 +403,7 @@ function SourceNodeCard({ node }: { node: CanvasNode }) {
 
   // ✅ 新增：标签组节点预览
   if (type === CANVAS_NODE_TYPES.tagGroup) {
-    const groupColor = getTagGroupColor(node);
+    const groupColor = getTagGroupColor(node, isDark);
     const data = (node.data ?? {}) as Record<string, unknown>;
     const sources = Array.isArray(data.sources) ? data.sources : [];
     return (
@@ -520,6 +524,7 @@ interface HoverPreviewState {
 }
 
 export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProps) {
+  const isDark = useThemeStore((s) => s.theme) === 'dark';
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
   const batchConnect = useCanvasStore((state) => state.batchConnect);
@@ -872,7 +877,7 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
                     )}
                   </div>
                 ) : (
-                  <SourceNodeCard node={currentSourceNode} />
+                  <SourceNodeCard node={currentSourceNode} isDark={isDark} />
                 )}
               </div>
             </div>
@@ -1005,7 +1010,7 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
                     >
                       {/* 缩略图：模拟画布真实节点样式 */}
                       <div className="relative w-14 h-14 shrink-0">
-                        <NodeMiniCard node={node} />
+                        <NodeMiniCard node={node} isDark={isDark} />
                       </div>
                       {/* 名称 + 提示词/内容摘要 */}
                       <div className="flex-1 min-w-0">
