@@ -8,7 +8,6 @@ import {
   applyEdgeChanges,
   applyNodeChanges,
 } from '@xyflow/react';
-
 import {
   CANVAS_NODE_TYPES,
   DEFAULT_ASPECT_RATIO,
@@ -94,7 +93,6 @@ function getDirectorStudioProjectLibrarySignature(projects: unknown): string {
   if (!Array.isArray(projects) || projects.length === 0) {
     return '';
   }
-
   return projects
     .map((project) => {
       if (!project || typeof project !== 'object') {
@@ -104,7 +102,6 @@ function getDirectorStudioProjectLibrarySignature(projects: unknown): string {
       if (typeof record.id !== 'string' || !record.id.trim()) {
         return null;
       }
-
       return [
         record.id,
         typeof record.name === 'string' ? record.name : '',
@@ -137,11 +134,9 @@ interface CanvasState {
     imageList: string[];
     currentIndex: number;
   };
-
   onNodesChange: (changes: NodeChange<CanvasNode>[]) => void;
   onEdgesChange: (changes: EdgeChange<CanvasEdge>[]) => void;
   onConnect: (connection: Connection) => void;
-
   setCanvasData: (nodes: CanvasNode[], edges: CanvasEdge[], history?: CanvasHistoryState) => void;
   addNode: (
     type: CanvasNodeType,
@@ -182,7 +177,6 @@ interface CanvasState {
     frames: StoryboardFrameItem[],
     frameAspectRatio?: string
   ) => string | null;
-
   updateNodeData: (nodeId: string, data: Partial<CanvasNodeData>) => void;
   replaceNodeType: (
     nodeId: string,
@@ -205,7 +199,6 @@ interface CanvasState {
     draggedFrameId: string,
     targetFrameId: string
   ) => void;
-
   deleteNode: (nodeId: string) => void;
   deleteNodes: (nodeIds: string[]) => void;
   groupNodes: (nodeIds: string[]) => string | null;
@@ -213,7 +206,6 @@ interface CanvasState {
   deleteEdge: (edgeId: string) => void;
   batchConnect: (togglesBySource: Record<string, Set<string>>) => void;
   setSelectedNode: (nodeId: string | null) => void;
-
   openToolDialog: (dialog: ActiveToolDialog) => void;
   closeToolDialog: () => void;
   setViewportState: (viewport: Viewport) => void;
@@ -221,10 +213,8 @@ interface CanvasState {
   openImageViewer: (imageUrl: string, imageList?: string[]) => void;
   closeImageViewer: () => void;
   navigateImageViewer: (direction: 'prev' | 'next') => void;
-
   undo: () => boolean;
   redo: () => boolean;
-
   clearCanvas: () => void;
 }
 
@@ -239,20 +229,19 @@ function normalizeHandleId(value: unknown): string | undefined {
   return trimmed;
 }
 
-function normalizeEdgesWithNodes(rawEdges: CanvasEdge[], nodes: CanvasNode[]): CanvasEdge[] {
+function normalizeEdgesWithNodes(rawEdges: unknown[], nodes: CanvasNode[]): CanvasEdge[] {
   if (!Array.isArray(rawEdges)) {
     return [];
   }
-
   const nodeMap = new Map(nodes.map((node) => [node.id, node] as const));
-
   return rawEdges
-    .filter((edge) => {
+    .filter((edge): edge is CanvasEdge => {
       if (!edge || typeof edge !== 'object') {
         return false;
       }
-      const sourceNode = nodeMap.get(edge.source);
-      const targetNode = nodeMap.get(edge.target);
+      const e = edge as CanvasEdge;
+      const sourceNode = nodeMap.get(e.source);
+      const targetNode = nodeMap.get(e.target);
       if (!sourceNode || !targetNode) {
         return false;
       }
@@ -308,9 +297,8 @@ function isLightweightRetryResultUrl(value: unknown): boolean {
     !normalizedPrefix.startsWith('data:')
     && !normalizedPrefix.startsWith('blob:')
     && !url.startsWith('/')
-    && !/^file:\/\//i.test(url)
-    && !/^[a-zA-Z]:[/]/.test(url)
-    && !url.startsWith('')
+    && !url.toLowerCase().startsWith('file://')
+    && !/^[a-zA-Z]:[/\\]/.test(url)
   );
 }
 
@@ -343,7 +331,6 @@ function normalizeBlueprintItem(value: unknown, index: number): BlueprintItem | 
   if (!record) {
     return null;
   }
-
   const category = record.category === 'person' || record.category === 'object' || record.category === 'scene'
     ? record.category
     : undefined;
@@ -372,7 +359,6 @@ function normalizeBlueprintItem(value: unknown, index: number): BlueprintItem | 
       ? record.bodyControls as BlueprintItem['bodyControls']
       : undefined,
   };
-
   return item;
 }
 
@@ -391,7 +377,6 @@ function normalizeBlueprintReferenceImage(value: unknown, index: number): Bluepr
   if (!record || !url) {
     return null;
   }
-
   const label = normalizeString(record.label, `图${index + 1}`).trim() || `图${index + 1}`;
   return {
     ...(record as Partial<BlueprintReferenceImageItem>),
@@ -591,11 +576,10 @@ function normalizeBlueprintNodeData(data: CanvasNodeData, fallback: BlueprintNod
   };
 }
 
-function normalizeNodes(rawNodes: CanvasNode[]): CanvasNode[] {
+function normalizeNodes(rawNodes: unknown[]): CanvasNode[] {
   if (!Array.isArray(rawNodes)) {
     return [];
   }
-
   return rawNodes
     .map((rawNode) => {
       if (!rawNode || typeof rawNode !== 'object') {
@@ -605,33 +589,30 @@ function normalizeNodes(rawNodes: CanvasNode[]): CanvasNode[] {
       if (!Object.values(CANVAS_NODE_TYPES).includes(node.type as CanvasNodeType)) {
         return null;
       }
-
       // ===== 标签节点特殊处理（不依赖 nodeCatalog）=====
-         if (node.type === CANVAS_NODE_TYPES.tag) {
-     const tagData = (node.data ?? {}) as Record<string, unknown>;
-     const displayName = typeof tagData.displayName === 'string' && tagData.displayName.trim()
-       ? tagData.displayName
-       : '新标签';
-     return {
-       ...node,
-       type: node.type as CanvasNodeType,
-       data: {
-         ...tagData,   // 🚀 新增：保留标签的颜色等自定义字段，避免加载后丢失
-         displayName,
-         label: displayName,
-         sourceId: typeof tagData.sourceId === 'string' ? tagData.sourceId : null,
-       } as CanvasNodeData,
-     };
-   }
+      if (node.type === CANVAS_NODE_TYPES.tag) {
+        const tagData = (node.data ?? {}) as Record<string, unknown>;
+        const displayName = typeof tagData.displayName === 'string' && tagData.displayName.trim()
+          ? tagData.displayName
+          : '新标签';
+        return {
+          ...node,
+          type: node.type as CanvasNodeType,
+          data: {
+            ...tagData,   // 🚀 保留标签的颜色等自定义字段，避免加载后丢失
+            displayName,
+            label: displayName,
+            sourceId: typeof tagData.sourceId === 'string' ? tagData.sourceId : null,
+          } as CanvasNodeData,
+        };
+      }
       // ===== 标签节点特殊处理结束 =====
-
       const definition = nodeCatalog.getDefinition(node.type as CanvasNodeType);
       const defaultData = definition.createDefaultData() as CanvasNodeData;
       const mergedData = {
         ...defaultData,
         ...(node.data && typeof node.data === 'object' ? node.data as Partial<CanvasNodeData> : {}),
       } as CanvasNodeData;
-
       if (node.type === CANVAS_NODE_TYPES.storyboardSplit) {
         const frames = (mergedData as { frames?: StoryboardFrameItem[] }).frames ?? [];
         const firstFrameAspectRatio = frames.find((frame) => typeof frame.aspectRatio === 'string')
@@ -642,7 +623,6 @@ function normalizeNodes(rawNodes: CanvasNode[]): CanvasNode[] {
             : null) ??
           firstFrameAspectRatio ??
           DEFAULT_ASPECT_RATIO;
-
         (mergedData as { frameAspectRatio: string }).frameAspectRatio = normalizedFrameAspectRatio;
         (mergedData as { frames: StoryboardFrameItem[] }).frames = frames.map((frame, index) => ({
           id: frame.id,
@@ -655,7 +635,6 @@ function normalizeNodes(rawNodes: CanvasNode[]): CanvasNode[] {
           note: frame.note ?? '',
           order: Number.isFinite(frame.order) ? frame.order : index,
         }));
-
         const rawExportOptions = (mergedData as { exportOptions?: Partial<StoryboardExportOptions> })
           .exportOptions;
         const rawFontSize = Number.isFinite(rawExportOptions?.fontSize)
@@ -670,26 +649,21 @@ function normalizeNodes(rawNodes: CanvasNode[]): CanvasNode[] {
           fontSize: Math.max(1, Math.min(20, Math.round(normalizedFontSize))),
         };
       }
-
       if (node.type === CANVAS_NODE_TYPES.panorama) {
         Object.assign(mergedData, normalizePanoramaNodeData(mergedData, defaultData as PanoramaNodeData));
       }
-
       if (node.type === CANVAS_NODE_TYPES.blueprint) {
         Object.assign(mergedData, normalizeBlueprintNodeData(mergedData, defaultData as BlueprintNodeData));
       }
-
       if ('aspectRatio' in mergedData && !mergedData.aspectRatio) {
         mergedData.aspectRatio = DEFAULT_ASPECT_RATIO;
       }
-
       if (
         'generationRetryResultUrl' in mergedData
         && !isLightweightRetryResultUrl((mergedData as { generationRetryResultUrl?: unknown }).generationRetryResultUrl)
       ) {
         (mergedData as { generationRetryResultUrl?: string | null }).generationRetryResultUrl = null;
       }
-
       if ('isGenerating' in mergedData && mergedData.isGenerating) {
         const generationJobId =
           typeof (mergedData as { generationJobId?: unknown }).generationJobId === 'string'
@@ -709,11 +683,9 @@ function normalizeNodes(rawNodes: CanvasNode[]): CanvasNode[] {
           }
         }
       }
-
       if ('isStreaming' in mergedData && mergedData.isStreaming) {
         mergedData.isStreaming = false;
       }
-
       return {
         ...node,
         type: node.type as CanvasNodeType,
@@ -727,7 +699,6 @@ function normalizeHistory(history?: CanvasHistoryState): CanvasHistoryState {
   if (!history || typeof history !== 'object') {
     return { past: [], future: [] };
   }
-
   const normalizeSnapshot = (snapshot: unknown): CanvasHistorySnapshot => {
     const snapshotRecord =
       snapshot && typeof snapshot === 'object'
@@ -741,10 +712,8 @@ function normalizeHistory(history?: CanvasHistoryState): CanvasHistoryState {
       edges: normalizeEdgesWithNodes(rawEdges, normalizedNodes),
     };
   };
-
   const rawPast = Array.isArray(history.past) ? history.past : [];
   const rawFuture = Array.isArray(history.future) ? history.future : [];
-
   return {
     past: trimHistorySnapshots(rawPast.slice(-MAX_HISTORY_STEPS).map(normalizeSnapshot)),
     future: trimHistorySnapshots(rawFuture.slice(-MAX_HISTORY_STEPS).map(normalizeSnapshot)),
@@ -758,7 +727,6 @@ function createSnapshot(nodes: CanvasNode[], edges: CanvasEdge[]): CanvasHistory
 function collectNodeIdsWithDescendants(nodes: CanvasNode[], seedIds: string[]): Set<string> {
   const deleteSet = new Set(seedIds);
   let changed = true;
-
   while (changed) {
     changed = false;
     for (const node of nodes) {
@@ -771,7 +739,6 @@ function collectNodeIdsWithDescendants(nodes: CanvasNode[], seedIds: string[]): 
       }
     }
   }
-
   return deleteSet;
 }
 
@@ -803,7 +770,6 @@ function withManualSizeLock(node: CanvasNode): CanvasNode {
   if (nodeData.isSizeManuallyAdjusted) {
     return node;
   }
-
   return {
     ...node,
     data: {
@@ -838,7 +804,6 @@ function resolveGeneratedImageNodeDimensions(
   });
   const minWidth = options?.minWidth ?? IMAGE_NODE_VISUAL_MIN_EDGE;
   const minHeight = options?.minHeight ?? IMAGE_NODE_VISUAL_MIN_EDGE;
-
   return ensureAtLeastOneMinEdge(size, { minWidth, minHeight });
 }
 
@@ -849,7 +814,6 @@ function resolveDerivedAspectRatio(
   if (!sourceNode) {
     return fallbackAspectRatio;
   }
-
   if (sourceNode.type === CANVAS_NODE_TYPES.storyboardGen) {
     const data = sourceNode.data as { requestAspectRatio?: string; aspectRatio?: string };
     const preferred = data.requestAspectRatio && data.requestAspectRatio !== 'auto'
@@ -857,12 +821,10 @@ function resolveDerivedAspectRatio(
       : data.aspectRatio;
     return preferred || fallbackAspectRatio;
   }
-
   if (sourceNode.type === CANVAS_NODE_TYPES.storyboardSplit) {
     const data = sourceNode.data as { frameAspectRatio?: string; aspectRatio?: string };
     return data.frameAspectRatio || data.aspectRatio || fallbackAspectRatio;
   }
-
   if (sourceNode.type === CANVAS_NODE_TYPES.imageEdit) {
     const data = sourceNode.data as { requestAspectRatio?: string; aspectRatio?: string };
     const preferred = data.requestAspectRatio && data.requestAspectRatio !== 'auto'
@@ -870,7 +832,6 @@ function resolveDerivedAspectRatio(
       : data.aspectRatio;
     return preferred || fallbackAspectRatio;
   }
-
   const imageLikeAspect = (sourceNode.data as { aspectRatio?: string }).aspectRatio;
   return imageLikeAspect || fallbackAspectRatio;
 }
@@ -879,7 +840,6 @@ function maybeApplyImageAutoResize(node: CanvasNode, patch: Partial<CanvasNodeDa
   if (!isImageAutoResizableType(node.type)) {
     return node;
   }
-
   const nodeData = node.data as CanvasNodeData & {
     imageUrl?: string | null;
     aspectRatio?: string;
@@ -890,22 +850,18 @@ function maybeApplyImageAutoResize(node: CanvasNode, patch: Partial<CanvasNodeDa
     aspectRatio?: string;
     isSizeManuallyAdjusted?: boolean;
   };
-
   const hasImageRelatedChange = 'imageUrl' in patchData || 'previewImageUrl' in patchData || 'aspectRatio' in patchData;
   if (!hasImageRelatedChange) {
     return node;
   }
-
   const isSizeManuallyAdjusted = patchData.isSizeManuallyAdjusted ?? nodeData.isSizeManuallyAdjusted ?? false;
   if (isSizeManuallyAdjusted) {
     return node;
   }
-
   const nextImageUrl = patchData.imageUrl ?? nodeData.imageUrl;
   if (typeof nextImageUrl !== 'string' || nextImageUrl.trim().length === 0) {
     return node;
   }
-
   const nextAspectRatio = patchData.aspectRatio ?? nodeData.aspectRatio ?? DEFAULT_ASPECT_RATIO;
   const nextSize = node.type === CANVAS_NODE_TYPES.exportImage
     ? resolveAutoImageNodeDimensions(nextAspectRatio, {
@@ -913,7 +869,6 @@ function maybeApplyImageAutoResize(node: CanvasNode, patch: Partial<CanvasNodeDa
       minHeight: EXPORT_RESULT_NODE_MIN_HEIGHT,
     })
     : resolveAutoImageNodeDimensions(nextAspectRatio);
-
   return {
     ...node,
     width: nextSize.width,
@@ -934,7 +889,6 @@ function resolveAbsolutePosition(
   let y = node.position.y;
   let currentParentId = node.parentId;
   const visited = new Set<string>();
-
   while (currentParentId && !visited.has(currentParentId)) {
     visited.add(currentParentId);
     const parent = nodeMap.get(currentParentId);
@@ -945,7 +899,6 @@ function resolveAbsolutePosition(
     y += parent.position.y;
     currentParentId = parent.parentId;
   }
-
   return { x, y };
 }
 
@@ -957,7 +910,6 @@ function pushSnapshot(
   if (last && last.nodes === snapshot.nodes && last.edges === snapshot.edges) {
     return snapshots;
   }
-
   return trimHistorySnapshots([...snapshots, snapshot]);
 }
 
@@ -965,7 +917,6 @@ function isHeavyHistorySnapshot(snapshot: CanvasHistorySnapshot): boolean {
   if (!Array.isArray(snapshot.nodes)) {
     return false;
   }
-
   return snapshot.nodes.some((node) => {
     if (
       node.type === CANVAS_NODE_TYPES.blueprint ||
@@ -975,7 +926,6 @@ function isHeavyHistorySnapshot(snapshot: CanvasHistorySnapshot): boolean {
     ) {
       return true;
     }
-
     const data = node.data as Record<string, unknown>;
     return [
       data.imageUrl,
@@ -998,7 +948,6 @@ function getDerivedNodePosition(nodes: CanvasNode[], sourceNodeId: string): { x:
   if (!sourceNode) {
     return { x: 100, y: 100 };
   }
-
   return {
     x: sourceNode.position.x + DEFAULT_NODE_WIDTH + 100,
     y: sourceNode.position.y,
@@ -1052,7 +1001,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     imageList: [],
     currentIndex: 0,
   },
-
   onNodesChange: (changes) => {
     set((state) => {
       const resizedNodeIds = new Set(
@@ -1066,9 +1014,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           )
           .map((change) => change.id)
       );
-
       let nextNodes = applyNodeChanges<CanvasNode>(changes, state.nodes);
-
       if (resizedNodeIds.size > 0) {
         nextNodes = nextNodes.map((node) => {
           if (!resizedNodeIds.has(node.id) || !isImageAutoResizableType(node.type)) {
@@ -1077,7 +1023,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           return withManualSizeLock(node);
         });
       }
-
       const hasMeaningfulChange = changes.some((change) => change.type !== 'select');
       const hasDragMove = changes.some(
         (change) =>
@@ -1103,17 +1048,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           'resizing' in change &&
           change.resizing === false
       );
-
       const hasInteractionMove = hasDragMove || hasResizeMove;
       const hasInteractionEnd = hasDragEnd || hasResizeEnd;
-
       let nextHistory = state.history;
       let nextDragHistorySnapshot = state.dragHistorySnapshot;
-
       if (hasInteractionMove && !nextDragHistorySnapshot) {
         nextDragHistorySnapshot = createSnapshot(state.nodes, state.edges);
       }
-
       if (hasInteractionEnd) {
         const snapshot = nextDragHistorySnapshot ?? createSnapshot(state.nodes, state.edges);
         nextHistory = {
@@ -1128,7 +1069,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         };
         nextDragHistorySnapshot = null;
       }
-
       return {
         nodes: nextNodes,
         selectedNodeId: resolveSelectedNodeId(state.selectedNodeId, nextNodes),
@@ -1138,16 +1078,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
     });
   },
-
   onEdgesChange: (changes) => {
     set((state) => {
       const nextEdges = applyEdgeChanges<CanvasEdge>(changes, state.edges);
       const hasMeaningfulChange = changes.some((change) => change.type !== 'select');
-
       if (!hasMeaningfulChange) {
         return { edges: nextEdges };
       }
-
       return {
         edges: nextEdges,
         history: {
@@ -1158,20 +1095,39 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
     });
   },
-
   onConnect: (connection) => {
     const sourceHandle = normalizeHandleId(connection.sourceHandle) ?? 'source';
     const targetHandle = normalizeHandleId(connection.targetHandle) ?? 'target';
     set((state) => {
+      // ===== 🚀 方式A：标签单源严格保护 =====
+      const guardTargetNode = state.nodes.find((n) => n.id === connection.target);
+      if (
+        guardTargetNode
+        && guardTargetNode.type === CANVAS_NODE_TYPES.tag
+        && state.edges.some(
+          (edge) => edge.target === connection.target && edge.source !== connection.source
+        )
+      ) {
+        return {};
+      }
+      // ======================================
+      // ===== 🚀 优化：标签节点 (Tag Node) 强制单源连接 =====
+      // 如果目标是标签节点，先移除它已有的所有入边，实现“新线自动顶替旧线”
+      let currentEdges = state.edges;
+      const targetNode = state.nodes.find((n) => n.id === connection.target);
+      if (targetNode && targetNode.type === CANVAS_NODE_TYPES.tag) {
+        currentEdges = currentEdges.filter((edge) => edge.target !== connection.target);
+      }
+      // ====================================
+
       const nextEdges = addEdge<CanvasEdge>(
         { ...connection, sourceHandle, targetHandle, type: 'disconnectableEdge' },
-        state.edges
+        currentEdges
       );
 
       // ===== 标签功能：连线后自动更新标签的 sourceId =====
       let nextNodes = state.nodes;
       const sourceNode = state.nodes.find((n) => n.id === connection.source);
-      const targetNode = state.nodes.find((n) => n.id === connection.target);
       if (
         targetNode
         && targetNode.type === CANVAS_NODE_TYPES.tag
@@ -1185,6 +1141,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
               data: {
                 ...node.data,
                 sourceId: connection.source,
+              },
+            } as CanvasNode;
+          }
+          return node;
+        });
+      } else if (targetNode && targetNode.type === CANVAS_NODE_TYPES.tag) {
+        // 🚀 连到标签节点但源不合法（例如标签连标签），清空 sourceId
+        nextNodes = state.nodes.map((node) => {
+          if (node.id === connection.target) {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                sourceId: null,
               },
             } as CanvasNode;
           }
@@ -1204,11 +1174,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
     });
   },
-
   setCanvasData: (nodes, edges, history) => {
     const normalizedNodes = normalizeNodes(nodes);
     const normalizedEdges = normalizeEdgesWithNodes(edges, normalizedNodes);
-
     set({
       nodes: normalizedNodes,
       edges: normalizedEdges,
@@ -1218,15 +1186,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       dragHistorySnapshot: null,
     });
   },
-
   setViewportState: (viewport) => {
     set({ currentViewport: viewport });
   },
-
   setCanvasViewportSize: (size) => {
     set({ canvasViewportSize: size });
   },
-
   openImageViewer: (imageUrl, imageList = []) => {
     const list = imageList.length > 0 ? imageList : [imageUrl];
     const index = list.indexOf(imageUrl);
@@ -1239,7 +1204,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       },
     });
   },
-
   closeImageViewer: () => {
     set({
       imageViewer: {
@@ -1250,7 +1214,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       },
     });
   },
-
   navigateImageViewer: (direction) => {
     const state = get();
     const { currentIndex, imageList } = state.imageViewer;
@@ -1274,10 +1237,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       });
     }
   },
-
   addNode: (type, position, data = {}) => {
     const state = get();
-
     const finalData = { ...data };
     if (type === CANVAS_NODE_TYPES.imageEdit) {
       const existingCount = state.nodes.filter(
@@ -1285,7 +1246,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       ).length;
       finalData.displayName = `AI 图片 ${existingCount + 1}`;
     }
-
     // ===== 标签节点：不经过 canvasNodeFactory，直接手动创建 =====
     if (type === CANVAS_NODE_TYPES.tag) {
       const tagId = `tag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1300,7 +1260,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           sourceId: (finalData.sourceId as string) || null,
         },
       } as CanvasNode;
-
       set({
         nodes: [...state.nodes, tagNode],
         history: {
@@ -1312,7 +1271,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       return tagId;
     }
     // ===== 标签节点创建结束 =====
-
     const newNode = canvasNodeFactory.createNode(type, position, finalData);
     set({
       nodes: [...state.nodes, newNode],
@@ -1324,7 +1282,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
     return newNode.id;
   },
-
   addEdge: (source, target) => {
     const state = get();
     const sourceNode = state.nodes.find((n) => n.id === source);
@@ -1332,7 +1289,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (!sourceNode || !targetNode) {
       return null;
     }
-
+    // ===== 🚀 方式A：标签单源严格保护 =====
+    if (
+      targetNode.type === CANVAS_NODE_TYPES.tag
+      && state.edges.some((e) => e.target === target && e.source !== source)
+    ) {
+      return null;
+    }
+    // ======================================
     // ===== 标签节点可以连线 =====
     const sourceOk = sourceNode.type === CANVAS_NODE_TYPES.tag || nodeHasSourceHandle(sourceNode.type);
     const targetOk = targetNode.type === CANVAS_NODE_TYPES.tag || nodeHasTargetHandle(targetNode.type);
@@ -1340,35 +1304,58 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       return null;
     }
     // ===== 标签节点连线结束 =====
-
     const edgeId = `e-${source}-${target}`;
-    if (state.edges.some((e) => e.id === edgeId)) {
+
+    // ===== 🚀 优化：标签节点单源连接 =====
+    const isTagTarget = targetNode.type === CANVAS_NODE_TYPES.tag;
+    if (state.edges.some((e) => e.id === edgeId) && !isTagTarget) {
       return edgeId;
     }
-
-    const newEdge: CanvasEdge = {
-      id: edgeId,
-      source,
-      target,
-      sourceHandle: 'source',
-      targetHandle: 'target',
-      type: 'disconnectableEdge',
-    };
-
+    let nextEdges = state.edges;
+    if (isTagTarget) {
+      // 先移除标签节点已有的所有入边
+      nextEdges = nextEdges.filter((e) => e.target !== target);
+    }
+    if (!nextEdges.some((e) => e.id === edgeId)) {
+      const newEdge: CanvasEdge = {
+        id: edgeId,
+        source,
+        target,
+        sourceHandle: 'source',
+        targetHandle: 'target',
+        type: 'disconnectableEdge',
+      };
+      nextEdges = [...nextEdges, newEdge];
+    }
+    let nextNodes = state.nodes;
+    if (isTagTarget) {
+      const nextSourceId = sourceNode.type !== CANVAS_NODE_TYPES.tag ? source : null;
+      nextNodes = state.nodes.map((node) => {
+        if (node.id !== target) {
+          return node;
+        }
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            sourceId: nextSourceId,
+          },
+        } as CanvasNode;
+      });
+    }
+    // ====================================
     set({
-      edges: [...state.edges, newEdge],
+      nodes: nextNodes,
+      edges: nextEdges,
     });
-
     return edgeId;
   },
-
   findNodePosition: (sourceNodeId, newNodeWidth, newNodeHeight) => {
     const state = get();
     const sourceNode = state.nodes.find((n) => n.id === sourceNodeId);
     if (!sourceNode) {
       return { x: 100, y: 100 };
     }
-
     const collides = (x: number, y: number, width: number, height: number) => {
       return state.nodes.some((node) => {
         const nodeWidth = node.measured?.width ?? DEFAULT_NODE_WIDTH;
@@ -1382,25 +1369,22 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         );
       });
     };
-
     const sourceWidth = sourceNode.measured?.width ?? DEFAULT_NODE_WIDTH;
     const sourceHeight = sourceNode.measured?.height ?? 200;
     const anchorX = sourceNode.position.x + sourceWidth + 28;
     const anchorY = sourceNode.position.y;
-
     const zoom = Math.max(0.01, state.currentViewport.zoom || 1);
     const viewportWidth = state.canvasViewportSize.width;
     const viewportHeight = state.canvasViewportSize.height;
     const hasViewportBounds = viewportWidth > 0 && viewportHeight > 0;
     const visibleBounds = hasViewportBounds
       ? {
-          minX: -state.currentViewport.x / zoom,
-          minY: -state.currentViewport.y / zoom,
-          maxX: -state.currentViewport.x / zoom + viewportWidth / zoom,
-          maxY: -state.currentViewport.y / zoom + viewportHeight / zoom,
-        }
+        minX: -state.currentViewport.x / zoom,
+        minY: -state.currentViewport.y / zoom,
+        maxX: -state.currentViewport.x / zoom + viewportWidth / zoom,
+        maxY: -state.currentViewport.y / zoom + viewportHeight / zoom,
+      }
       : null;
-
     const overflowAmount = (x: number, y: number): number => {
       if (!visibleBounds) {
         return 0;
@@ -1411,7 +1395,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const overBottom = Math.max(0, y + newNodeHeight - visibleBounds.maxY);
       return overLeft + overTop + overRight + overBottom;
     };
-
     const stepX = Math.max(newNodeWidth + 12, 110);
     const stepY = Math.max(Math.round(newNodeHeight * 0.35), 54);
     const baseCandidates = [
@@ -1420,15 +1403,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       { x: sourceNode.position.x - newNodeWidth - 20, y: sourceNode.position.y },
       { x: sourceNode.position.x, y: sourceNode.position.y - newNodeHeight - 20 },
     ];
-
     let bestInView: { x: number; y: number; score: number } | null = null;
     let bestOutOfView: { x: number; y: number; score: number } | null = null;
-
     const evaluateCandidate = (x: number, y: number) => {
       if (collides(x, y, newNodeWidth, newNodeHeight)) {
         return;
       }
-
       const dx = x - anchorX;
       const dy = y - anchorY;
       const distanceScore = Math.hypot(dx, dy);
@@ -1436,7 +1416,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const overflow = overflowAmount(x, y);
       const score = distanceScore + upwardPenalty + overflow * 1000;
       const candidate = { x, y, score };
-
       if (overflow === 0) {
         if (!bestInView || score < bestInView.score) {
           bestInView = candidate;
@@ -1445,11 +1424,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         bestOutOfView = candidate;
       }
     };
-
     for (const base of baseCandidates) {
       evaluateCandidate(base.x, base.y);
     }
-
     for (let ring = 1; ring <= 8; ring += 1) {
       const offsets = [
         { x: ring, y: 0 },
@@ -1467,41 +1444,34 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         evaluateCandidate(anchorX + offset.x * stepX, anchorY + offset.y * stepY);
       }
     }
-
     if (!bestInView && !bestOutOfView && visibleBounds) {
       const padding = 8;
       const minX = visibleBounds.minX + padding;
       const maxX = visibleBounds.maxX - newNodeWidth - padding;
       const minY = visibleBounds.minY + padding;
       const maxY = visibleBounds.maxY - newNodeHeight - padding;
-
       if (maxX >= minX && maxY >= minY) {
         const scanStepX = Math.max(42, Math.round(newNodeWidth * 0.32));
         const scanStepY = Math.max(42, Math.round(newNodeHeight * 0.32));
-
         for (let y = minY; y <= maxY; y += scanStepY) {
           for (let x = minX; x <= maxX; x += scanStepX) {
             evaluateCandidate(x, y);
           }
         }
-
         evaluateCandidate(minX, minY);
         evaluateCandidate(maxX, minY);
         evaluateCandidate(minX, maxY);
         evaluateCandidate(maxX, maxY);
       }
     }
-
     const resolvedCandidate = (bestInView || bestOutOfView) as
       | { x: number; y: number; score: number }
       | null;
     if (resolvedCandidate) {
       return { x: resolvedCandidate.x, y: resolvedCandidate.y };
     }
-
     return { x: anchorX + 2 * stepX, y: anchorY };
   },
-
   findNodePositions: (sourceNodeId, count, newNodeWidth, newNodeHeight) => {
     const state = get();
     const sourceNode = state.nodes.find((n) => n.id === sourceNodeId);
@@ -1509,7 +1479,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (!sourceNode || total === 0) {
       return [];
     }
-
     const sourceWidth = sourceNode.measured?.width ?? DEFAULT_NODE_WIDTH;
     const sourceHeight = sourceNode.measured?.height ?? 200;
     const anchorX = sourceNode.position.x + sourceWidth + 28;
@@ -1518,7 +1487,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const stepY = Math.max(newNodeHeight + 24, Math.round(sourceHeight * 0.5), 120);
     const margin = 8;
     const reserved: { x: number; y: number; width: number; height: number }[] = [];
-
     const collides = (x: number, y: number, width: number, height: number) => {
       const overlaps = (
         left: number,
@@ -1531,14 +1499,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         y < top + otherHeight + margin &&
         y + height + margin > top
       );
-
       return state.nodes.some((node) => {
         const nodeWidth = node.measured?.width ?? DEFAULT_NODE_WIDTH;
         const nodeHeight = node.measured?.height ?? 200;
         return overlaps(node.position.x, node.position.y, nodeWidth, nodeHeight);
       }) || reserved.some((node) => overlaps(node.x, node.y, node.width, node.height));
     };
-
     const rowOffsets: number[] = [];
     const maxRows = Math.max(12, total + 8);
     for (let row = 0; row <= maxRows; row += 1) {
@@ -1547,11 +1513,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         rowOffsets.push(-row);
       }
     }
-
     const positions: { x: number; y: number }[] = [];
     for (let index = 0; index < total; index += 1) {
       let nextPosition: { x: number; y: number } | null = null;
-
       for (let column = 0; column <= 4 && !nextPosition; column += 1) {
         for (const row of rowOffsets) {
           const x = anchorX + column * stepX;
@@ -1562,7 +1526,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           }
         }
       }
-
       if (!nextPosition) {
         const fallback = state.findNodePosition(sourceNodeId, newNodeWidth, newNodeHeight);
         nextPosition = {
@@ -1576,7 +1539,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           };
         }
       }
-
       positions.push(nextPosition);
       reserved.push({
         ...nextPosition,
@@ -1584,10 +1546,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         height: newNodeHeight,
       });
     }
-
     return positions;
   },
-
   addDerivedUploadNode: (sourceNodeId, imageUrl, aspectRatio, previewImageUrl) => {
     const state = get();
     const position = getDerivedNodePosition(state.nodes, sourceNodeId);
@@ -1606,7 +1566,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       width: derivedSize.width,
       height: derivedSize.height,
     };
-
     set({
       nodes: [...state.nodes, node],
       selectedNodeId: node.id,
@@ -1617,10 +1576,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       },
       dragHistorySnapshot: null,
     });
-
     return node.id;
   },
-
   addDerivedExportNode: (sourceNodeId, imageUrl, aspectRatio, previewImageUrl, options) => {
     const state = get();
     const sourceNode = state.nodes.find((node) => node.id === sourceNodeId);
@@ -1678,7 +1635,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       width: derivedSize.width,
       height: derivedSize.height,
     };
-
     set({
       nodes: [...state.nodes, node],
       selectedNodeId: node.id,
@@ -1689,10 +1645,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       },
       dragHistorySnapshot: null,
     });
-
     return node.id;
   },
-
   addStoryboardSplitNode: (sourceNodeId, rows, cols, frames, frameAspectRatio) => {
     const state = get();
     const position = getDerivedNodePosition(state.nodes, sourceNodeId);
@@ -1700,7 +1654,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       frameAspectRatio ??
       frames.find((frame) => typeof frame.aspectRatio === 'string')?.aspectRatio ??
       DEFAULT_ASPECT_RATIO;
-
     const node = canvasNodeFactory.createNode(CANVAS_NODE_TYPES.storyboardSplit, position, {
       gridRows: rows,
       gridCols: cols,
@@ -1709,7 +1662,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       frameAspectRatio: resolvedFrameAspectRatio,
       exportOptions: createDefaultStoryboardExportOptions(),
     });
-
     set({
       nodes: [...state.nodes, node],
       selectedNodeId: node.id,
@@ -1720,10 +1672,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       },
       dragHistorySnapshot: null,
     });
-
     return node.id;
   },
-
   updateNodeData: (nodeId, data) => {
     set((state) => {
       let changed = false;
@@ -1731,7 +1681,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         if (node.id !== nodeId) {
           return node;
         }
-
         const hasDataChange = Object.entries(data).some(([key, nextValue]) => {
           const previousValue = (node.data as Record<string, unknown>)[key];
           return !Object.is(previousValue, nextValue);
@@ -1739,7 +1688,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         if (!hasDataChange) {
           return node;
         }
-
         const mergedData = {
           ...node.data,
           ...data,
@@ -1751,15 +1699,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           },
           data
         );
-
         changed = true;
         return resizedNode;
       });
-
       if (!changed) {
         return {};
       }
-
       return {
         nodes: nextNodes,
         history: {
@@ -1770,7 +1715,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
     });
   },
-
   updateDirectorStudioProjectLibrary: (projects, sourceNodeId, sourcePatch = {}) => {
     set((state) => {
       let changed = false;
@@ -1779,7 +1723,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         if (!isBlueprintNode(node)) {
           return node;
         }
-
         const patch: Partial<BlueprintNodeData> = node.id === sourceNodeId
           ? { ...sourcePatch, directorStudioProjects: projects }
           : { directorStudioProjects: projects };
@@ -1787,7 +1730,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         if (nextActiveProjectId && !projectIds.has(nextActiveProjectId)) {
           patch.activeDirectorStudioProjectId = null;
         }
-
         const hasDataChange = Object.entries(patch).some(([key, nextValue]) => {
           const previousValue = (node.data as Record<string, unknown>)[key];
           if (key === 'directorStudioProjects') {
@@ -1798,7 +1740,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         if (!hasDataChange) {
           return node;
         }
-
         const mergedData = {
           ...node.data,
           ...patch,
@@ -1810,15 +1751,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           },
           patch as Partial<CanvasNodeData>
         );
-
         changed = true;
         return resizedNode;
       });
-
       if (!changed) {
         return {};
       }
-
       return {
         nodes: nextNodes,
         history: {
@@ -1829,7 +1767,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
     });
   },
-
   updateNodePosition: (nodeId, position) => {
     set((state) => {
       let changed = false;
@@ -1837,26 +1774,21 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         if (node.id !== nodeId) {
           return node;
         }
-
         if (node.position.x === position.x && node.position.y === position.y) {
           return node;
         }
-
         changed = true;
         return {
           ...node,
           position,
         };
       });
-
       if (!changed) {
         return {};
       }
-
       return { nodes: nextNodes };
     });
   },
-
   updateStoryboardFrame: (nodeId, frameId, data) => {
     set((state) => {
       let changed = false;
@@ -1864,12 +1796,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         if (node.id !== nodeId || !isStoryboardSplitNode(node)) {
           return node;
         }
-
         const nextFrames = node.data.frames.map((frame) => {
           if (frame.id !== frameId) {
             return frame;
           }
-
           const patchEntries = Object.entries(data) as Array<
             [keyof StoryboardFrameItem, StoryboardFrameItem[keyof StoryboardFrameItem]]
           >;
@@ -1879,14 +1809,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           if (!hasFrameChange) {
             return frame;
           }
-
           changed = true;
           return {
             ...frame,
             ...data,
           };
         });
-
         return {
           ...node,
           data: {
@@ -1895,11 +1823,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           },
         };
       });
-
       if (!changed) {
         return {};
       }
-
       return {
         nodes: nextNodes,
         history: {
@@ -1910,7 +1836,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
     });
   },
-
   reorderStoryboardFrame: (nodeId, draggedFrameId, targetFrameId) => {
     set((state) => {
       let changed = false;
@@ -1918,19 +1843,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         if (node.id !== nodeId || !isStoryboardSplitNode(node)) {
           return node;
         }
-
         const frames = [...node.data.frames].sort((a, b) => a.order - b.order);
         const fromIndex = frames.findIndex((frame) => frame.id === draggedFrameId);
         const toIndex = frames.findIndex((frame) => frame.id === targetFrameId);
-
         if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
           return node;
         }
-
         changed = true;
         const [movedFrame] = frames.splice(fromIndex, 1);
         frames.splice(toIndex, 0, movedFrame);
-
         return {
           ...node,
           data: {
@@ -1942,11 +1863,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           },
         };
       });
-
       if (!changed) {
         return {};
       }
-
       return {
         nodes: nextNodes,
         history: {
@@ -1957,16 +1876,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
     });
   },
-
   replaceNodeType: (nodeId, type, data = {}) => {
     let replaced = false;
-
     set((state) => {
       const existingNode = state.nodes.find((node) => node.id === nodeId);
       if (!existingNode || existingNode.type === type) {
         return {};
       }
-
       const replacement = canvasNodeFactory.createNode(type, existingNode.position, data);
       const nextNode: CanvasNode = {
         ...replacement,
@@ -1981,7 +1897,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const nextNodes = state.nodes.map((node) => (
         node.id === nodeId ? nextNode : node
       ));
-
       replaced = true;
       return {
         nodes: nextNodes,
@@ -1993,32 +1908,26 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         dragHistorySnapshot: null,
       };
     });
-
     return replaced;
   },
-
   deleteNode: (nodeId) => {
     get().deleteNodes([nodeId]);
   },
-
   deleteNodes: (nodeIds) => {
     const uniqueIds = Array.from(new Set(nodeIds.filter((nodeId) => nodeId.trim().length > 0)));
     if (uniqueIds.length === 0) {
       return;
     }
-
     set((state) => {
       const existingIds = uniqueIds.filter((nodeId) => state.nodes.some((node) => node.id === nodeId));
       if (existingIds.length === 0) {
         return {};
       }
-
       const deleteSet = collectNodeIdsWithDescendants(state.nodes, existingIds);
       let nextNodes = state.nodes.filter((node) => !deleteSet.has(node.id));
       const nextEdges = state.edges.filter(
         (edge) => !deleteSet.has(edge.source) && !deleteSet.has(edge.target)
       );
-
       const deletedHasImageEdit = state.nodes.some(
         (node) => deleteSet.has(node.id) && node.type === CANVAS_NODE_TYPES.imageEdit
       );
@@ -2043,7 +1952,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           };
         });
       }
-
       return {
         nodes: nextNodes,
         edges: nextEdges,
@@ -2061,20 +1969,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
     });
   },
-
   groupNodes: (nodeIds) => {
     const uniqueIds = Array.from(new Set(nodeIds.filter((nodeId) => nodeId.trim().length > 0)));
     if (uniqueIds.length < 2) {
       return null;
     }
-
     const state = get();
     const nodeMap = new Map(state.nodes.map((node) => [node.id, node] as const));
     const existingIds = uniqueIds.filter((nodeId) => nodeMap.has(nodeId));
     if (existingIds.length < 2) {
       return null;
     }
-
     const selectedSet = new Set(existingIds);
     const memberIds = existingIds.filter((nodeId) => {
       let currentParentId = nodeMap.get(nodeId)?.parentId;
@@ -2084,19 +1989,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           return false;
         }
         visited.add(currentParentId);
-        currentParentId = nodeMap.get(currentParentId)?.parentId;
+        currentParentId = currentParentId ? nodeMap.get(currentParentId)?.parentId : undefined;
       }
       return true;
     });
     if (memberIds.length < 2) {
       return null;
     }
-
     const memberSet = new Set(memberIds);
     const members = memberIds
       .map((id) => nodeMap.get(id))
       .filter((node): node is CanvasNode => Boolean(node));
-
     const absoluteBounds = members.reduce(
       (acc, node) => {
         const absolute = resolveAbsolutePosition(node, nodeMap);
@@ -2115,11 +2018,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         maxY: Number.NEGATIVE_INFINITY,
       }
     );
-
     if (!Number.isFinite(absoluteBounds.minX) || !Number.isFinite(absoluteBounds.minY)) {
       return null;
     }
-
     const SIDE_PADDING = 20;
     const TOP_PADDING = 34;
     const BOTTOM_PADDING = 20;
@@ -2131,7 +2032,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const groupHeight = Math.round(
       Math.max(140, absoluteBounds.maxY - absoluteBounds.minY + TOP_PADDING + BOTTOM_PADDING)
     );
-
     const existingGroupCount = state.nodes.filter((node) => node.type === CANVAS_NODE_TYPES.group).length;
     const groupDisplayName = `组 ${existingGroupCount + 1}`;
     const groupNode = canvasNodeFactory.createNode(
@@ -2144,7 +2044,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     );
     groupNode.style = { width: groupWidth, height: groupHeight };
     groupNode.selected = true;
-
     const updatedMemberMap = new Map<string, CanvasNode>();
     for (const node of members) {
       const absolute = resolveAbsolutePosition(node, nodeMap);
@@ -2159,14 +2058,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         selected: false,
       });
     }
-
     const firstMemberIndex = state.nodes.reduce((acc, node, index) => {
       if (!memberSet.has(node.id)) {
         return acc;
       }
       return acc === -1 ? index : Math.min(acc, index);
     }, -1);
-
     const nextNodes: CanvasNode[] = [];
     let insertedGroup = false;
     for (let index = 0; index < state.nodes.length; index += 1) {
@@ -2175,7 +2072,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         nextNodes.push(groupNode);
         insertedGroup = true;
       }
-
       const updatedMember = updatedMemberMap.get(node.id);
       if (updatedMember) {
         nextNodes.push(updatedMember);
@@ -2186,11 +2082,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         });
       }
     }
-
     if (!insertedGroup) {
       nextNodes.push(groupNode);
     }
-
     set({
       nodes: nextNodes,
       selectedNodeId: groupNode.id,
@@ -2204,10 +2098,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       },
       dragHistorySnapshot: null,
     });
-
     return groupNode.id;
   },
-
   ungroupNode: (groupNodeId) => {
     const state = get();
     const groupNode = state.nodes.find(
@@ -2216,20 +2108,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (!groupNode) {
       return false;
     }
-
     const nodeMap = new Map(state.nodes.map((node) => [node.id, node] as const));
     const children = state.nodes.filter((node) => node.parentId === groupNodeId);
     if (children.length === 0) {
       return false;
     }
-
     const nextNodes = state.nodes
       .filter((node) => node.id !== groupNodeId)
       .map((node) => {
         if (node.parentId !== groupNodeId) {
           return node;
         }
-
         const absolute = resolveAbsolutePosition(node, nodeMap);
         return {
           ...node,
@@ -2242,11 +2131,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           selected: false,
         };
       });
-
     const nextEdges = state.edges.filter(
       (edge) => edge.source !== groupNodeId && edge.target !== groupNodeId
     );
-
     set({
       nodes: nextNodes,
       edges: nextEdges,
@@ -2259,17 +2146,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       },
       dragHistorySnapshot: null,
     });
-
     return true;
   },
-
   deleteEdge: (edgeId) => {
     set((state) => {
       const hasEdge = state.edges.some((edge) => edge.id === edgeId);
       if (!hasEdge) {
         return {};
       }
-
       return {
         edges: state.edges.filter((edge) => edge.id !== edgeId),
         history: {
@@ -2280,7 +2164,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
     });
   },
-
   // ================= 批量连接原子操作 =================
   batchConnect: (togglesBySource) => {
     set((state) => {
@@ -2292,45 +2175,36 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const edgeMap = new Map<string, CanvasEdge>();
       state.edges.forEach((e) => edgeMap.set(`${e.source}-${e.target}`, e));
 
-      // 收集需要更新 sourceId 的标签节点
-      const tagSourceIdUpdates = new Map<string, string | null>();
-
       Object.entries(togglesBySource).forEach(([src, targets]) => {
-        if (!targets || targets.size === 0) return;
+        if (targets.size === 0) return;
         const sourceNode = state.nodes.find((n) => n.id === src);
         if (!sourceNode) return;
-
         // ===== 标签节点可以连线 =====
         const sourceOk = sourceNode.type === CANVAS_NODE_TYPES.tag || nodeHasSourceHandle(sourceNode.type);
         if (!sourceOk) return;
         // ===== 标签节点连线结束 =====
-
         targets.forEach((targetId) => {
           const targetNode = state.nodes.find((n) => n.id === targetId);
           if (!targetNode) return;
-
           // ===== 标签节点可以连线 =====
           const targetOk = targetNode.type === CANVAS_NODE_TYPES.tag || nodeHasTargetHandle(targetNode.type);
           if (!targetOk) return;
           // ===== 标签节点连线结束 =====
-
           const edgeKey = `${src}-${targetId}`;
           const existingEdge = edgeMap.get(edgeKey);
-
           if (existingEdge) {
             // 要断开
             deleteSet.add(existingEdge.id);
             edgesChanged = true;
-
-            // ===== 标签功能：断开时清除标签的 sourceId =====
-            if (
-              targetNode.type === CANVAS_NODE_TYPES.tag
-              && sourceNode.type !== CANVAS_NODE_TYPES.tag
-            ) {
-              tagSourceIdUpdates.set(targetId, null);
-            }
-            // ===== 标签功能结束 =====
           } else {
+            // ===== 🚀 方式A：该标签已有其他源时，跳过本次连接 =====
+            const tagOccupied = targetNode.type === CANVAS_NODE_TYPES.tag
+              && (
+                state.edges.some((e) => e.target === targetId && e.source !== src && !deleteSet.has(e.id))
+                || newEdges.some((e) => e.target === targetId)
+              );
+            if (tagOccupied) return;
+            // ==========================================================
             // 要连接
             newEdges.push({
               id: `e-${edgeKey}`,
@@ -2341,39 +2215,53 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
               type: 'disconnectableEdge',
             });
             edgesChanged = true;
-
-            // ===== 标签功能：连线后自动更新标签的 sourceId =====
-            if (
-              targetNode.type === CANVAS_NODE_TYPES.tag
-              && sourceNode.type !== CANVAS_NODE_TYPES.tag
-            ) {
-              tagSourceIdUpdates.set(targetId, src);
-            }
-            // ===== 标签功能结束 =====
           }
         });
       });
 
       if (!edgesChanged) return {};
 
-      const nextEdges = state.edges.filter((e) => !deleteSet.has(e.id)).concat(newEdges);
+      let nextEdges = state.edges.filter((e) => !deleteSet.has(e.id)).concat(newEdges);
 
-      // ===== 标签功能：批量更新标签节点的 sourceId =====
-      let nextNodes = state.nodes;
-      if (tagSourceIdUpdates.size > 0) {
-        nextNodes = state.nodes.map((node) => {
-          if (tagSourceIdUpdates.has(node.id)) {
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                sourceId: tagSourceIdUpdates.get(node.id),
-              },
-            } as CanvasNode;
-          }
+      // ===== 🚀 优化：标签节点单源连接 =====
+      // 批量连接时，若同一标签节点存在多条入边，只保留最后一条（新连接覆盖旧连接）
+      const tagIncomingEdgeByTarget = new Map<string, CanvasEdge>();
+      const normalEdges: CanvasEdge[] = [];
+      nextEdges.forEach((edge) => {
+        const targetNode = state.nodes.find((n) => n.id === edge.target);
+        if (targetNode && targetNode.type === CANVAS_NODE_TYPES.tag) {
+          tagIncomingEdgeByTarget.set(edge.target, edge);
+        } else {
+          normalEdges.push(edge);
+        }
+      });
+      nextEdges = [...normalEdges, ...Array.from(tagIncomingEdgeByTarget.values())];
+      // ====================================
+
+      // ===== 标签功能：批量更新标签节点的 sourceId（按最终入边重算）=====
+      const nextNodes = state.nodes.map((node) => {
+        if (node.type !== CANVAS_NODE_TYPES.tag) {
           return node;
-        });
-      }
+        }
+        const incomingEdge = tagIncomingEdgeByTarget.get(node.id) ?? null;
+        const incomingSourceNode = incomingEdge
+          ? state.nodes.find((n) => n.id === incomingEdge.source) ?? null
+          : null;
+        const nextSourceId = incomingEdge && incomingSourceNode && incomingSourceNode.type !== CANVAS_NODE_TYPES.tag
+          ? incomingEdge.source
+          : null;
+        const currentSourceId = (node.data as { sourceId?: unknown }).sourceId ?? null;
+        if (currentSourceId === nextSourceId) {
+          return node;
+        }
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            sourceId: nextSourceId,
+          },
+        } as CanvasNode;
+      });
       // ===== 标签功能结束 =====
 
       return {
@@ -2388,30 +2276,24 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
   },
   // ================= 批量连接原子操作结束 =================
-
   setSelectedNode: (nodeId) => {
     usePanelStateStore.getState().closeAllPanels();
     set({ selectedNodeId: nodeId });
   },
-
   openToolDialog: (dialog) => {
     set({ activeToolDialog: dialog });
   },
-
   closeToolDialog: () => {
     set({ activeToolDialog: null });
   },
-
   undo: () => {
     const state = get();
     const target = state.history.past[state.history.past.length - 1];
     if (!target) {
       return false;
     }
-
     const currentSnapshot = createSnapshot(state.nodes, state.edges);
     const nextPast = state.history.past.slice(0, -1);
-
     set({
       nodes: target.nodes,
       edges: target.edges,
@@ -2425,17 +2307,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
     return true;
   },
-
   redo: () => {
     const state = get();
     const target = state.history.future[state.history.future.length - 1];
     if (!target) {
       return false;
     }
-
     const currentSnapshot = createSnapshot(state.nodes, state.edges);
     const nextFuture = state.history.future.slice(0, -1);
-
     set({
       nodes: target.nodes,
       edges: target.edges,
@@ -2449,13 +2328,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
     return true;
   },
-
   clearCanvas: () => {
     set((state) => {
       if (state.nodes.length === 0 && state.edges.length === 0) {
         return {};
       }
-
       return {
         nodes: [],
         edges: [],

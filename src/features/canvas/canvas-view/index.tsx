@@ -9,6 +9,7 @@ import {
   useReactFlow,
   useViewport,
   ViewportPortal,
+  type IsValidConnection,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useCanvasStore } from '@/stores/canvasStore';
@@ -25,6 +26,7 @@ import {
   type CanvasNode,
   type CanvasNodeData,
   type CanvasNodeType,
+  type CanvasEdge,
 } from '@/features/canvas/domain/canvasNodes';
 import { hasConfiguredImageProvider } from '@/features/canvas/application/providerAvailability';
 import { listModelProviders } from '@/features/canvas/models';
@@ -94,13 +96,11 @@ export function Canvas() {
   const suppressNextEdgeClickRef = useRef(false);
   const suppressNextMarqueeSelectionClearRef = useRef(false);
   const nodesRef = useRef<CanvasNode[]>([]);
-
   const [showNodeMenu, setShowNodeMenu] = useState(false);
   const [nodeContextMenu, setNodeContextMenu] = useState<NodeContextMenuState | null>(null);
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
   const [flowPosition, setFlowPosition] = useState({ x: 0, y: 0 });
   const [menuAllowedTypes, setMenuAllowedTypes] = useState<CanvasNodeType[] | undefined>(undefined);
-
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
   const addNode = useCanvasStore((state) => state.addNode);
@@ -119,13 +119,11 @@ export function Canvas() {
   const imageViewer = useCanvasStore((state) => state.imageViewer);
   const closeImageViewer = useCanvasStore((state) => state.closeImageViewer);
   const navigateImageViewer = useCanvasStore((state) => state.navigateImageViewer);
-
   const apiKeys = useSettingsStore((state) => state.apiKeys);
   const dreaminaStatus = useSettingsStore((state) => state.dreaminaStatus);
   const canvasMouseBindings = useSettingsStore((state) => state.canvasMouseBindings);
   const customProviders = useCustomProvidersStore((state) => state.providers);
   const cancelPendingViewportPersist = useProjectStore((state) => state.cancelPendingViewportPersist);
-
   const providerIds = useMemo(() => listModelProviders().map((provider) => provider.id), []);
   const hasConfiguredProvider = useMemo(
     () =>
@@ -144,7 +142,6 @@ export function Canvas() {
       ),
     [canvasMouseBindings]
   );
-
   const { isRestoringCanvasRef, scheduleCanvasPersist } = useCanvasPersistence(reactFlowInstance);
 
   useEffect(() => {
@@ -216,7 +213,6 @@ export function Canvas() {
   }, [setPendingConnectStart, setPreviewConnectionVisual]);
 
   const selection = useCanvasSelection({ wrapperRef, nodesRef });
-
   const flowHandlers = useCanvasFlowHandlers({
     wrapperRef,
     nodes,
@@ -227,9 +223,7 @@ export function Canvas() {
     scheduleCanvasPersist,
     cancelPendingViewportPersist,
   });
-
   useEdgePan({ wrapperRef, isRestoringCanvasRef, suppressNextEdgeClickRef });
-
   const assetPanel = useCanvasAssetPanel({
     nodes,
     wrapperRef,
@@ -238,9 +232,7 @@ export function Canvas() {
     clearOverlays,
     scheduleCanvasPersist,
   });
-
   const materialImport = useMaterialImport({ scheduleCanvasPersist });
-
   const clipboard = useCanvasClipboard({
     wrapperRef,
     lastCanvasPointerRef,
@@ -252,7 +244,6 @@ export function Canvas() {
     createMaterialNodeFromFileAtFlowPosition: materialImport.createMaterialNodeFromFileAtFlowPosition,
     createMaterialNodeFromFileAtClientPosition: materialImport.createMaterialNodeFromFileAtClientPosition,
   });
-
   const contextMenuActions = useContextMenuActions({
     wrapperRef,
     nodesRef,
@@ -267,7 +258,6 @@ export function Canvas() {
     markSystemClipboardFresh: clipboard.markSystemClipboardFresh,
     scheduleCanvasPersist,
   });
-
   const mouseActions = useCanvasMouseActions({
     wrapperRef,
     canvasMouseBindings,
@@ -280,7 +270,6 @@ export function Canvas() {
     openNodeContextMenuAtClientPosition: contextMenuActions.openNodeContextMenuAtClientPosition,
     openNodeMenuAtClientPosition: contextMenuActions.openNodeMenuAtClientPosition,
   });
-
   const { marqueeRect } = useMarqueeSelection({
     wrapperRef,
     canvasMouseBindings,
@@ -290,21 +279,18 @@ export function Canvas() {
     suppressPaneClickUntilRef,
     suppressNextMarqueeSelectionClearRef,
   });
-
   const { batchToolbarPosition, selectionBoundsRect } = useBatchToolbarPosition({
     wrapperRef,
     nodes,
     selectedNodeIds: selection.selectedNodeIds,
     isSingleSelectedGroup: selection.isSingleSelectedGroup,
   });
-
   const altDrag = useAltDragCopy({
     nodes,
     selectedNodeIds: selection.selectedNodeIds,
     duplicateNodes: clipboard.duplicateNodes,
     scheduleCanvasPersist,
   });
-
   // 🧲 自动吸附 + 跟随移动
   const snapFollow = useCanvasSnapFollow();
 
@@ -314,6 +300,37 @@ export function Canvas() {
     }
     wrapperRef.current?.focus({ preventScroll: true });
   }, []);
+
+  // ===== 🚀 新增：连线验证（标签胶囊单源限制 + 防重复连线）=====
+  const isValidConnection = useCallback<IsValidConnection<CanvasEdge>>(
+    (connection) => {
+      if (!connection.source || !connection.target) return false;
+      if (connection.source === connection.target) return false;
+
+      const targetNode = nodes.find((n) => n.id === connection.target);
+      if (!targetNode) return true;
+
+      // 1. 避免完全重复的连线
+      const edgeExists = edges.some(
+        (e) => e.source === connection.source && e.target === connection.target
+      );
+      if (edgeExists) return false;
+
+      // 2. 标签节点专属规则：如果目标已经是标签节点且已有其他上游，则禁止拖入（显示红色禁止图标 🚫）
+      //    说明：如果你更喜欢“拖拽自动替换旧源”的体验，请注释掉下面这个 if 块，
+      //    底层 canvasStore 会自动移除旧入边并更新 sourceId。
+      if (targetNode.type === CANVAS_NODE_TYPES.tag) {
+        const hasExistingIncomingEdge = edges.some(
+          (e) => e.target === connection.target && e.source !== connection.source
+        );
+        if (hasExistingIncomingEdge) return false;
+      }
+
+      return true;
+    },
+    [nodes, edges]
+  );
+  // ==========================================================
 
   const handleNodeSelect = useCallback(
     (type: CanvasNodeType) => {
@@ -427,6 +444,7 @@ export function Canvas() {
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        isValidConnection={isValidConnection} // 👈 新增这一行
         // 🧲 修改1：吸附逻辑先处理 changes，再交给原有处理逻辑
         onNodesChange={(changes) => flowHandlers.handleNodesChange(snapFollow.processNodeChanges(changes))}
         onEdgesChange={flowHandlers.handleEdgesChange}
