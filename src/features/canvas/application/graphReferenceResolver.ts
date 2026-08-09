@@ -243,7 +243,7 @@ function collectReferenceSourceNodes(
           visited.add(upstreamNode.id);
 
           // 只要链路上任意一环被禁用，最终就是禁用状态
-          const nextEnabled = inheritedEnabled && sourceItem.enabled;
+          const nextEnabled = inheritedEnabled;
 
           if (isTagNode(upstreamNode) || isTagGroupNode(upstreamNode)) {
             // 上游本身还是标签/标签组（嵌套场景），才需要继续穿透
@@ -303,11 +303,6 @@ export function collectInputReferences(
       // 这样被禁用的源不会把自己的编号名额让给后面的源，
       // 其余源的 @token 不会因为它被禁用而改变。
       counts[extracted.kind] += 1;
-
-      // 被禁用的源到此为止，不进入最终引用列表（也就不会被发给下游）
-      if (!sourceItem.enabled) {
-        return;
-      }
 
       // label/token 始终走标准编号（图1/视频2/文本3...），不使用自定义别名——
       // 自定义命名只用于标签组内部的视觉区分，通过 customLabel 字段单独展示。

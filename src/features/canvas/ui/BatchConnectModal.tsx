@@ -20,6 +20,7 @@ import {
   Tag,
   Pencil,
   Sparkles,
+  Layers,
 } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { CANVAS_NODE_TYPES, type CanvasNode } from '@/features/canvas/domain/canvasNodes';
@@ -31,7 +32,6 @@ interface BatchConnectModalProps {
 }
 
 const EMPTY_SET = new Set<string>();
-
 const HOVER_PREVIEW_WIDTH = 560;
 const HOVER_PREVIEW_MAX_HEIGHT = 760;
 const HOVER_DELAY_MS = 250;
@@ -52,6 +52,7 @@ function getTypeLabel(type: string): string {
     case CANVAS_NODE_TYPES.jsonCard: return 'JSON 卡片';
     case CANVAS_NODE_TYPES.blueprint: return '导演台';
     case CANVAS_NODE_TYPES.tag: return '标签';
+    case CANVAS_NODE_TYPES.tagGroup: return '标签组';
     case CANVAS_NODE_TYPES.group: return '组';
     default: return type || '节点';
   }
@@ -88,6 +89,8 @@ function getNodeIconStyle(type: string): { icon: typeof Circle; color: string } 
       return { icon: LayoutGrid, color: 'bg-orange-500' };
     case CANVAS_NODE_TYPES.tag:
       return { icon: Tag, color: 'bg-amber-600' };
+    case CANVAS_NODE_TYPES.tagGroup:
+      return { icon: Layers, color: 'bg-indigo-500' };
     default:
       return { icon: Circle, color: 'bg-gray-500' };
   }
@@ -183,6 +186,7 @@ function getNodePreviewInfo(node: CanvasNode): NodePreviewInfo {
 function getNodeSummaryText(node: CanvasNode): string {
   const data = (node.data ?? {}) as Record<string, any>;
   const type = node.type as string;
+
   if (type === CANVAS_NODE_TYPES.blueprint) return pickText(data.basePrompt);
   if (type === CANVAS_NODE_TYPES.aiText || type === CANVAS_NODE_TYPES.textAnnotation) {
     return pickText(data.content, data.prompt, data.rawContent);
@@ -194,30 +198,105 @@ function getNodeSummaryText(node: CanvasNode): string {
     return pickText(data.content, data.rawContent);
   }
   if (type === CANVAS_NODE_TYPES.audio) return pickText(data.sourceFileName, data.displayName);
+  if (type === CANVAS_NODE_TYPES.tagGroup) {
+    const sources = Array.isArray(data.sources) ? data.sources : [];
+    return `包含 ${sources.length} 个上游源节点`;
+  }
   return pickText(data.prompt, data.sourcePrompt, data.basePrompt, data.content);
 }
 
-// 🚀 与 TagNode.tsx 的 getTagColor 完全一致：标签颜色由「名称::sourceId」哈希实时计算
+// ============================================================
+// ✅ 颜色计算：与画布上 TagNode.tsx / TagGroupNode.tsx 完全一致
+// ============================================================
+
+function hashString(str: string, salt = ''): number {
+  const input = str + salt;
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
+
+
+function hslToHex(h: number, s: number, l: number): string {
+  const sat = s / 100;
+  const light = l / 100;
+  const c = (1 - Math.abs(2 * light - 1)) * sat;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = light - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { [r, g, b] = [c, x, 0]; }
+  else if (h < 120) { [r, g, b] = [x, c, 0]; }
+  else if (h < 180) { [r, g, b] = [0, c, x]; }
+  else if (h < 240) { [r, g, b] = [0, x, c]; }
+  else if (h < 300) { [r, g, b] = [x, 0, c]; }
+  else { [r, g, b] = [c, 0, x]; }
+  const toHex = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+/**
+ * ✅ 与 TagNode.tsx 的 getTagPalette 完全一致：
+ * - 使用 FNV-1a 哈希（hashString）
+ * - 只根据文字计算颜色（不含 sourceId）
+ * - 饱和度 55–80%，明度 40–54%
+ */
 function getTagColor(node: CanvasNode): string {
   const data = (node.data ?? {}) as Record<string, unknown>;
   const name = (data.displayName as string) || (data.label as string) || '新标签';
   const sourceId = (data.sourceId as string) || null;
-  const key = `${(name || '').trim()}::${sourceId || ''}`;
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) {
-    hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  const contentKey = sourceId ? `src:${sourceId}` : `text:${(name || '').trim()}`;
+  const hueHash = hashString(contentKey, '#hue');
+  const toneHash = hashString(contentKey, '#tone');
+  const hue = hueHash % 360;
+  const sat = 55 + (toneHash % 25);
+  const light = 40 + ((toneHash >> 8) % 14);
+  return `hsl(${hue}, ${sat}%, ${light}%)`;
+}
+
+/**
+ * ✅ 与 TagGroupNode.tsx 的 getGroupAutoColor 完全一致：
+ * - 使用 FNV-1a 哈希
+ * - 只根据 displayName 计算颜色
+ */
+function getTagGroupColor(node: CanvasNode): string {
+  const data = (node.data ?? {}) as Record<string, unknown>;
+  const sources = Array.isArray(data.sources)
+    ? (data.sources as Array<{ sourceNodeId?: string }>)
+    : [];
+  const sourceIds = sources
+    .map((s) => s.sourceNodeId)
+    .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+    .sort();
+
+  let contentKey: string;
+  if (sourceIds.length > 0) {
+    contentKey = `src:${sourceIds.join('|')}`;
+  } else {
+    const name = typeof data.displayName === 'string' ? data.displayName.trim() : '';
+    if (!name) return '#3b82f6';
+    contentKey = `text:${name}`;
   }
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 65%, 45%)`;
+
+  const hueHash = hashString(contentKey, '#hue');
+  const satHash = hashString(contentKey, '#sat');
+  const lightHash = hashString(contentKey, '#light');
+  const hue = hueHash % 360;
+  const sat = 55 + (satHash % 25);
+  const light = 40 + (lightHash % 14);
+  return hslToHex(hue, sat, light);
 }
 
 // ===================== 模拟画布真实节点样式的预览 =====================
-// 右侧列表：迷你节点卡片（标签节点 = 动态颜色胶囊）
+
+// 右侧列表：迷你节点卡片
 function NodeMiniCard({ node }: { node: CanvasNode }) {
   const type = node.type as string;
   const displayName = getNodeDisplayName(node) || getTypeLabel(type);
 
-  // 标签节点：与画布一致的胶囊样式（颜色与画布实时同步）
+  // 标签节点：与画布一致的胶囊样式
   if (type === CANVAS_NODE_TYPES.tag) {
     const tagColor = getTagColor(node);
     return (
@@ -228,6 +307,32 @@ function NodeMiniCard({ node }: { node: CanvasNode }) {
         >
           <Tag className="w-2.5 h-2.5 shrink-0" style={{ color: tagColor }} />
           <span className="text-[9px] font-bold truncate" style={{ color: tagColor }}>{displayName}</span>
+        </div>
+      </div>
+    );
+  }
+
+  // ✅ 新增：标签组节点预览
+  if (type === CANVAS_NODE_TYPES.tagGroup) {
+    const groupColor = getTagGroupColor(node);
+    const data = (node.data ?? {}) as Record<string, unknown>;
+    const sources = Array.isArray(data.sources) ? data.sources : [];
+    return (
+      <div
+        className="w-full h-full flex flex-col rounded-[5px] overflow-hidden border bg-[var(--canvas-node-bg,#fff)] shadow-sm"
+        style={{ borderColor: groupColor }}
+      >
+        <div
+          className="h-[14px] shrink-0 flex items-center gap-1 px-1.5 border-b"
+          style={{ borderColor: `${groupColor}40`, background: `${groupColor}15` }}
+        >
+          <Layers className="w-2.5 h-2.5 shrink-0" style={{ color: groupColor }} />
+          <span className="text-[8px] leading-none truncate" style={{ color: groupColor }}>标签组</span>
+        </div>
+        <div className="flex-1 min-h-0 flex items-center justify-center p-1">
+          <span className="text-[8px] opacity-60 text-center">
+            {sources.length > 0 ? `${sources.length} 个源` : '空'}
+          </span>
         </div>
       </div>
     );
@@ -268,13 +373,13 @@ function NodeMiniCard({ node }: { node: CanvasNode }) {
   );
 }
 
-// 左侧源节点：大尺寸节点卡片（标签节点 = 大胶囊 + 两侧圆点，动态颜色）
+// 左侧源节点：大尺寸节点卡片
 function SourceNodeCard({ node }: { node: CanvasNode }) {
   const type = node.type as string;
   const displayName = getNodeDisplayName(node) || getTypeLabel(type);
   const summary = getNodeSummaryText(node);
 
-  // 标签节点：与画布一致的大胶囊（颜色与画布实时同步）
+  // 标签节点：与画布一致的大胶囊
   if (type === CANVAS_NODE_TYPES.tag) {
     const tagColor = getTagColor(node);
     return (
@@ -287,6 +392,37 @@ function SourceNodeCard({ node }: { node: CanvasNode }) {
           <Tag className="w-4 h-4 shrink-0" style={{ color: tagColor }} />
           <span className="text-sm font-bold truncate max-w-[120px]" style={{ color: tagColor }}>{displayName}</span>
           <div className="absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full" style={{ background: tagColor }} />
+        </div>
+      </div>
+    );
+  }
+
+  // ✅ 新增：标签组节点预览
+  if (type === CANVAS_NODE_TYPES.tagGroup) {
+    const groupColor = getTagGroupColor(node);
+    const data = (node.data ?? {}) as Record<string, unknown>;
+    const sources = Array.isArray(data.sources) ? data.sources : [];
+    return (
+      <div
+        className="w-full rounded-lg overflow-hidden border bg-[var(--canvas-node-bg,#fff)] shadow-lg"
+        style={{ borderColor: `${groupColor}60` }}
+      >
+        <div
+          className="flex items-center gap-1.5 px-2.5 py-1.5 border-b"
+          style={{ borderColor: `${groupColor}30`, background: `${groupColor}10` }}
+        >
+          <Layers className="w-3.5 h-3.5 shrink-0" style={{ color: groupColor }} />
+          <span className="text-xs font-medium truncate" style={{ color: groupColor }}>{displayName}</span>
+          <Pencil className="w-3 h-3 opacity-40 ml-auto shrink-0" />
+        </div>
+        <div className="px-2.5 py-3 min-h-[72px] max-h-[96px] overflow-hidden">
+          <p className="text-[10px] leading-relaxed opacity-60">
+            包含 {sources.length} 个上游源节点
+          </p>
+        </div>
+        <div className="flex items-center justify-between px-2 py-1.5 border-t border-[var(--canvas-node-border,#e4e4e7)] bg-[var(--canvas-rail-button-bg,#f4f4f5)]">
+          <div className="h-[4px] w-8 rounded-full bg-current opacity-20" />
+          <div className="h-[4px] w-4 rounded-full bg-current opacity-20" />
         </div>
       </div>
     );
@@ -338,6 +474,7 @@ function SourceNodeCard({ node }: { node: CanvasNode }) {
     </div>
   );
 }
+
 // ===================== 节点样式预览结束 =====================
 
 const CATEGORY_FILTERS = [
@@ -400,18 +537,13 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
   const [dragOverSource, setDragOverSource] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<CategoryKey>('all');
-
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const hoveredNodeIdRef = useRef<string | null>(null);
-
   const [hoverPreview, setHoverPreview] = useState<HoverPreviewState | null>(null);
   const hoverTimerRef = useRef<number | null>(null);
-
   const containerRef = useRef<HTMLDivElement>(null);
-  // SVG 画线层的坐标基准容器（内容区），线条起点/终点必须相对它计算
   const contentRef = useRef<HTMLDivElement>(null);
   const sourceHandleRef = useRef<HTMLDivElement>(null);
-
   const svgLineRef = useRef<SVGLineElement>(null);
   const dragCoords = useRef({ x1: 0, y1: 0, x2: 0, y2: 0 });
   const rafId = useRef<number | null>(null);
@@ -492,6 +624,7 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
     () => Array.from(toggledIds).filter((id) => !existingConnections.has(id)).length,
     [toggledIds, existingConnections]
   );
+
   const pendingRemoves = useMemo(
     () => Array.from(toggledIds).filter((id) => existingConnections.has(id)).length,
     [toggledIds, existingConnections]
@@ -545,7 +678,6 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
     setSourceId((prev) => (prev === nextId ? prev : nextId));
   }, []);
 
-  // 坐标相对 contentRef（SVG 父容器）计算，线条精确从蓝点出发、跟随指针
   const handleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -573,14 +705,11 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
   const handleMouseMove = useCallback((e: MouseEvent) => {
     const rect = contentRef.current?.getBoundingClientRect();
     if (!rect) return;
-
     dragCoords.current.x2 = e.clientX - rect.left;
     dragCoords.current.y2 = e.clientY - rect.top;
-
     if (rafId.current) cancelAnimationFrame(rafId.current);
     rafId.current = requestAnimationFrame(() => {
       if (!isDraggingRef.current) return;
-
       if (svgLineRef.current) {
         svgLineRef.current.setAttribute('x1', dragCoords.current.x1.toString());
         svgLineRef.current.setAttribute('y1', dragCoords.current.y1.toString());
@@ -588,12 +717,9 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
         svgLineRef.current.setAttribute('y2', dragCoords.current.y2.toString());
         svgLineRef.current.style.display = 'block';
       }
-
-      // 仅高亮检测，不吸附
       const target = document.elementFromPoint(e.clientX, e.clientY);
       const nodeElement = target?.closest('[data-batch-node-id]');
       const targetId = nodeElement ? nodeElement.getAttribute('data-batch-node-id') : null;
-
       if (targetId && targetId !== currentSourceNode.id) {
         if (hoveredNodeIdRef.current !== targetId) {
           hoveredNodeIdRef.current = targetId;
@@ -615,7 +741,6 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
       setHoveredNodeId(null);
       hoveredNodeIdRef.current = null;
       if (svgLineRef.current) svgLineRef.current.style.display = 'none';
-
       const target = document.elementFromPoint(e.clientX, e.clientY);
       const nodeElement = target?.closest('[data-batch-node-id]');
       if (nodeElement) {
@@ -667,7 +792,6 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
   const sourceName = getNodeDisplayName(currentSourceNode) || getTypeLabel(currentSourceNode.type);
   const sourceTypeLabel = getTypeLabel(currentSourceNode.type);
   const sourcePreview = getNodePreviewInfo(currentSourceNode);
-
   const hoverNode = hoverPreview ? nodes.find((n) => n.id === hoverPreview.nodeId) ?? null : null;
   const hoverInfo = hoverNode ? getNodePreviewInfo(hoverNode) : null;
   const showHoverPreview = Boolean(hoverPreview && hoverNode && hoverInfo && (hoverInfo.src || hoverInfo.videoSrc));
@@ -689,7 +813,7 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
           </button>
         </div>
 
-        {/* Content Area（contentRef：画线坐标基准） */}
+        {/* Content Area */}
         <div ref={contentRef} className="relative flex min-h-0 flex-1">
           {/* Left Side */}
           <div
@@ -748,7 +872,6 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
                     )}
                   </div>
                 ) : (
-                  /* 无图片时：显示与画布一致的节点样式 */
                   <SourceNodeCard node={currentSourceNode} />
                 )}
               </div>

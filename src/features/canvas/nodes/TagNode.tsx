@@ -2,8 +2,10 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Handle, NodeResizeControl, NodeToolbar, Position } from '@xyflow/react';
 import { Link2, Tag, Trash2 } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvasStore';
+import { useThemeStore } from '@/stores/themeStore';
 import { UiChipButton, UiPanel } from '@/components/ui';
 import { BatchConnectModal } from '@/features/canvas/ui/BatchConnectModal';
+import { NodeHeader, NODE_HEADER_FLOATING_POSITION_CLASS } from '@/features/canvas/ui/NodeHeader';
 import {
   NODE_TOOLBAR_ALIGN,
   NODE_TOOLBAR_CLASS,
@@ -16,8 +18,9 @@ const TOOLBAR_NEUTRAL_BUTTON_CLASS =
   'border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] text-text-dark shadow-sm hover:border-[var(--canvas-node-border-hover)] hover:bg-[var(--canvas-node-menu-hover)]';
 
 /**
- * 🎨 配色规则：颜色只由「标签内容」决定 —— 文字 + 源节点 完全相同才会同色，
- * 哪怕只差一个字，或者源节点不同，颜色都必然不同。
+ * 🎨 配色规则：颜色由「连接的源节点」决定——
+ * 连接相同的源节点才会同色；只有相同源节点才允许相同颜色。
+ * 未连接任何源（新建标签）时，退化为按标签文字计算，保证不同内容可区分。
  * 用两个互相独立的哈希（一个算色相，一个算饱和度/明度）来尽量拉开色彩差异，
  * 减少不同内容撞到相近颜色的概率。
  */
@@ -60,13 +63,34 @@ interface TagPalette {
   ring: string;
 }
 
-function getTagPalette(name: string, sourceId: string | null): TagPalette {
-  const contentKey = `${(name || '').trim()}::${sourceId || ''}`;
-  const hueHash = hashString(contentKey, '#hue');
-  const toneHash = hashString(contentKey, '#tone');
+export function resolveTagColorKey(name: string, sourceId: string | null): string {
+  if (sourceId) return `src:${sourceId}`;
+  return `text:${(name || '').trim()}`;
+}
+
+/**
+ * ✅ 双主题调色板：
+ * - 浅色模式：白底胶囊，文字用低明度（26–44%）
+ * - 深色模式：深灰胶囊，文字/图标必须用高明度（70%+）才能清晰可读
+ * 色相始终由内容哈希决定，同色规则不受主题影响。
+ */
+function getTagPalette(colorKey: string, isDark: boolean): TagPalette {
+  const hueHash = hashString(colorKey, '#hue');
+  const toneHash = hashString(colorKey, '#tone');
   const hue = hueHash % 360;
   const sat = 55 + (toneHash % 25); // 55–80%
   const light = 40 + ((toneHash >> 8) % 14); // 40–54%
+
+  if (isDark) {
+    const textLight = 70 + ((toneHash >> 8) % 8); // 70–77%
+    return {
+      border: `hsl(${hue}, ${sat}%, ${Math.min(light + 14, 66)}%)`,
+      text: `hsl(${hue}, ${Math.min(sat + 5, 85)}%, ${textLight}%)`,
+      dot: `hsl(${hue}, ${sat}%, ${Math.min(light + 12, 62)}%)`,
+      ring: `hsla(${hue}, ${sat}%, ${Math.min(light + 12, 62)}%, 0.3)`,
+    };
+  }
+
   return {
     border: `hsl(${hue}, ${sat}%, ${light}%)`,
     text: `hsl(${hue}, ${Math.min(sat + 10, 92)}%, ${Math.max(light - 10, 26)}%)`,
@@ -90,9 +114,14 @@ export const TagNode = memo((props: any) => {
   const { id, data, selected, width, height } = props;
   const name = data?.displayName || data?.label || '新标签';
   const sourceId = (data?.sourceId as string | null) || null;
+
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(name);
   const [isBatchConnectOpen, setIsBatchConnectOpen] = useState(false);
+
+  // ✅ 新增：订阅主题，深色模式下抬升文字/图标明度
+  const isDark = useThemeStore((s) => s.theme) === 'dark';
+
   const updateNodeData = useCanvasStore((s) => s.updateNodeData);
   const deleteNode = useCanvasStore((s) => s.deleteNode);
   const setSelectedNode = useCanvasStore((s) => s.setSelectedNode);
@@ -100,6 +129,7 @@ export const TagNode = memo((props: any) => {
   const sourceNode = useCanvasStore((s) => s.nodes.find((n) => n.id === id)) as
     | CanvasNode
     | undefined;
+
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const resolvedWidth = typeof width === 'number' && width > 0 ? width : undefined;
@@ -175,9 +205,8 @@ export const TagNode = memo((props: any) => {
         ring: hexToRgba(customColor, 0.24),
       };
     }
-
-    return getTagPalette(name, sourceId);
-  }, [customColor, name, sourceId]);
+    return getTagPalette(resolveTagColorKey(name, sourceId), isDark);
+  }, [customColor, name, sourceId, isDark]);
 
   // 之前"第二行文字漏出来"的根因：容器只是 overflow-hidden + 固定像素高度，
   // 一旦这个高度不是行高的整数倍（比如刚好够 1.3 行），浏览器会把下一行"切一半"露出来，
@@ -257,6 +286,26 @@ export const TagNode = memo((props: any) => {
         }}
         onClick={() => setSelectedNode(id)}
       >
+        {/* 左上角标识，与标签组/其他节点保持一致 */}
+        <NodeHeader
+          className={NODE_HEADER_FLOATING_POSITION_CLASS}
+          icon={
+            <span
+              className="flex h-5 w-5 items-center justify-center rounded-md border"
+              style={{
+                background: palette.ring,
+                borderColor: palette.border,
+                color: palette.dot,
+              }}
+            >
+              <Tag className="h-3.5 w-3.5" />
+            </span>
+          }
+          titleText={name}
+          editable
+          onTitleChange={(nextTitle) => updateNodeData(id, { displayName: nextTitle, label: nextTitle })}
+        />
+
         {/* 内层胶囊：文字支持自动换行，缩放时会跟着容器宽高实时重排。
             手动缩放到装不下时，用 line-clamp 按整行裁切并显示省略号，不会再露出半行文字 */}
         <div
@@ -345,7 +394,6 @@ export const TagNode = memo((props: any) => {
           className="!h-2.5 !w-2.5 !border-2 !border-white"
           style={{ background: palette.dot }}
         />
-
         <NodeResizeControl
           position="bottom-right"
           minWidth={72}

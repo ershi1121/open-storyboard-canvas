@@ -67,8 +67,37 @@ const IMPORT_GAP_Y = 340;
 const RAIL_BUTTON_CLASS =
   'flex w-16 flex-col items-center gap-0.5 rounded-lg border border-[var(--canvas-rail-button-border)] bg-[var(--canvas-rail-button-bg)] px-2 py-2 text-[10px] text-[var(--canvas-rail-button-text)] transition-colors hover:border-accent/60 hover:bg-accent/15 hover:text-accent';
 
-// 标签颜色选项
-const TAG_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+// ✅ 新增：转义正则特殊字符
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * ✅ 新增：按项目约定生成递增名称。
+ * 扫描同类型节点，找出「base」或「base N」的最大序号，返回 base (max+1)。
+ * 例如已有「标签组 1」「标签组 3」，再建就得到「标签组 4」。
+ */
+function nextSerialName(
+  nodes: Array<{ type?: string; data?: unknown }>,
+  type: string,
+  base: string
+): string {
+  const pattern = new RegExp(`^${escapeRegExp(base)}(?:\\s*(\\d+))?$`);
+  let max = 0;
+  for (const node of nodes) {
+    if (node.type !== type) continue;
+    const data = (node.data ?? {}) as Record<string, unknown>;
+    const name =
+      (typeof data.displayName === 'string' && data.displayName.trim()) ||
+      (typeof data.label === 'string' && data.label.trim()) ||
+      '';
+    if (!name) continue;
+    const match = name.match(pattern);
+    if (!match) continue;
+    max = Math.max(max, match[1] ? parseInt(match[1], 10) : 1);
+  }
+  return `${base} ${max + 1}`;
+}
 
 interface CanvasSideToolbarProps {
   onOpenAssets?: (buttonRect: DOMRect) => void;
@@ -78,14 +107,14 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
   const { t } = useTranslation();
   const reactFlow = useReactFlow();
   const addNode = useCanvasStore((s) => s.addNode);
+  const nodes = useCanvasStore((s) => s.nodes); // ✅ 新增：用于计算递增名称
   const excelInputRef = useRef<HTMLInputElement>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
-  
+
   // 新建标签 / 标签组弹窗状态
   const [isCreateTagOpen, setIsCreateTagOpen] = useState(false);
   const [createType, setCreateType] = useState<'tag' | 'tagGroup'>('tag');
   const [newTagName, setNewTagName] = useState('');
-  const [newTagColor, setNewTagColor] = useState('#3b82f6');
 
   const handleAdd = useCallback(
     (type: CanvasNodeType, data?: Partial<CanvasNodeData>) => {
@@ -115,15 +144,13 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
   // 打开新建标签弹窗
   const handleOpenCreateTag = useCallback(() => {
     setNewTagName('');
-    setNewTagColor('#3b82f6');
-    setCreateType('tag'); // ← 新增
+    setCreateType('tag');
     setIsCreateTagOpen(true);
   }, []);
 
   // 确认创建标签
   const handleConfirmCreateTag = useCallback(() => {
     if (!newTagName.trim()) return;
-
     let position = { x: 240, y: 160 };
     try {
       const container = document.querySelector('.react-flow') as HTMLElement | null;
@@ -142,21 +169,21 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
       /* fallback position already set */
     }
 
+    // ✅ 新增：名称按创建顺序递增
+    const serialName = nextSerialName(nodes, CANVAS_NODE_TYPES.tag, newTagName.trim());
+
     addNode(CANVAS_NODE_TYPES.tag, position, {
-      displayName: newTagName.trim(),
-      label: newTagName.trim(),
-      color: newTagColor,
+      displayName: serialName,
+      label: serialName,
       sourceId: null,
     });
-
     setIsCreateTagOpen(false);
-  }, [addNode, reactFlow, newTagName, newTagColor]);
+  }, [addNode, reactFlow, newTagName, nodes]);
 
   // 确认创建标签组
   const handleConfirmCreateTagGroup = useCallback(() => {
     const displayName = newTagName.trim();
     if (!displayName) return;
-
     let position = { x: 240, y: 160 };
     try {
       const container = document.querySelector('.react-flow') as HTMLElement | null;
@@ -175,14 +202,15 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
       /* fallback position already set */
     }
 
-    addNode(CANVAS_NODE_TYPES.tagGroup, position, {
-      displayName,
-      sources: [],
-      color: newTagColor,
-    });
+    // ✅ 新增：名称按创建顺序递增
+    const serialName = nextSerialName(nodes, CANVAS_NODE_TYPES.tagGroup, displayName);
 
+    addNode(CANVAS_NODE_TYPES.tagGroup, position, {
+      displayName: serialName,
+      sources: [],
+    });
     setIsCreateTagOpen(false);
-  }, [addNode, reactFlow, newTagName, newTagColor]);
+  }, [addNode, reactFlow, newTagName, nodes]);
 
   // 统一确认创建
   const handleConfirmCreate = useCallback(() => {
@@ -245,7 +273,6 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
           <Images className="h-5 w-5" />
           <span>{t('canvasToolbar.assets', '资产')}</span>
         </button>
-        
         {TOOLBAR_ITEMS.map((item) => {
           const Icon = item.icon;
           return (
@@ -260,7 +287,6 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
             </button>
           );
         })}
-        
         <button
           onClick={handleOpenCreateTag}
           className={RAIL_BUTTON_CLASS}
@@ -269,7 +295,6 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
           <Tags className="h-5 w-5" />
           <span>{t('canvasToolbar.createTag', '标签')}</span>
         </button>
-
         <button
           onClick={() => excelInputRef.current?.click()}
           className={RAIL_BUTTON_CLASS}
@@ -278,7 +303,6 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
           <FileSpreadsheet className="h-5 w-5" />
           <span>{t('canvasToolbar.importExcel', '导入Excel')}</span>
         </button>
-        
         <input
           ref={excelInputRef}
           type="file"
@@ -287,7 +311,7 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
           onChange={handlePickFile}
         />
       </div>
-      
+
       {importFile && (
         <ExcelImportDialog
           file={importFile}
@@ -348,29 +372,10 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
                 if (e.key === 'Enter') handleConfirmCreate();
               }}
             />
-          </div>
-
-          {/* 颜色 */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-text-muted">
-              颜色（标签胶囊 / 标签组通用）
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {TAG_COLORS.map((color) => (
-                <button
-                  key={color}
-                  type="button"
-                  aria-label={`选择颜色 ${color}`}
-                  className={`h-7 w-7 rounded-full border-2 transition-all ${
-                    newTagColor === color
-                      ? 'scale-110 border-white ring-2 ring-accent/60 shadow'
-                      : 'border-black/10 hover:scale-105 dark:border-white/15'
-                  }`}
-                  style={{ backgroundColor: color }}
-                  onClick={() => setNewTagColor(color)}
-                />
-              ))}
-            </div>
+            {/* ✅ 新增：提示最终名称会自动加序号 */}
+            <span className="text-[10px] text-text-muted opacity-70">
+              创建后将自动按顺序编号，如「{newTagName.trim() || '名称'} 1」；颜色由名称自动生成。
+            </span>
           </div>
 
           {/* 标签组说明 */}
@@ -380,7 +385,6 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
             </div>
           )}
         </div>
-
         <div className="flex justify-end gap-2 px-4 pb-4">
           <UiButton variant="muted" onClick={() => setIsCreateTagOpen(false)}>
             取消
