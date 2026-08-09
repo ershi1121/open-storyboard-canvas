@@ -6,7 +6,7 @@ import {
   type CanvasNode,
   type CanvasNodeType,
 } from '@/features/canvas/domain/canvasNodes';
-import { getConnectMenuNodeTypes } from '@/features/canvas/domain/nodeRegistry';
+import { getConnectMenuNodeTypes, nodeHasSourceHandle } from '@/features/canvas/domain/nodeRegistry';
 import type { CanvasClipboardSnapshot } from '../types';
 
 export function cloneNodeData<T>(value: T): T {
@@ -156,15 +156,12 @@ export function resolveAllowedNodeTypes(handleType: HandleType): CanvasNodeType[
 }
 
 export function canNodeTypeBeManualConnectionSource(type: CanvasNodeType): boolean {
-  return type === CANVAS_NODE_TYPES.upload
-    || type === CANVAS_NODE_TYPES.imageEdit
-    || type === CANVAS_NODE_TYPES.exportImage
-    || type === CANVAS_NODE_TYPES.video
-    || type === CANVAS_NODE_TYPES.audio
-    || type === CANVAS_NODE_TYPES.aiText
-    || type === CANVAS_NODE_TYPES.textAnnotation
-    || type === CANVAS_NODE_TYPES.jsonCard
-    || type === CANVAS_NODE_TYPES.tag;
+  // 直接复用 nodeRegistry.ts 里 connectivity.sourceHandle 这个唯一真源，
+  // 不再另外维护一份手写白名单——这份白名单之前漏掉了 tagGroup（以及
+  // aiVideo / aiAudio / storyboardGen / panorama / blueprint），导致
+  // 这些节点作为拖线源头时，isValidConnection 之前就已经被这里静默拦下、
+  // connectNodes() 根本没被调用，控制台也不会有任何报错。
+  return nodeHasSourceHandle(type);
 }
 
 export function canNodeBeManualConnectionSource(

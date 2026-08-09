@@ -246,8 +246,8 @@ function normalizeEdgesWithNodes(rawEdges: unknown[], nodes: CanvasNode[]): Canv
         return false;
       }
       // ===== 标签节点可以连线 =====
-      const sourceOk = sourceNode.type === CANVAS_NODE_TYPES.tag || nodeHasSourceHandle(sourceNode.type);
-      const targetOk = targetNode.type === CANVAS_NODE_TYPES.tag || nodeHasTargetHandle(targetNode.type);
+      const sourceOk = sourceNode.type === CANVAS_NODE_TYPES.tag || sourceNode.type === CANVAS_NODE_TYPES.tagGroup || nodeHasSourceHandle(sourceNode.type);
+      const targetOk = targetNode.type === CANVAS_NODE_TYPES.tag || targetNode.type === CANVAS_NODE_TYPES.tagGroup || nodeHasTargetHandle(targetNode.type);
       return sourceOk && targetOk;
       // ===== 标签节点连线结束 =====
     })
@@ -1298,8 +1298,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
     // ======================================
     // ===== 标签节点可以连线 =====
-    const sourceOk = sourceNode.type === CANVAS_NODE_TYPES.tag || nodeHasSourceHandle(sourceNode.type);
-    const targetOk = targetNode.type === CANVAS_NODE_TYPES.tag || nodeHasTargetHandle(targetNode.type);
+    const sourceOk = sourceNode.type === CANVAS_NODE_TYPES.tag || sourceNode.type === CANVAS_NODE_TYPES.tagGroup || nodeHasSourceHandle(sourceNode.type);
+    const targetOk = targetNode.type === CANVAS_NODE_TYPES.tag || targetNode.type === CANVAS_NODE_TYPES.tagGroup || nodeHasTargetHandle(targetNode.type);
     if (!sourceOk || !targetOk) {
       return null;
     }
@@ -2180,14 +2180,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const sourceNode = state.nodes.find((n) => n.id === src);
         if (!sourceNode) return;
         // ===== 标签节点可以连线 =====
-        const sourceOk = sourceNode.type === CANVAS_NODE_TYPES.tag || nodeHasSourceHandle(sourceNode.type);
+        const sourceOk = sourceNode.type === CANVAS_NODE_TYPES.tag || sourceNode.type === CANVAS_NODE_TYPES.tagGroup || nodeHasSourceHandle(sourceNode.type);
         if (!sourceOk) return;
         // ===== 标签节点连线结束 =====
         targets.forEach((targetId) => {
           const targetNode = state.nodes.find((n) => n.id === targetId);
           if (!targetNode) return;
           // ===== 标签节点可以连线 =====
-          const targetOk = targetNode.type === CANVAS_NODE_TYPES.tag || nodeHasTargetHandle(targetNode.type);
+          const targetOk = targetNode.type === CANVAS_NODE_TYPES.tag || targetNode.type === CANVAS_NODE_TYPES.tagGroup || nodeHasTargetHandle(targetNode.type);
           if (!targetOk) return;
           // ===== 标签节点连线结束 =====
           const edgeKey = `${src}-${targetId}`;

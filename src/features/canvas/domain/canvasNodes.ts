@@ -112,6 +112,7 @@ export interface TagGroupNodeData extends NodeDisplayData {
     customLabel: string;
     enabled: boolean;
   }>;
+  color?: string | null;
   [key: string]: unknown;
 }
 

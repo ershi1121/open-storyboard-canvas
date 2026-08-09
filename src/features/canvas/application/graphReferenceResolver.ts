@@ -31,6 +31,13 @@ export interface GraphReferenceItem {
   thumbnailUrl?: string | null;
   audioUrl?: string;
   title: string;
+  /**
+   * 标签组里给这条源起的自定义别名，仅用于 UI 展示（比如 @ 选择列表里
+   * 让用户能视觉上区分是哪张图），不参与 label/token 的生成——
+   * token 必须始终是固定的「图1」「视频2」这类格式，因为 prompt 里
+   * 剥离 @ 符号的正则（以及其他依赖固定格式的解析逻辑）只认这种格式。
+   */
+  customLabel?: string;
 }
 
 // 内部辅助接口：用于在穿透过程中携带自定义别名
@@ -204,16 +211,26 @@ function collectReferenceSourceNodes(
         enabledSources.forEach(enabledSource => {
           // 根据 edgeId 匹配实际的连线
           const actualEdge = groupIncomingEdges.find(e => e.id === enabledSource.edgeId);
-          if (actualEdge) {
-            // 递归穿透，传递 customLabel
-            const nestedSources = collectReferenceSourceNodes(
-              actualEdge.source, 
-              nodesById, 
-              edges, 
-              visited, 
-              enabledSource.customLabel
+          if (!actualEdge) {
+            return;
+          }
+          const upstreamNode = nodesById.get(actualEdge.source);
+          if (!upstreamNode || visited.has(upstreamNode.id)) {
+            return;
+          }
+          visited.add(upstreamNode.id);
+
+          if (isTagNode(upstreamNode) || isTagGroupNode(upstreamNode)) {
+            // 上游本身还是标签/标签组（嵌套场景），才需要继续穿透
+            sources.push(
+              ...collectReferenceSourceNodes(upstreamNode.id, nodesById, edges, visited, enabledSource.customLabel)
             );
-            sources.push(...nestedSources);
+          } else {
+            // 普通节点：直接收集它本身，而不是去查“喂给它的上游”——
+            // 之前这里错误地把 upstreamNode.id 当成中转节点递归，
+            // 导致像上传节点这类没有入边的上游被当成“无来源”而丢失，
+            // 或者被错误地穿透到再上一层、指向了完全不同的节点。
+            sources.push({ node: upstreamNode, customLabel: enabledSource.customLabel });
           }
         });
       } else {
@@ -255,14 +272,16 @@ export function collectInputReferences(
       seen.add(dedupeKey);
 
       counts[extracted.kind] += 1;
-      
-      // 核心改动：优先使用自定义别名作为 Label
-      const label = sourceItem.customLabel || `${labelPrefixForKind(extracted.kind)}${counts[extracted.kind]}`;
-      
+
+      // label/token 始终走标准编号（图1/视频2/文本3...），不使用自定义别名——
+      // 自定义命名只用于标签组内部的视觉区分，通过 customLabel 字段单独展示。
+      const label = `${labelPrefixForKind(extracted.kind)}${counts[extracted.kind]}`;
+
       references.push({
         ...extracted,
         label,
         token: `@${label}`,
+        customLabel: sourceItem.customLabel,
       });
     });
 

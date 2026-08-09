@@ -1,7 +1,15 @@
 import { memo, useCallback, useRef, useState, type ChangeEvent } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
-import { ImagePlus, Globe2, LayoutGrid, Images, Video, FileSpreadsheet, Tags, Layers } from 'lucide-react';
+import {
+  ImagePlus,
+  Globe2,
+  LayoutGrid,
+  Images,
+  Video,
+  FileSpreadsheet,
+  Tags,
+} from 'lucide-react';
 import { CANVAS_NODE_TYPES, type CanvasNodeData, type CanvasNodeType } from '@/features/canvas/domain/canvasNodes';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { ExcelImportDialog, type ExcelImportSelection } from '@/features/canvas/ui/ExcelImportDialog';
@@ -73,8 +81,9 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
   const excelInputRef = useRef<HTMLInputElement>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   
-  // 新建标签弹窗状态
+  // 新建标签 / 标签组弹窗状态
   const [isCreateTagOpen, setIsCreateTagOpen] = useState(false);
+  const [createType, setCreateType] = useState<'tag' | 'tagGroup'>('tag');
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#3b82f6');
 
@@ -107,6 +116,7 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
   const handleOpenCreateTag = useCallback(() => {
     setNewTagName('');
     setNewTagColor('#3b82f6');
+    setCreateType('tag'); // ← 新增
     setIsCreateTagOpen(true);
   }, []);
 
@@ -142,8 +152,11 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
     setIsCreateTagOpen(false);
   }, [addNode, reactFlow, newTagName, newTagColor]);
 
-  // 创建标签组
-  const handleCreateTagGroup = useCallback(() => {
+  // 确认创建标签组
+  const handleConfirmCreateTagGroup = useCallback(() => {
+    const displayName = newTagName.trim();
+    if (!displayName) return;
+
     let position = { x: 240, y: 160 };
     try {
       const container = document.querySelector('.react-flow') as HTMLElement | null;
@@ -163,10 +176,22 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
     }
 
     addNode(CANVAS_NODE_TYPES.tagGroup, position, {
-      displayName: '标签组',
+      displayName,
       sources: [],
+      color: newTagColor,
     });
-  }, [addNode, reactFlow]);
+
+    setIsCreateTagOpen(false);
+  }, [addNode, reactFlow, newTagName, newTagColor]);
+
+  // 统一确认创建
+  const handleConfirmCreate = useCallback(() => {
+    if (createType === 'tagGroup') {
+      handleConfirmCreateTagGroup();
+    } else {
+      handleConfirmCreateTag();
+    }
+  }, [createType, handleConfirmCreateTag, handleConfirmCreateTagGroup]);
 
   const handlePickFile = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -239,19 +264,10 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
         <button
           onClick={handleOpenCreateTag}
           className={RAIL_BUTTON_CLASS}
-          title={t('canvasToolbar.createTagTitle', '新建标签')}
+          title={t('canvasToolbar.createTagTitle', '新建标签 / 标签组')}
         >
           <Tags className="h-5 w-5" />
-          <span>{t('canvasToolbar.createTag', '新建标签')}</span>
-        </button>
-
-        <button
-          onClick={handleCreateTagGroup}
-          className={RAIL_BUTTON_CLASS}
-          title="新建标签组"
-        >
-          <Layers className="h-5 w-5" />
-          <span>标签组</span>
+          <span>{t('canvasToolbar.createTag', '标签')}</span>
         </button>
 
         <button
@@ -280,43 +296,102 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
         />
       )}
 
-      {/* 新建标签弹窗 */}
+      {/* 新建标签 / 标签组弹窗 */}
       <UiModal
         isOpen={isCreateTagOpen}
-        title="新建标签"
+        title="新建标签 / 标签组"
         onClose={() => setIsCreateTagOpen(false)}
-        widthClassName="w-[400px]"
+        widthClassName="w-[420px]"
       >
         <div className="flex flex-col gap-4 p-4">
+          {/* 类型切换 */}
+          <div className="flex items-center gap-1 rounded-lg border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-field-bg)] p-1">
+            <button
+              type="button"
+              onClick={() => setCreateType('tag')}
+              className={`h-8 flex-1 rounded-md text-xs font-medium transition-colors ${
+                createType === 'tag'
+                  ? 'bg-[var(--canvas-node-menu-active)] text-accent shadow-sm'
+                  : 'text-text-muted hover:text-text-dark'
+              }`}
+            >
+              标签胶囊
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateType('tagGroup')}
+              className={`h-8 flex-1 rounded-md text-xs font-medium transition-colors ${
+                createType === 'tagGroup'
+                  ? 'bg-[var(--canvas-node-menu-active)] text-accent shadow-sm'
+                  : 'text-text-muted hover:text-text-dark'
+              }`}
+            >
+              标签组
+            </button>
+          </div>
+
+          {/* 名称 */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-text-muted">标签名称</label>
+            <label className="text-xs font-medium text-text-muted">
+              {createType === 'tag' ? '标签名称' : '标签组名称'}
+            </label>
             <UiInput
               value={newTagName}
               onChange={(e) => setNewTagName(e.target.value)}
-              placeholder="例如：主角参考、场景氛围"
+              placeholder={
+                createType === 'tag'
+                  ? '例如：主角参考、场景氛围'
+                  : '例如：角色标签组、场景标签组'
+              }
               autoFocus
-              onKeyDown={(e) => { if (e.key === 'Enter') handleConfirmCreateTag(); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleConfirmCreate();
+              }}
             />
           </div>
-          
+
+          {/* 颜色 */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-text-muted">标签颜色</label>
-            <div className="flex gap-2">
-              {TAG_COLORS.map(color => (
+            <label className="text-xs font-medium text-text-muted">
+              颜色（标签胶囊 / 标签组通用）
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {TAG_COLORS.map((color) => (
                 <button
                   key={color}
                   type="button"
-                  className={`h-6 w-6 rounded-full border-2 transition-all ${newTagColor === color ? 'border-white scale-110' : 'border-transparent'}`}
+                  aria-label={`选择颜色 ${color}`}
+                  className={`h-7 w-7 rounded-full border-2 transition-all ${
+                    newTagColor === color
+                      ? 'scale-110 border-white ring-2 ring-accent/60 shadow'
+                      : 'border-black/10 hover:scale-105 dark:border-white/15'
+                  }`}
                   style={{ backgroundColor: color }}
                   onClick={() => setNewTagColor(color)}
                 />
               ))}
             </div>
           </div>
+
+          {/* 标签组说明 */}
+          {createType === 'tagGroup' && (
+            <div className="rounded-lg border border-dashed border-[var(--canvas-node-border)] bg-[var(--canvas-node-field-bg)] px-3 py-3 text-xs leading-5 text-text-muted">
+              将创建一个卡片式标签组节点，支持连接多个上游源，并可自由缩放。
+            </div>
+          )}
         </div>
+
         <div className="flex justify-end gap-2 px-4 pb-4">
-          <UiButton variant="muted" onClick={() => setIsCreateTagOpen(false)}>取消</UiButton>
-          <UiButton variant="primary" onClick={handleConfirmCreateTag} disabled={!newTagName.trim()}>确认创建</UiButton>
+          <UiButton variant="muted" onClick={() => setIsCreateTagOpen(false)}>
+            取消
+          </UiButton>
+          <UiButton
+            variant="primary"
+            onClick={handleConfirmCreate}
+            disabled={!newTagName.trim()}
+          >
+            确认创建
+          </UiButton>
         </div>
       </UiModal>
     </>

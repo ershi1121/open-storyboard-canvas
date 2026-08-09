@@ -31,6 +31,28 @@ function hashString(str: string, salt = ''): number {
   return Math.abs(hash);
 }
 
+function hexToRgba(hex: string, alpha: number): string {
+  const normalized = hex.replace('#', '');
+  const full =
+    normalized.length === 3
+      ? normalized
+          .split('')
+          .map((ch) => `${ch}${ch}`)
+          .join('')
+      : normalized;
+
+  const value = parseInt(full, 16);
+  if (Number.isNaN(value)) {
+    return `rgba(59, 130, 246, ${alpha})`;
+  }
+
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 interface TagPalette {
   border: string;
   text: string;
@@ -138,8 +160,24 @@ export const TagNode = memo((props: any) => {
     }
   }, [isEditing, autoGrowTextarea]);
 
-  // 颜色只由内容决定：文字 + 源节点 完全一致才会同色
-  const palette = useMemo(() => getTagPalette(name, sourceId), [name, sourceId]);
+  // 优先使用用户自定义颜色；如果没有自定义颜色，再使用内容生成的颜色
+  const customColor =
+    typeof data?.color === 'string' && data.color.trim() !== ''
+      ? data.color.trim()
+      : null;
+
+  const palette = useMemo(() => {
+    if (customColor) {
+      return {
+        border: customColor,
+        text: customColor,
+        dot: customColor,
+        ring: hexToRgba(customColor, 0.24),
+      };
+    }
+
+    return getTagPalette(name, sourceId);
+  }, [customColor, name, sourceId]);
 
   // 之前"第二行文字漏出来"的根因：容器只是 overflow-hidden + 固定像素高度，
   // 一旦这个高度不是行高的整数倍（比如刚好够 1.3 行），浏览器会把下一行"切一半"露出来，

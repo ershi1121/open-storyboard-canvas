@@ -321,10 +321,12 @@ const tagNodeDefinition: CanvasNodeDefinition<TagNodeData> = {
 
 const tagGroupNodeDefinition: CanvasNodeDefinition<TagGroupNodeData> = {
   type: CANVAS_NODE_TYPES.tagGroup,
-  menuLabelKey: '标签组',
+  menuLabelKey: 'node.menu.tagGroup',
   menuIcon: 'layout',
   visibleInMenu: true,
-  defaultSize: { width: 300, height: 220 },
+  // 与 TagGroupNode.tsx 里的 TAG_GROUP_DEFAULT_WIDTH / TAG_GROUP_DEFAULT_HEIGHT 保持一致，
+  // 之前的 220 与组件自身的 TAG_GROUP_MIN_HEIGHT 相同，导致新建节点一创建就顶到最小高度。
+  defaultSize: { width: 320, height: 380 },
   capabilities: { toolbar: false, selectionToolbar: 'none', promptInput: false },
   connectivity: {
     sourceHandle: true,
