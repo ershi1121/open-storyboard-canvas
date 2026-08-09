@@ -406,7 +406,7 @@ export const UploadNode = memo(({ id, data, selected, width, height }: UploadNod
           {/* Reupload button on left side */}
           <button
             type="button"
-            className="absolute left-2 top-2 flex h-7 items-center gap-1 rounded-full border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] px-2 text-xs text-text-dark shadow-sm backdrop-blur-sm transition-colors hover:bg-[var(--canvas-node-menu-hover)]"
+            className="nodrag absolute left-2 top-2 flex h-7 items-center gap-1 rounded-full border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] px-2 text-xs text-text-dark shadow-sm backdrop-blur-sm transition-colors hover:bg-[var(--canvas-node-menu-hover)]"
             onClick={(e) => {
               e.stopPropagation();
               inputRef.current?.click();
@@ -417,7 +417,7 @@ export const UploadNode = memo(({ id, data, selected, width, height }: UploadNod
           </button>
         </div>
       ) : uploadError ? (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-2 overflow-hidden rounded-[var(--node-radius)] bg-[rgba(127,29,29,0.16)] px-4 text-red-200">
+        <div className="nodrag flex h-full w-full flex-col items-center justify-center gap-2 overflow-hidden rounded-[var(--node-radius)] bg-[rgba(127,29,29,0.16)] px-4 text-red-200">
           <AlertTriangle className="h-7 w-7 opacity-90" />
           <span className="text-center text-[12px] font-medium leading-5">
             {t('node.upload.uploadFailed')}

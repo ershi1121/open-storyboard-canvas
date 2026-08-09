@@ -40,10 +40,24 @@ export interface GraphReferenceItem {
   customLabel?: string;
 }
 
-// 内部辅助接口：用于在穿透过程中携带自定义别名
+// 内部辅助接口：用于在穿透过程中携带自定义别名 + 启用状态
 interface ResolvedSource {
   node: CanvasNode;
   customLabel?: string;
+  /**
+   * 🔴 修复点：标记这条源在其所属标签组里是否被禁用。
+   * 之前的实现在遍历标签组时就直接 filter(s => s.enabled)，导致
+   * 禁用的源连"占位"的机会都没有——编号是在最终收集到的列表上
+   * 从 1 开始重新数的，所以只要前面有一条被禁用，后面的源全部会
+   * 集体往前顶一位（比如"图2"在图1被禁用后变成新的"图1"）。
+   * 而下游节点的 prompt 文本框里插入的 @token 是写死的字面文字，
+   * 不会跟着重新编号，于是这些历史 token 全部失效——表现为
+   * "禁用图1，图2 反而不被引用了"。
+   *
+   * 现在改为：禁用的源依然参与编号（占住自己的编号名额，只是
+   * 不会真的进入最终引用列表），这样后面的源不会被顶替。
+   */
+  enabled: boolean;
 }
 
 function getNodeTitle(node: CanvasNode): string {
@@ -174,7 +188,9 @@ function labelPrefixForKind(kind: GraphReferenceKind): string {
 /**
  * 核心穿透逻辑：
  * 1. 单标签 (TagNode)：继续向上穿透。
- * 2. 标签组 (TagGroupNode)：只穿透 enabled=true 的源，并携带 customLabel。
+ * 2. 标签组 (TagGroupNode)：穿透组内 *全部* 源（含禁用的），
+ *    用 enabled 字段标记是否真的可用——保证编号占位顺序不受
+ *    禁用状态影响，只在最后收集阶段过滤掉被禁用的。
  * 3. 普通节点：直接返回。
  */
 function collectReferenceSourceNodes(
@@ -182,7 +198,8 @@ function collectReferenceSourceNodes(
   nodesById: Map<string, CanvasNode>,
   edges: CanvasEdge[],
   visited: Set<string>,
-  inheritedLabel?: string
+  inheritedLabel?: string,
+  inheritedEnabled = true
 ): ResolvedSource[] {
   const sources: ResolvedSource[] = [];
 
@@ -190,7 +207,7 @@ function collectReferenceSourceNodes(
     .filter((edge) => edge.target === nodeId)
     .forEach((edge) => {
       const sourceNode = nodesById.get(edge.source);
-      
+
       // 防止死循环
       if (!sourceNode || visited.has(sourceNode.id)) {
         return;
@@ -198,19 +215,24 @@ function collectReferenceSourceNodes(
       visited.add(sourceNode.id);
 
       if (isTagNode(sourceNode)) {
-        // 单标签：继续向上穿透
-        sources.push(...collectReferenceSourceNodes(sourceNode.id, nodesById, edges, visited, inheritedLabel));
+        // 单标签：继续向上穿透，沿途继承 enabled 状态
+        sources.push(
+          ...collectReferenceSourceNodes(
+            sourceNode.id, nodesById, edges, visited, inheritedLabel, inheritedEnabled
+          )
+        );
       } else if (isTagGroupNode(sourceNode)) {
-        // 标签组：处理内部启用的源
+        // 标签组：遍历组内 *全部* 源（不再提前 filter enabled），
+        // 每条源自己的 enabled 状态会在下面单独携带
         const groupData = sourceNode.data as TagGroupNodeData;
-        const enabledSources = (groupData.sources || []).filter(s => s.enabled);
-        
+        const allSources = groupData.sources || [];
+
         // 找到连接到该标签组的所有入边
         const groupIncomingEdges = edges.filter(e => e.target === sourceNode.id);
 
-        enabledSources.forEach(enabledSource => {
+        allSources.forEach(sourceItem => {
           // 根据 edgeId 匹配实际的连线
-          const actualEdge = groupIncomingEdges.find(e => e.id === enabledSource.edgeId);
+          const actualEdge = groupIncomingEdges.find(e => e.id === sourceItem.edgeId);
           if (!actualEdge) {
             return;
           }
@@ -220,22 +242,28 @@ function collectReferenceSourceNodes(
           }
           visited.add(upstreamNode.id);
 
+          // 只要链路上任意一环被禁用，最终就是禁用状态
+          const nextEnabled = inheritedEnabled && sourceItem.enabled;
+
           if (isTagNode(upstreamNode) || isTagGroupNode(upstreamNode)) {
             // 上游本身还是标签/标签组（嵌套场景），才需要继续穿透
             sources.push(
-              ...collectReferenceSourceNodes(upstreamNode.id, nodesById, edges, visited, enabledSource.customLabel)
+              ...collectReferenceSourceNodes(
+                upstreamNode.id, nodesById, edges, visited,
+                sourceItem.customLabel, nextEnabled
+              )
             );
           } else {
             // 普通节点：直接收集它本身，而不是去查“喂给它的上游”——
             // 之前这里错误地把 upstreamNode.id 当成中转节点递归，
             // 导致像上传节点这类没有入边的上游被当成“无来源”而丢失，
             // 或者被错误地穿透到再上一层、指向了完全不同的节点。
-            sources.push({ node: upstreamNode, customLabel: enabledSource.customLabel });
+            sources.push({ node: upstreamNode, customLabel: sourceItem.customLabel, enabled: nextEnabled });
           }
         });
       } else {
         // 普通节点：收集
-        sources.push({ node: sourceNode, customLabel: inheritedLabel });
+        sources.push({ node: sourceNode, customLabel: inheritedLabel, enabled: inheritedEnabled });
       }
     });
 
@@ -271,7 +299,15 @@ export function collectInputReferences(
       }
       seen.add(dedupeKey);
 
+      // 🔴 修复点：编号永远递增占位，不管这条源当前是否 enabled——
+      // 这样被禁用的源不会把自己的编号名额让给后面的源，
+      // 其余源的 @token 不会因为它被禁用而改变。
       counts[extracted.kind] += 1;
+
+      // 被禁用的源到此为止，不进入最终引用列表（也就不会被发给下游）
+      if (!sourceItem.enabled) {
+        return;
+      }
 
       // label/token 始终走标准编号（图1/视频2/文本3...），不使用自定义别名——
       // 自定义命名只用于标签组内部的视觉区分，通过 customLabel 字段单独展示。

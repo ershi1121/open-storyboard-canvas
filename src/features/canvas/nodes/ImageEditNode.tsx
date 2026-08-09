@@ -1574,7 +1574,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
         )}
       </div>
 
-      <div className="mt-2 flex min-w-0 shrink-0 flex-nowrap items-center gap-1">
+      <div className="nodrag mt-2 flex min-w-0 shrink-0 flex-nowrap items-center gap-1">
         <ModelConfigPicker
           panelKey="aiImageNode"
           className="flex-1"
@@ -1674,7 +1674,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
         </UiButton>
       </div>
 
-      {error && <div className="mt-1 shrink-0 text-xs text-red-400">{error}</div>}
+      {error && <div className="nodrag mt-1 shrink-0 text-xs text-red-400">{error}</div>}
 
       <UiModal
         isOpen={payloadDebugText !== null}

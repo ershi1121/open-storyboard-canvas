@@ -453,14 +453,28 @@ export function Canvas() {
         onConnect={flowHandlers.handleConnect}
         onConnectStart={handleConnectStart}
         onConnectEnd={handleConnectEnd}
-        // 🧲 修改2：先执行跟随编组，再执行原有的 Alt 拖动复制逻辑
         onNodeDragStart={(event, node) => {
+          // 启动 rAF 循环，持续强制覆盖 React Flow 内部设置的 grabbing
+          const enforceCursor = () => {
+            document.body.style.setProperty('cursor', 'move', 'important');
+            (window as any).__nodeDragRaf = requestAnimationFrame(enforceCursor);
+          };
+          enforceCursor();
+
           snapFollow.onNodeDragStart(event, node);
           altDrag.handleNodeDragStart(event, node);
         }}
-        onNodeDrag={altDrag.handleNodeDrag}
-        // 🧲 修改3：先清理跟随状态，再执行原有的拖动结束逻辑
+        onNodeDrag={(event, node) => {
+          altDrag.handleNodeDrag(event, node);
+        }}
         onNodeDragStop={(event, node) => {
+          // 停止 rAF 循环，清除内联样式
+          if ((window as any).__nodeDragRaf) {
+            cancelAnimationFrame((window as any).__nodeDragRaf);
+            (window as any).__nodeDragRaf = null;
+          }
+          document.body.style.removeProperty('cursor');
+
           snapFollow.onNodeDragStop();
           altDrag.handleNodeDragStop(event, node);
         }}

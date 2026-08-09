@@ -21,9 +21,14 @@ import { UiCheckbox, UiInput } from '@/components/ui';
 import { resolveImageDisplayUrl } from '@/features/canvas/application/imageData';
 import {
   CANVAS_NODE_TYPES,
+  isTagNode,
+  isTagGroupNode,
+  type CanvasEdge,
   type CanvasNode,
   type TagGroupNodeData,
 } from '@/features/canvas/domain/canvasNodes';
+import { collectInputReferences } from '@/features/canvas/application/graphReferenceResolver';
+import { pruneDeadReferenceTokens } from '@/features/canvas/application/referenceTokenEditing';
 
 // 卡片尺寸：默认高度与 AI 图片节点一致（380）
 const TAG_GROUP_DEFAULT_WIDTH = 320;
@@ -118,6 +123,126 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+/**
+ * 🆕 新增：内容哈希取色（照搬 TagNode.tsx 的 getTagPalette 思路）。
+ * 之前标签组没有这套逻辑，只要用户没手动设置 data.color，
+ * 所有标签组不管内容是什么，全部落到同一个 FALLBACK_TAG_GROUP_COLOR，
+ * 导致"内容不同也会同色"。
+ *
+ * 内容 key 用 displayName + 排序后的 sourceNodeId 列表——
+ * 不用 customLabel，因为用户改别名不应该改变颜色；
+ * 也不用 edgeId（连线本身的技术性 id 会因为断开重连而变化，
+ * 但如果连的还是同一批源，颜色应当保持不变）。
+ */
+function hashString(str: string, salt = ''): number {
+  const input = str + salt;
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const sat = s / 100;
+  const light = l / 100;
+  const c = (1 - Math.abs(2 * light - 1)) * sat;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = light - c / 2;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  if (h < 60) {
+    [r, g, b] = [c, x, 0];
+  } else if (h < 120) {
+    [r, g, b] = [x, c, 0];
+  } else if (h < 180) {
+    [r, g, b] = [0, c, x];
+  } else if (h < 240) {
+    [r, g, b] = [0, x, c];
+  } else if (h < 300) {
+    [r, g, b] = [x, 0, c];
+  } else {
+    [r, g, b] = [c, 0, x];
+  }
+
+  const toHex = (v: number) =>
+    Math.round((v + m) * 255)
+      .toString(16)
+      .padStart(2, '0');
+
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function getGroupAutoColor(data: TagGroupNodeData): string {
+  const contentKey = [
+    (data.displayName || '').trim(),
+    ...((data.sources || []).map((s) => s.sourceNodeId).sort()),
+  ].join('|');
+
+  // 内容为空（刚创建、还没连任何源）时，用固定颜色，
+  // 避免空标签组之间反而因为哈希碰撞显得"随机"
+  if (!contentKey.replace(/\|/g, '')) {
+    return FALLBACK_TAG_GROUP_COLOR;
+  }
+
+  const hueHash = hashString(contentKey, '#hue');
+  const satHash = hashString(contentKey, '#sat');
+  const lightHash = hashString(contentKey, '#light');
+
+  const hue = hueHash % 360;
+  const sat = 55 + (satHash % 25); // 55–80%
+  const light = 40 + (lightHash % 14); // 40–54%
+
+  return hslToHex(hue, sat, light);
+}
+
+/**
+ * 🆕 新增：从标签组出发，沿着下游连线正向 BFS，
+ * 找出所有"消费"这个标签组引用（即 data.prompt 是字符串）的节点。
+ * 中途遇到 Tag / TagGroup 节点会继续往下穿透，因为标签本身
+ * 不消费引用，只是转发。
+ */
+function findDownstreamPromptConsumerIds(
+  startId: string,
+  nodes: CanvasNode[],
+  edges: CanvasEdge[]
+): string[] {
+  const nodesById = new Map(nodes.map((n) => [n.id, n] as const));
+  const visited = new Set<string>([startId]);
+  const queue = [startId];
+  const consumerIds: string[] = [];
+
+  while (queue.length > 0) {
+    const currentId = queue.shift() as string;
+    const outgoing = edges.filter((e) => e.source === currentId);
+
+    for (const edge of outgoing) {
+      const targetNode = nodesById.get(edge.target);
+      if (!targetNode || visited.has(targetNode.id)) continue;
+      visited.add(targetNode.id);
+
+      if (isTagNode(targetNode) || isTagGroupNode(targetNode)) {
+        // 标签/标签组只是转发节点，继续往下游穿透
+        queue.push(targetNode.id);
+        continue;
+      }
+
+      const promptValue = (targetNode.data as Record<string, unknown>)?.prompt;
+      if (typeof promptValue === 'string') {
+        consumerIds.push(targetNode.id);
+      }
+      // 普通节点也可能再往下游连（比如导出节点之后还接了别的节点），
+      // 但通常消费型节点（AI 图片/视频节点）已经是终点，这里不再继续穿透，
+      // 避免不必要的遍历；如需支持更深链路，把 continue 换成 queue.push 即可。
+    }
+  }
+
+  return consumerIds;
+}
+
 export const TagGroupNode = memo((props: any) => {
   const { id, data, selected, width, height } = props as {
     id: string;
@@ -183,10 +308,38 @@ export const TagGroupNode = memo((props: any) => {
 
   const handleThumbLeave = useCallback(() => setPreview(null), []);
 
+  // 🆕 新增：禁用/启用某个源之后，找到所有下游消费节点，
+  // 清理它们 prompt 文本里那些"查无对应引用"的死 @token——
+  // 只清理"刚刚变化"的这一条源自己失效的 token，其余源不受影响
+  // （因为 graphReferenceResolver 里已经保证了编号不会因为
+  // 这条源被禁用而重新洗牌）。
+  const pruneDownstreamDeadTokens = useCallback(() => {
+    const state = useCanvasStore.getState();
+    const consumerIds = findDownstreamPromptConsumerIds(id, state.nodes, state.edges);
+
+    consumerIds.forEach((consumerId) => {
+      const consumerNode = state.nodes.find((n) => n.id === consumerId);
+      const prompt = (consumerNode?.data as Record<string, unknown> | undefined)?.prompt;
+      if (typeof prompt !== 'string' || !prompt) return;
+
+      const validTokens = new Set(
+        collectInputReferences(consumerId, state.nodes, state.edges).map((r) => r.token)
+      );
+      const cleaned = pruneDeadReferenceTokens(prompt, validTokens);
+
+      if (cleaned !== prompt) {
+        state.updateNodeData(consumerId, { prompt: cleaned });
+      }
+    });
+  }, [id]);
+
   const handleToggle = (edgeId: string, enabled: boolean) => {
     updateNodeData(id, {
       sources: (data.sources || []).map((s) => (s.edgeId === edgeId ? { ...s, enabled } : s)),
     });
+    // 用 microtask 让 sources 的更新先落到 store 里，
+    // 保证下面重新计算 collectInputReferences 时读到的是最新状态
+    queueMicrotask(pruneDownstreamDeadTokens);
   };
 
   const handleRename = (edgeId: string, customLabel: string) => {
@@ -200,10 +353,12 @@ export const TagGroupNode = memo((props: any) => {
 
   const isValidHexColor = (value: string) => /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value.trim());
 
-  const accentColor =
-    typeof data.color === 'string' && isValidHexColor(data.color)
-      ? data.color.trim()
-      : FALLBACK_TAG_GROUP_COLOR;
+  const accentColor = useMemo(() => {
+    if (typeof data.color === 'string' && isValidHexColor(data.color)) {
+      return data.color.trim();
+    }
+    return getGroupAutoColor(data);
+  }, [data]);
 
   const sources = data.sources || [];
   const borderColor = selected ? accentColor : hexToRgba(accentColor, 0.55);
