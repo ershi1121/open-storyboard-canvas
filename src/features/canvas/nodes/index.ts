@@ -12,6 +12,8 @@ import { JsonCardNode } from './JsonCardNode';
 import { PanoramaNode } from './PanoramaNode';
 import { StoryboardGenNode } from './StoryboardGenNode';
 import { StoryboardNode } from './StoryboardNode';
+import { TagNode } from './TagNode';
+import { TagGroupNode } from './TagGroupNode'; // ← 新增：标签组节点组件
 import { TextAnnotationNode } from './TextAnnotationNode';
 import { UploadNode } from './UploadNode';
 import { VideoNode } from './VideoNode';
@@ -30,6 +32,8 @@ export const nodeTypes: NodeTypes = {
   panoramaNode: withNodeRenderErrorBoundary(PanoramaNode),
   storyboardGenNode: withNodeRenderErrorBoundary(StoryboardGenNode),
   storyboardNode: withNodeRenderErrorBoundary(StoryboardNode),
+  tagNode: withNodeRenderErrorBoundary(TagNode),
+  tagGroupNode: withNodeRenderErrorBoundary(TagGroupNode), // ← 新增：注册标签组节点
   textAnnotationNode: withNodeRenderErrorBoundary(TextAnnotationNode),
   uploadNode: withNodeRenderErrorBoundary(UploadNode),
   videoNode: withNodeRenderErrorBoundary(VideoNode),
@@ -48,6 +52,8 @@ export {
   PanoramaNode,
   StoryboardGenNode,
   StoryboardNode,
+  TagNode,
+  TagGroupNode, // ← 新增：导出标签组节点组件
   TextAnnotationNode,
   UploadNode,
   VideoNode,

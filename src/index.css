@@ -391,3 +391,80 @@ html[data-platform='macos'] #root {
     animation: none;
   }
 }
+
+/* ============================================
+   画布 vs 节点 鼠标手势区分（最终版）
+   ============================================ */
+
+/* 画布空白区域：抓手，提示可平移画布 */
+.canvas-flow .react-flow__pane {
+  cursor: grab !important;
+}
+
+/* 画布拖拽中：紧握抓手 */
+.canvas-flow .react-flow__pane.dragging,
+.canvas-flow .react-flow__pane:active {
+  cursor: grabbing !important;
+}
+
+/* 节点可拖拽区域（外边框/空白处）：四向箭头 */
+.canvas-flow .react-flow__node {
+  cursor: move !important;
+}
+
+/* 节点内部 nodrag 区域（不可拖拽）：恢复默认光标 */
+.canvas-flow .react-flow__node .nodrag {
+  cursor: default !important;
+}
+
+/* nodrag 区域内的交互元素保持各自光标 */
+.canvas-flow .react-flow__node .nodrag input,
+.canvas-flow .react-flow__node .nodrag textarea {
+  cursor: text !important;
+}
+
+.canvas-flow .react-flow__node .nodrag button,
+.canvas-flow .react-flow__node .nodrag a,
+.canvas-flow .react-flow__node .nodrag [role="button"] {
+  cursor: pointer !important;
+}
+
+/* ===== 节点内部不可拖拽区域：恢复各自光标 ===== */
+
+/* nodrag 区域（内容展示区、列表区等不可拖拽部分） */
+.canvas-flow .react-flow__node .nodrag {
+  cursor: default !important;
+}
+
+/* 输入框 / 文本域 */
+.canvas-flow .react-flow__node input,
+.canvas-flow .react-flow__node textarea,
+.canvas-flow .react-flow__node [contenteditable="true"] {
+  cursor: text !important;
+}
+
+/* 按钮 / 链接 / 下拉框 / 复选框 / 单选框 */
+.canvas-flow .react-flow__node button,
+.canvas-flow .react-flow__node a,
+.canvas-flow .react-flow__node [role="button"],
+.canvas-flow .react-flow__node select,
+.canvas-flow .react-flow__node input[type="checkbox"],
+.canvas-flow .react-flow__node input[type="radio"] {
+  cursor: pointer !important;
+}
+
+/* 图片 / 视频等媒体元素 */
+.canvas-flow .react-flow__node img,
+.canvas-flow .react-flow__node video {
+  cursor: default !important;
+}
+
+/* 连接锚点：十字准星，提示可拉出连线 */
+.canvas-flow .react-flow__handle {
+  cursor: crosshair !important;
+}
+
+/* 缩放手柄：双向箭头 */
+.canvas-flow .react-flow__resize-control {
+  cursor: nwse-resize !important;
+}

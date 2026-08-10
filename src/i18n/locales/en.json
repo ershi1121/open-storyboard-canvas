@@ -772,7 +772,9 @@
       "textAnnotation": "Text Node",
       "jsonCard": "JSON Card",
       "panorama": "Panorama",
-      "blueprint": "Director Studio"
+      "blueprint": "Director Studio",
+      "tag": "Tag",
+      "tagGroup": "Tag Group"
     },
     "imageNode": {
       "title": "Image Node",

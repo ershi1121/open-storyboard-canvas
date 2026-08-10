@@ -21,6 +21,8 @@ export const DEFAULT_NODE_DISPLAY_NAME: Record<CanvasNodeType, string> = {
   [CANVAS_NODE_TYPES.storyboardGen]: '分镜生成',
   [CANVAS_NODE_TYPES.panorama]: '全景图',
   [CANVAS_NODE_TYPES.blueprint]: '导演台',
+  [CANVAS_NODE_TYPES.tag]: '标签',
+  [CANVAS_NODE_TYPES.tagGroup]: '标签组',
 };
 
 export const EXPORT_RESULT_DISPLAY_NAME: Record<ExportImageNodeResultKind, string> = {

@@ -12,6 +12,8 @@ export const CANVAS_NODE_TYPES = {
   textAnnotation: 'textAnnotationNode',
   jsonCard: 'jsonCardNode',
   group: 'groupNode',
+  tag: 'tagNode',
+  tagGroup: 'tagGroupNode', // ← 新增：标签组节点类型
   storyboardSplit: 'storyboardNode',
   storyboardGen: 'storyboardGenNode',
   panorama: 'panoramaNode',
@@ -22,6 +24,7 @@ export type CanvasNodeType = (typeof CANVAS_NODE_TYPES)[keyof typeof CANVAS_NODE
 
 export const DEFAULT_ASPECT_RATIO = '1:1';
 export const AUTO_REQUEST_ASPECT_RATIO = 'auto';
+
 export const DEFAULT_NODE_WIDTH = 220;
 export const EXPORT_RESULT_NODE_DEFAULT_WIDTH = 384;
 export const EXPORT_RESULT_NODE_LAYOUT_HEIGHT = 288;
@@ -29,6 +32,8 @@ export const EXPORT_RESULT_NODE_MIN_WIDTH = 168;
 export const EXPORT_RESULT_NODE_MIN_HEIGHT = 168;
 
 export const IMAGE_SIZES = ['0.5K', '1K', '2K', '4K'] as const;
+export type ImageSize = (typeof IMAGE_SIZES)[number];
+
 export const IMAGE_ASPECT_RATIOS = [
   '1:1',
   '16:9',
@@ -37,8 +42,6 @@ export const IMAGE_ASPECT_RATIOS = [
   '3:4',
   '21:9',
 ] as const;
-
-export type ImageSize = (typeof IMAGE_SIZES)[number];
 
 export interface NodeDisplayData {
   displayName?: string;
@@ -90,6 +93,26 @@ export interface ExportImageNodeData extends NodeImageData {
 
 export interface GroupNodeData extends NodeDisplayData {
   label: string;
+  [key: string]: unknown;
+}
+
+// ← 新增：TagNodeData 接口
+export interface TagNodeData extends NodeDisplayData {
+  label: string;
+  sourceId?: string | null;
+  color?: string | null;
+  [key: string]: unknown;
+}
+
+// ← 新增：TagGroupNodeData 接口 (标签组)
+export interface TagGroupNodeData extends NodeDisplayData {
+  sources: Array<{
+    edgeId: string;
+    sourceNodeId: string;
+    customLabel: string;
+    enabled: boolean;
+  }>;
+  color?: string | null;
   [key: string]: unknown;
 }
 
@@ -152,8 +175,8 @@ export interface ImageEditNodeData extends NodeImageData {
    *  template is prepended to the user prompt on submit. Null/undefined = no
    *  module selected (normal text-to-image path). */
   selectedFunctionChip?: string | null;
-  /** Optional settings prompt preset selected from the node toolbar. Mutually
-   *  exclusive with selectedFunctionChip and resolved by id at submit time. */
+  /* Optional settings prompt preset selected from the node toolbar. Mutually
+   * exclusive with selectedFunctionChip and resolved by id at submit time. */
   selectedPromptPresetId?: string | null;
 }
 
@@ -448,11 +471,11 @@ export interface BlueprintActionPose {
   rightKnee?: { x?: number };
   head?: { x?: number; y?: number; z?: number };
   torso?: { x?: number };
-  /** Whole-figure scale Y (lets squats / stretches survive even custom poses). */
+  /* Whole-figure scale Y (lets squats / stretches survive even custom poses). */
   scaleY?: number;
-  /** Vertical offset on the whole figure (sit / jump / lie). */
+  /* Vertical offset on the whole figure (sit / jump / lie). */
   groupY?: number;
-  /** Whole-figure X rotation in radians (lie poses). */
+  /* Whole-figure X rotation in radians (lie poses). */
   groupRotX?: number;
 }
 
@@ -573,14 +596,14 @@ export interface BlueprintNodeData extends NodeDisplayData {
   aspectFrame?: DirectorStudioAspectFrame;
   screenshotResolution?: DirectorStudioScreenshotResolution;
   themeColor?: string;
-  /** PNG dataURL of the latest user-triggered 3D snapshot, used as a reference
+  /* PNG dataURL of the latest user-triggered 3D snapshot, used as a reference
    *  image at generation submit time. */
   snapshotUrl?: string | null;
-  /** Recent Director Studio screenshots, stored oldest to newest. */
+  /* Recent Director Studio screenshots, stored oldest to newest. */
   snapshotHistory?: string[];
   directorStudioProjects?: DirectorStudioProjectRecord[];
   activeDirectorStudioProjectId?: string | null;
-  /** One-shot UI flag used by Director Studio shortcuts. Cleared after the
+  /* One-shot UI flag used by Director Studio shortcuts. Cleared after the
    *  fullscreen shell opens so saved projects do not auto-open on reload. */
   openDirectorStudioOnCreate?: boolean;
   [key: string]: unknown;
@@ -594,6 +617,8 @@ export type CanvasNodeData =
   | TextAnnotationNodeData
   | JsonCardNodeData
   | GroupNodeData
+  | TagNodeData
+  | TagGroupNodeData // ← 新增：标签组数据类型
   | ImageEditNodeData
   | AiVideoNodeData
   | AiTextNodeData
@@ -699,6 +724,20 @@ export function isGroupNode(
   return node?.type === CANVAS_NODE_TYPES.group;
 }
 
+// ← 新增：isTagNode 类型守卫
+export function isTagNode(
+  node: CanvasNode | null | undefined
+): node is Node<TagNodeData, typeof CANVAS_NODE_TYPES.tag> {
+  return node?.type === CANVAS_NODE_TYPES.tag;
+}
+
+// ← 新增：isTagGroupNode 类型守卫
+export function isTagGroupNode(
+  node: CanvasNode | null | undefined
+): node is Node<TagGroupNodeData, typeof CANVAS_NODE_TYPES.tagGroup> {
+  return node?.type === CANVAS_NODE_TYPES.tagGroup;
+}
+
 export function isTextAnnotationNode(
   node: CanvasNode | null | undefined
 ): node is Node<TextAnnotationNodeData, typeof CANVAS_NODE_TYPES.textAnnotation> {
@@ -739,18 +778,14 @@ export function nodeHasImage(node: CanvasNode | null | undefined): boolean {
   if (!node) {
     return false;
   }
-
   if (isUploadNode(node) || isImageEditNode(node) || isExportImageNode(node)) {
     return Boolean(node.data.imageUrl);
   }
-
   if (isStoryboardSplitNode(node)) {
     return node.data.frames.some((frame) => Boolean(frame.imageUrl));
   }
-
   if (isStoryboardGenNode(node)) {
     return Boolean(node.data.imageUrl);
   }
-
   return false;
 }

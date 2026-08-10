@@ -218,3 +218,45 @@ export function removeTextRange(
     nextCursor: safeStart,
   };
 }
+
+/**
+ * 🆕 新增：把 prompt 文本里"查无对应引用"的 @token 清理掉。
+ *
+ * 场景：标签组里禁用某个源之后，之前手动插入到 prompt 里的那个
+ * 字面 @token（比如 "@图1"）就成了死文字——它不再对应任何实际
+ * 会被发给模型的引用。这个函数会找出 prompt 里所有引用 token，
+ * 凡是不在 currentValidTokens 里的，整块删掉（连同 insertReferenceToken
+ * 当初帮它补的前导/尾随空格一起清理，避免留下多余空格）。
+ *
+ * 用法（配合 collectInputReferences 一起调用）：
+ *   const validTokens = new Set(
+ *     collectInputReferences(consumerId, nodes, edges).map(r => r.token)
+ *   );
+ *   const cleaned = pruneDeadReferenceTokens(prompt, validTokens);
+ */
+export function pruneDeadReferenceTokens(
+  text: string,
+  currentValidTokens: Set<string>,
+  maxReferenceCount?: number
+): string {
+  const tokenRanges = findTokenRanges(text, maxReferenceCount);
+  if (tokenRanges.length === 0) {
+    return text;
+  }
+
+  const tokens = findReferenceTokens(text, maxReferenceCount);
+
+  let next = text;
+  // 从后往前删，避免前面的删除操作导致后面 token 的下标失效
+  for (let i = tokenRanges.length - 1; i >= 0; i -= 1) {
+    const tokenText = tokens[i]?.token;
+    if (tokenText && currentValidTokens.has(tokenText)) {
+      continue;
+    }
+    const range = tokenRanges[i];
+    const { nextText } = removeTextRange(next, { start: range.blockStart, end: range.blockEnd });
+    next = nextText;
+  }
+
+  return next;
+}

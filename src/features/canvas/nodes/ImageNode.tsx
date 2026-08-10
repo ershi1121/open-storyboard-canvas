@@ -311,7 +311,7 @@ export const ImageNode = memo(({ id, data, selected, type, width, height }: Imag
 
         {generationWarning && data.imageUrl ? (
           <div
-            className="pointer-events-auto absolute inset-x-2 bottom-2 z-10 flex max-h-16 items-start gap-1.5 overflow-y-auto rounded-md border border-amber-300/45 bg-amber-950/85 px-2 py-1.5 text-[11px] leading-4 text-amber-100 shadow-lg backdrop-blur-sm"
+            className="nodrag pointer-events-auto absolute inset-x-2 bottom-2 z-10 flex max-h-16 items-start gap-1.5 overflow-y-auto rounded-md border border-amber-300/45 bg-amber-950/85 px-2 py-1.5 text-[11px] leading-4 text-amber-100 shadow-lg backdrop-blur-sm"
             role="status"
             title={t('node.imageNode.providerWarning')}
           >
