@@ -212,7 +212,7 @@ export function Canvas() {
     setPreviewConnectionVisual(null);
   }, [setPendingConnectStart, setPreviewConnectionVisual]);
 
-  const selection = useCanvasSelection({ wrapperRef, nodesRef });
+  const selection = useCanvasSelection({ nodesRef });
   const flowHandlers = useCanvasFlowHandlers({
     wrapperRef,
     nodes,
