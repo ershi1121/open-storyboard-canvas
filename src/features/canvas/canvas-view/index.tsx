@@ -62,6 +62,14 @@ import { EmptyHint } from './components/EmptyHint';
 import { BatchToolbar } from './components/BatchToolbar';
 import { ContextMenu } from './components/ContextMenu';
 
+/** 标签胶囊类型集合：间接取值，避免字面量比较报错 */
+const NODE_TYPE_RECORD = CANVAS_NODE_TYPES as unknown as Record<string, string>;
+const TAG_CAPSULE_TYPES = new Set<string>(
+  [NODE_TYPE_RECORD.tag, NODE_TYPE_RECORD.tagGroup].filter(
+    (t): t is string => typeof t === 'string' && t.length > 0,
+  ),
+);
+
 // 🧲 吸附参考线（zoom 补偿线宽，屏幕恒定 1px 细线）
 function SnapGuides({ guides }: { guides: SnapGuide[] }) {
   const { zoom } = useViewport();
@@ -103,6 +111,14 @@ export function Canvas() {
   const [menuAllowedTypes, setMenuAllowedTypes] = useState<CanvasNodeType[] | undefined>(undefined);
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
+  // 🚨 彻底修复：胶囊退出 RF 内部选择体系（selectable: false）
+  const flowNodes = useMemo(
+    () =>
+      nodes.map((node) =>
+        TAG_CAPSULE_TYPES.has(node.type) ? { ...node, selectable: false } : node,
+      ),
+    [nodes],
+  );
   const addNode = useCanvasStore((state) => state.addNode);
   const connectNodes = useCanvasStore((state) => state.onConnect);
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
@@ -212,7 +228,7 @@ export function Canvas() {
     setPreviewConnectionVisual(null);
   }, [setPendingConnectStart, setPreviewConnectionVisual]);
 
-  const selection = useCanvasSelection({ wrapperRef, nodesRef });
+  const selection = useCanvasSelection({ nodesRef });
   const flowHandlers = useCanvasFlowHandlers({
     wrapperRef,
     nodes,
@@ -442,7 +458,7 @@ export function Canvas() {
       onAuxClick={mouseActions.handleCanvasAuxClick}
     >
       <ReactFlow
-        nodes={nodes}
+        nodes={flowNodes}
         edges={edges}
         isValidConnection={isValidConnection} // 👈 新增这一行
         // 🧲 修改1：吸附逻辑先处理 changes，再交给原有处理逻辑
@@ -495,8 +511,7 @@ export function Canvas() {
         panOnDrag={panOnDragButtons.length > 0 ? panOnDragButtons : false}
         selectionOnDrag={false}
         selectionMode={SelectionMode.Partial}
-        multiSelectionKeyCode={['Control', 'Meta']}
-        selectionKeyCode={['Control', 'Meta']}
+        selectionKeyCode={null}
         deleteKeyCode={null}
         onlyRenderVisibleElements
         zoomOnDoubleClick={false}

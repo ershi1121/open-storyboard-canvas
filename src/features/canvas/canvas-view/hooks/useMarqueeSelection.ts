@@ -55,9 +55,13 @@ export function useMarqueeSelection({
     };
 
     const handlePointerDown = (event: PointerEvent) => {
+      // 🚀 Ctrl/Meta + 左键 也启动自定义选框（与右键拖拽同款），
+      // 胶囊是 selectable:false，RF 内置选框看不见它，必须走自定义选框才能选中/打组
+      const isCtrlMarquee = event.button === 0 && (event.ctrlKey || event.metaKey);
       if (
         !isCanvasMouseButton(event.button) ||
-        getCanvasMouseAction(canvasMouseBindings, event.button, 'drag') !== 'selectionBox' ||
+        (getCanvasMouseAction(canvasMouseBindings, event.button, 'drag') !== 'selectionBox' &&
+          !isCtrlMarquee) ||
         shouldIgnoreCanvasMarqueeTarget(event.target)
       ) {
         return;
@@ -66,7 +70,7 @@ export function useMarqueeSelection({
       if (event.button === 0 && startNodeId) {
         return;
       }
-      if (event.button !== 0) {
+      if (event.button !== 0 || isCtrlMarquee) {
         event.preventDefault();
         event.stopPropagation();
         try {

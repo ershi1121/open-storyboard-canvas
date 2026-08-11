@@ -1,14 +1,93 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import type { NodeChange } from '@xyflow/react';
+import { useReactFlow, type NodeChange } from '@xyflow/react';
 import { useCanvasStore } from '@/stores/canvasStore';
-import { CANVAS_NODE_TYPES, type CanvasNode } from '@/features/canvas/domain/canvasNodes';
+import {
+  CANVAS_NODE_TYPES,
+  DEFAULT_NODE_WIDTH,
+  type CanvasNode,
+} from '@/features/canvas/domain/canvasNodes';
 import { CANVAS_BATCH_TRIGGER_TYPES } from '../constants';
 import type { CanvasMarqueeGesture } from '../types';
 import { escapeNodeDataId, rectsOverlap } from '../utils/geometry';
 
 interface UseCanvasSelectionOptions {
-  wrapperRef: { current: HTMLDivElement | null };
   nodesRef: { current: CanvasNode[] };
+}
+
+type ScreenRect = { left: number; top: number; right: number; bottom: number };
+
+/** 标签胶囊类型集合：间接取值，避免字面量比较报错 */
+const NODE_TYPE_RECORD = CANVAS_NODE_TYPES as unknown as Record<string, string>;
+const TAG_CAPSULE_TYPES = new Set<string>(
+  [NODE_TYPE_RECORD.tag, NODE_TYPE_RECORD.tagGroup].filter(
+    (t): t is string => typeof t === 'string' && t.length > 0,
+  ),
+);
+
+function isFullyContainedBy(
+  inner: ScreenRect,
+  outer: { left: number; top: number; right: number; bottom: number },
+): boolean {
+  return (
+    outer.left <= inner.left &&
+    outer.top <= inner.top &&
+    outer.right >= inner.right &&
+    outer.bottom >= inner.bottom
+  );
+}
+
+/** 胶囊命中矩形：读 DOM 真实屏幕矩形，store 几何漂移也不受影响 */
+function getTagCapsuleScreenRect(node: CanvasNode): ScreenRect | null {
+  if (typeof document === 'undefined') return null;
+  const el = document.querySelector(
+    `.react-flow__node[data-id="${escapeNodeDataId(node.id)}"]`,
+  );
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+}
+
+/** 普通节点命中矩形（store 几何，含父链累加） */
+function getNodeScreenRect(
+  node: CanvasNode,
+  nodeMap: Map<string, CanvasNode>,
+  flowToScreenPosition: (point: { x: number; y: number }) => { x: number; y: number },
+): ScreenRect {
+  const width =
+    typeof node.measured?.width === 'number'
+      ? node.measured.width
+      : typeof node.style?.width === 'number'
+        ? node.style.width
+        : DEFAULT_NODE_WIDTH;
+  const height =
+    typeof node.measured?.height === 'number'
+      ? node.measured.height
+      : typeof node.style?.height === 'number'
+        ? node.style.height
+        : 200;
+
+  let flowX = node.position.x;
+  let flowY = node.position.y;
+  let parentId = node.parentId;
+  const visited = new Set<string>();
+  while (parentId && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = nodeMap.get(parentId);
+    if (!parent) break;
+    flowX += parent.position.x;
+    flowY += parent.position.y;
+    parentId = parent.parentId;
+  }
+
+  const topLeft = flowToScreenPosition({ x: flowX, y: flowY });
+  const bottomRight = flowToScreenPosition({ x: flowX + width, y: flowY + height });
+  return {
+    left: Math.min(topLeft.x, bottomRight.x),
+    top: Math.min(topLeft.y, bottomRight.y),
+    right: Math.max(topLeft.x, bottomRight.x),
+    bottom: Math.max(topLeft.y, bottomRight.y),
+  };
 }
 
 /**
@@ -29,7 +108,8 @@ function useStableStringArray(input: string[]): string[] {
   }, [input]);
 }
 
-export function useCanvasSelection({ wrapperRef, nodesRef }: UseCanvasSelectionOptions) {
+export function useCanvasSelection({ nodesRef }: UseCanvasSelectionOptions) {
+  const { flowToScreenPosition } = useReactFlow();
   const applyNodesChange = useCanvasStore((state) => state.onNodesChange);
   const setSelectedNode = useCanvasStore((state) => state.setSelectedNode);
   const selectedNodeId = useCanvasStore((state) => state.selectedNodeId);
@@ -39,13 +119,13 @@ export function useCanvasSelection({ wrapperRef, nodesRef }: UseCanvasSelectionO
 
   const rawSelectedNodeIds = useMemo(
     () => nodes.filter((node) => Boolean(node.selected)).map((node) => node.id),
-    [nodes]
+    [nodes],
   );
   const selectedNodeIds = useStableStringArray(rawSelectedNodeIds);
 
   const selectedNodes = useMemo(
     () => nodes.filter((node) => selectedNodeIds.includes(node.id)),
-    [nodes, selectedNodeIds]
+    [nodes, selectedNodeIds],
   );
 
   const rawSelectedGroupNodeIds = useMemo(
@@ -53,7 +133,7 @@ export function useCanvasSelection({ wrapperRef, nodesRef }: UseCanvasSelectionO
       selectedNodes
         .filter((node) => node.type === CANVAS_NODE_TYPES.group)
         .map((node) => node.id),
-    [selectedNodes]
+    [selectedNodes],
   );
   const selectedGroupNodeIds = useStableStringArray(rawSelectedGroupNodeIds);
 
@@ -102,11 +182,11 @@ export function useCanvasSelection({ wrapperRef, nodesRef }: UseCanvasSelectionO
           id: node.id,
           type: 'select',
           selected: node.id === nodeId,
-        }))
+        })),
       );
       setSelectedNode(nodeId);
     },
-    [applyNodesChange, nodesRef, setSelectedNode]
+    [applyNodesChange, nodesRef, setSelectedNode],
   );
 
   const selectNodesInMarquee = useCallback(
@@ -118,36 +198,43 @@ export function useCanvasSelection({ wrapperRef, nodesRef }: UseCanvasSelectionO
         bottom: Math.max(gesture.startClientY, gesture.currentClientY),
       };
 
-      const nextSelectedIds = nodesRef.current
+      const allNodes = nodesRef.current;
+      const nodeMap = new Map(allNodes.map((node) => [node.id, node] as const));
+
+      const nextSelectedIds = allNodes
         .filter((node) => {
-          const nodeElement = wrapperRef.current?.querySelector<HTMLElement>(
-            `.react-flow__node[data-id="${escapeNodeDataId(node.id)}"]`
-          );
-          if (!nodeElement) {
-            return false;
+          // ===== 标签胶囊：DOM 真实矩形，碰到就选、碰不到不选 =====
+          // 幽灵选中已由「DOM 矩形」+「selectable:false」双重堵死，无需额外豁免规则
+          if (TAG_CAPSULE_TYPES.has(node.type)) {
+            const capsuleRect = getTagCapsuleScreenRect(node);
+            if (!capsuleRect) return false;
+            return rectsOverlap(selectionClientRect, capsuleRect);
           }
-          const nodeRect = nodeElement.getBoundingClientRect();
-          return rectsOverlap(selectionClientRect, {
-            left: nodeRect.left,
-            top: nodeRect.top,
-            right: nodeRect.right,
-            bottom: nodeRect.bottom,
-          });
+
+          // ===== 普通节点 / 组节点：沿用 store 几何 =====
+          const nodeRect = getNodeScreenRect(node, nodeMap, flowToScreenPosition);
+
+          // 关键补丁：组节点必须被选区"完全包含"才选中，
+          // 避免小选区擦到大组的半透明背景就吞掉整组
+          if (node.type === CANVAS_NODE_TYPES.group) {
+            return isFullyContainedBy(nodeRect, selectionClientRect);
+          }
+
+          return rectsOverlap(selectionClientRect, nodeRect);
         })
         .map((node) => node.id);
 
       const nextSelectedSet = new Set(nextSelectedIds);
-      const selectionChanges: NodeChange<CanvasNode>[] = nodesRef.current.map((node) => ({
+      const selectionChanges: NodeChange<CanvasNode>[] = allNodes.map((node) => ({
         id: node.id,
         type: 'select',
         selected: nextSelectedSet.has(node.id),
       }));
-
       applyNodesChange(selectionChanges);
       setSelectedNode(nextSelectedIds.length === 1 ? nextSelectedIds[0] : null);
       return nextSelectedIds;
     },
-    [applyNodesChange, nodesRef, setSelectedNode, wrapperRef]
+    [applyNodesChange, flowToScreenPosition, nodesRef, setSelectedNode],
   );
 
   useEffect(() => {
