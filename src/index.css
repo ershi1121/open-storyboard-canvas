@@ -17,6 +17,12 @@
   --text-muted-rgb: 102 102 102;
   --accent: #3B82F6;
   --accent-rgb: 59 130 246;
+  --edge-flow-rgb: 245 158 11;                 /* 连接态拖尾：琥珀金 */
+  --edge-flow-core-rgb: 255 244 224;           /* 连接态亮核：暖白 */
+  --edge-flow-processing-rgb: 16 185 129;      /* 生成态拖尾：翡翠绿 */
+  --edge-flow-processing-core-rgb: 236 253 240;/* 生成态亮核：薄荷白 */
+  --edge-flow-failed-rgb: 244 63 94;           /* 失败态拖尾：玫红 */
+  --edge-flow-failed-core-rgb: 255 228 230;    /* 失败态亮核：粉白 */
   --ui-surface-panel: rgba(255, 255, 255, 0.96);
   --ui-surface-field: rgba(248, 250, 252, 0.95);
   --ui-border-soft: rgba(15, 23, 42, 0.12);
@@ -73,6 +79,12 @@
   --text-muted: #888888;
   --text-muted-rgb: 136 136 136;
   --accent-rgb: 59 130 246;
+  --edge-flow-rgb: 251 191 36;
+  --edge-flow-core-rgb: 254 249 235;
+  --edge-flow-processing-rgb: 52 211 153;
+  --edge-flow-processing-core-rgb: 209 250 229;
+  --edge-flow-failed-rgb: 251 113 133;
+  --edge-flow-failed-core-rgb: 255 228 230;
   --ui-surface-panel: rgb(26, 26, 26);
   --ui-surface-field: rgba(10, 10, 12, 0.92);
   --ui-border-soft: rgba(255, 255, 255, 0.14);
@@ -390,6 +402,62 @@ html[data-platform='macos'] #root {
   .canvas-processing-edge__flow {
     animation: none;
   }
+}
+
+/* ============================================
+   连线流动光带：亮核在前 + 宽光晕拖尾，贴路径（拐弯不生硬）
+   连接=琥珀金 / 生成=翡翠绿 / 失败=玫红
+   ============================================ */
+@keyframes edge-flow-glow { from { stroke-dashoffset: 0; }   to { stroke-dashoffset: -360; } }
+@keyframes edge-flow-core { from { stroke-dashoffset: -10; } to { stroke-dashoffset: -370; } }
+
+.canvas-edge-flow { pointer-events: none; }
+
+.edge-flow-streak {
+  fill: none;
+  stroke-linecap: round;   /* 圆头 = 参考图那种光斑端头 */
+  pointer-events: none;
+}
+
+/* 外层光晕：长 160px、粗、模糊 → 拖尾感 */
+.edge-flow-streak--glow {
+  stroke: rgb(var(--edge-flow-rgb) / 0.5);
+  stroke-width: 7;
+  stroke-dasharray: 108 252;      /* 光带长 108，间隔 252，周期 360 */
+  filter: blur(4px);
+  animation: edge-flow-glow 1.6s linear infinite;
+}
+
+/* 内层亮核：短一点、领先 50px，亮核在前、光晕拖后 = 由大到小的彗尾 */
+.edge-flow-streak--core {
+  stroke: rgb(var(--edge-flow-core-rgb) / 0.95);
+  stroke-width: 2.8;
+  stroke-dasharray: 88 272;      /* 周期同样 360，保证同步 */
+  filter: drop-shadow(0 0 6px rgb(var(--edge-flow-rgb) / 0.9));
+  animation: edge-flow-core 1.6s linear infinite;
+}
+
+/* 生成中：翡翠绿 */
+.canvas-edge-flow--processing .edge-flow-streak--glow { stroke: rgb(var(--edge-flow-processing-rgb) / 0.5); }
+.canvas-edge-flow--processing .edge-flow-streak--core {
+  stroke: rgb(var(--edge-flow-processing-core-rgb) / 0.95);
+  filter: drop-shadow(0 0 6px rgb(var(--edge-flow-processing-rgb) / 0.9));
+}
+
+/* 失败：玫红 */
+.canvas-edge-flow--failed .edge-flow-streak--glow { stroke: rgb(var(--edge-flow-failed-rgb) / 0.5); }
+.canvas-edge-flow--failed .edge-flow-streak--core {
+  stroke: rgb(var(--edge-flow-failed-core-rgb) / 0.95);
+  filter: drop-shadow(0 0 6px rgb(var(--edge-flow-failed-rgb) / 0.9));
+}
+
+/* 兜底：万一还有旧代码渲染蓝色处理光，强制改绿，彻底去蓝 */
+.canvas-processing-edge__flow {
+  stroke: rgb(var(--edge-flow-processing-rgb) / 1) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas-edge-flow { display: none; }
 }
 
 /* ============================================

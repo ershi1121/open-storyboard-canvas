@@ -6,8 +6,11 @@ import { DEFAULT_NODE_WIDTH, type CanvasNode } from '@/features/canvas/domain/ca
 
 const SNAP_ENTER_PX = 14;
 const SNAP_RELEASE_PX = 40;
-const CROSS_PROXIMITY_PX = 8;   // ← 从 60 改为 8：只有几乎贴着才触发，消除同水平线远距离拖拽感
+const CROSS_PROXIMITY_PX = 6;   // 只有几乎贴着才触发，消除同水平线远距离拖拽感
 const FOLLOW_GAP = 1;
+
+/** 磁吸总开关持久化 key */
+const SNAP_ENABLED_STORAGE_KEY = 'canvas-magnetic-snap-enabled';
 
 export interface SnapGuide {
   id: string;
@@ -31,6 +34,16 @@ type SnapEdge = 'left' | 'right' | 'top' | 'bottom';
 interface AxisLock {
   edge: SnapEdge;
   line: number;
+}
+
+/** 读取本地持久化的开关状态，默认开启 */
+function readSnapEnabledStorage(): boolean {
+  try {
+    const raw = window.localStorage.getItem(SNAP_ENABLED_STORAGE_KEY);
+    return raw === null ? true : raw !== '0';
+  } catch {
+    return true;
+  }
 }
 
 function getNodeRect(node: CanvasNode): Rect {
@@ -156,6 +169,8 @@ function resolveAxisSnap(
 export function useCanvasSnapFollow() {
   const { getZoom } = useReactFlow();
   const [guides, setGuides] = useState<SnapGuide[]>([]);
+  /** 磁吸总开关（localStorage 持久化，默认开） */
+  const [snapEnabled, setSnapEnabledState] = useState<boolean>(readSnapEnabledStorage);
   const lastGuideKeyRef = useRef('');
   const lockRef = useRef<{ x: AxisLock | null; y: AxisLock | null }>({ x: null, y: null });
 
@@ -167,9 +182,26 @@ export function useCanvasSnapFollow() {
 
   const nodes = useCanvasStore((s) => s.nodes);
 
+  /** 开关 setter：关闭时立即清掉参考线、锁定和拖拽态 */
+  const setSnapEnabled = useCallback((next: boolean) => {
+    setSnapEnabledState(next);
+    try {
+      window.localStorage.setItem(SNAP_ENABLED_STORAGE_KEY, next ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+    if (!next) {
+      dragRef.current = null;
+      lockRef.current = { x: null, y: null };
+      lastGuideKeyRef.current = '';
+      setGuides([]);
+    }
+  }, []);
+
   const onNodeDragStart = useCallback(
     (event: ReactMouseEvent, node: CanvasNode) => {
-      if (event.altKey) {
+      // 总开关关闭：不吸附、不编组跟随
+      if (event.altKey || !snapEnabled) {
         dragRef.current = null;
         return;
       }
@@ -186,7 +218,7 @@ export function useCanvasSnapFollow() {
         snapEnabled: !event.shiftKey,
       };
     },
-    [nodes]
+    [nodes, snapEnabled]
   );
 
   const onNodeDragStop = useCallback(() => {
@@ -311,6 +343,8 @@ export function useCanvasSnapFollow() {
 
   return {
     guides,
+    snapEnabled,       // 供 UI 显示开关状态
+    setSnapEnabled,    // 供 UI 切换
     processNodeChanges,
     onNodeDragStart,
     onNodeDragStop,
