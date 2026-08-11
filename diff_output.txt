@@ -1,0 +1,476 @@
+﻿diff --git a/src/features/canvas/canvas-view/components/SnapGuides.tsx b/src/features/canvas/canvas-view/components/SnapGuides.tsx
+index 15aae6e..733acdf 100644
+--- a/src/features/canvas/canvas-view/components/SnapGuides.tsx
++++ b/src/features/canvas/canvas-view/components/SnapGuides.tsx
+@@ -10,16 +10,11 @@ export function SnapGuides({ guides }: { guides: SnapGuide[] }) {
+   return (
+     <ViewportPortal>
+       {guides.map((g) => {
+-        const isSnapped = g.state === 'snapped';
+-        // 鍚镐綇鏃讹細娲嬬孩鑹诧紝鍔犵矖锛屽甫鍙戝厜闃村奖
+-        // 鍚稿叆涓細澶╄摑鑹诧紝姝ｅ父绮楃粏
+-        const color = isSnapped ? '#f0abfc' : '#38bdf8'; 
+-        const thickness = isSnapped ? baseThickness * 2.5 : baseThickness;
+-        const shadow = isSnapped ? `drop-shadow(0 0 4px ${color})` : 'none';
+-
+-        const style = g.orientation === 'vertical' 
+-          ? { left: g.position, top: -100000, width: thickness, height: 200000, backgroundColor: color, filter: shadow }
+-          : { top: g.position, left: -100000, height: thickness, width: 200000, backgroundColor: color, filter: shadow };
++        const color = '#f0abfc';
++        const thickness = baseThickness;
++        const style = g.orientation === 'vertical'
++          ? { left: g.position, top: -100000, width: thickness, height: 200000, backgroundColor: color }
++          : { top: g.position, left: -100000, height: thickness, width: 200000, backgroundColor: color };
+ 
+         return (
+           <div
+diff --git a/src/features/canvas/canvas-view/hooks/useCanvasSnapFollow.ts b/src/features/canvas/canvas-view/hooks/useCanvasSnapFollow.ts
+index f69eb72..90b4fed 100644
+--- a/src/features/canvas/canvas-view/hooks/useCanvasSnapFollow.ts
++++ b/src/features/canvas/canvas-view/hooks/useCanvasSnapFollow.ts
+@@ -202,7 +202,8 @@ export function useCanvasSnapFollow() {
+       if (!drag) return changes;
+ 
+       const posChanges = changes.filter(
+-        (c) => c.type === 'position' && (c as any).position !== undefined
++        (c): c is Extract<NodeChange<CanvasNode>, { type: 'position' }> =>
++          c.type === 'position' && (c as any).position !== undefined
+       );
+       if (posChanges.length === 0) return changes;
+ 
+@@ -210,9 +211,9 @@ export function useCanvasSnapFollow() {
+       const draggedChange =
+         posChanges.find((c) => c.id === drag.nodeId) ?? posChanges[0];
+ 
+-      if (!dragged || !(draggedChange as any).position) return changes;
++      if (!dragged || !draggedChange.position) return changes;
+ 
+-      const proposedPos = (draggedChange as any).position as { x: number; y: number };
++      const proposedPos = draggedChange.position;
+ 
+       let dx = 0;
+       let dy = 0;
+@@ -282,9 +283,7 @@ export function useCanvasSnapFollow() {
+ 
+       if (deltaX === 0 && deltaY === 0) return modified;
+ 
+-      const existingPosIds = new Set(
+-        changes.filter((c) => c.type === 'position').map((c) => c.id)
+-      );
++      const existingPosIds = new Set(posChanges.map((c) => c.id));
+ 
+       const followChanges: any[] = [];
+ 
+diff --git a/src/features/canvas/domain/nodeDisplay.ts b/src/features/canvas/domain/nodeDisplay.ts
+index 1c25415..3b5b465 100644
+--- a/src/features/canvas/domain/nodeDisplay.ts
++++ b/src/features/canvas/domain/nodeDisplay.ts
+@@ -21,6 +21,8 @@ export const DEFAULT_NODE_DISPLAY_NAME: Record<CanvasNodeType, string> = {
+   [CANVAS_NODE_TYPES.storyboardGen]: '鍒嗛暅鐢熸垚',
+   [CANVAS_NODE_TYPES.panorama]: '鍏ㄦ櫙鍥?,
+   [CANVAS_NODE_TYPES.blueprint]: '瀵兼紨鍙?,
++  [CANVAS_NODE_TYPES.tag]: '鏍囩',
++  [CANVAS_NODE_TYPES.tagGroup]: '鏍囩缁?,
+ };
+ 
+ export const EXPORT_RESULT_DISPLAY_NAME: Record<ExportImageNodeResultKind, string> = {
+diff --git a/src/features/canvas/hooks/useCanvasSnapFollow.ts b/src/features/canvas/hooks/useCanvasSnapFollow.ts
+index bdac5a2..c538fc3 100644
+--- a/src/features/canvas/hooks/useCanvasSnapFollow.ts
++++ b/src/features/canvas/hooks/useCanvasSnapFollow.ts
+@@ -1,5 +1,6 @@
+ import { useCallback, useRef, useState } from 'react';
+-import { ViewportPortal, useReactFlow, type NodeChange } from '@xyflow/react';
++import type { MouseEvent as ReactMouseEvent } from 'react';
++import { useReactFlow, type NodeChange } from '@xyflow/react';
+ import { useCanvasStore } from '@/stores/canvasStore';
+ import { DEFAULT_NODE_WIDTH, type CanvasNode } from '@/features/canvas/domain/canvasNodes';
+ 
+@@ -51,12 +52,11 @@ export function useCanvasSnapFollow() {
+   const [guides, setGuides] = useState<SnapGuide[]>([]);
+   const lastGuideKeyRef = useRef('');
+   const dragRef = useRef<{ nodeId: string; cluster: Set<string>; autoSelected: string[] } | null>(null);
+-  
+   const nodes = useCanvasStore((s) => s.nodes);
+   const applyNodesChange = useCanvasStore((s) => s.onNodesChange);
+ 
+   /* 鎷栧姩寮€濮嬶細缂栫粍璺熼殢 (閬垮紑 Alt 鎷栧姩澶嶅埗) */
+-  const onNodeDragStart = useCallback((event: React.MouseEvent, node: CanvasNode) => {
++  const onNodeDragStart = useCallback((event: ReactMouseEvent, node: CanvasNode) => {
+     if (event.altKey) {
+       dragRef.current = null; // Alt 閿敱鍘熸湁鐨?handleNodeDragStart 鎺ョ
+       return;
+@@ -64,7 +64,7 @@ export function useCanvasSnapFollow() {
+     const cluster = collectFollowCluster(node.id, nodes);
+     const autoSelected: string[] = [];
+     if (cluster.size > 1) {
+-      const changes: NodeChange[] = [];
++      const changes: Array<Extract<NodeChange<CanvasNode>, { type: 'select' }>> = [];
+       for (const id of cluster) {
+         const n = nodes.find((nn) => nn.id === id);
+         if (n && !n.selected) {
+@@ -81,7 +81,9 @@ export function useCanvasSnapFollow() {
+   const onNodeDragStop = useCallback(() => {
+     const drag = dragRef.current;
+     if (drag?.autoSelected.length) {
+-      applyNodesChange(drag.autoSelected.map((id) => ({ type: 'select', id, selected: false } as NodeChange)));
++      applyNodesChange(
++        drag.autoSelected.map((id) => ({ type: 'select', id, selected: false }) as Extract<NodeChange<CanvasNode>, { type: 'select' }>)
++      );
+     }
+     dragRef.current = null;
+     lastGuideKeyRef.current = '';
+@@ -92,21 +94,19 @@ export function useCanvasSnapFollow() {
+   const processNodeChanges = useCallback((changes: NodeChange<CanvasNode>[]) => {
+     const drag = dragRef.current;
+     if (!drag) return changes;
+-
+-    const posChanges = changes.filter((c) => c.type === 'position' && (c as any).dragging && (c as any).position);
++    const posChanges = changes.filter(
++      (c): c is Extract<NodeChange<CanvasNode>, { type: 'position' }> =>
++        c.type === 'position' && (c as any).dragging && typeof (c as any).position === 'object'
++    );
+     if (posChanges.length === 0) return changes;
+-
+     const dragged = nodes.find((n) => n.id === drag.nodeId);
+     const draggedChange = posChanges.find((c) => c.id === drag.nodeId) ?? posChanges[0];
+-    if (!dragged || !(draggedChange as any).position) return changes;
+-
+-    const dRect = getNodeRect({ ...dragged, position: (draggedChange as any).position } as CanvasNode);
++    if (!dragged || !draggedChange.position) return changes;
++    const dRect = getNodeRect({ ...dragged, position: draggedChange.position } as CanvasNode);
+     const targets = nodes.filter((n) => !drag.cluster.has(n.id)).map(getNodeRect);
+-
+     const threshold = SNAP_THRESHOLD_PX / getZoom();
+     let bestX: { offset: number; line: number } | null = null;
+     let bestY: { offset: number; line: number } | null = null;
+-
+     for (const t of targets) {
+       const xCands: Array<[number, number]> = [
+         [t.left - dRect.left, t.left], [t.right - dRect.right, t.right],
+@@ -125,24 +125,20 @@ export function useCanvasSnapFollow() {
+         if (Math.abs(off) <= threshold && (!bestY || Math.abs(off) < Math.abs(bestY.offset))) bestY = { offset: off, line };
+       }
+     }
+-
+     const dx = bestX?.offset ?? 0;
+     const dy = bestY?.offset ?? 0;
+-
+     const nextGuides: SnapGuide[] = [];
+     if (bestX) nextGuides.push({ id: 'gx', orientation: 'vertical', position: bestX.line });
+     if (bestY) nextGuides.push({ id: 'gy', orientation: 'horizontal', position: bestY.line });
+-
+     const guideKey = nextGuides.map((g) => `${g.orientation}:${Math.round(g.position)}`).join('|');
+     if (guideKey !== lastGuideKeyRef.current) {
+       lastGuideKeyRef.current = guideKey;
+       setGuides(nextGuides);
+     }
+-
+     if (dx !== 0 || dy !== 0) {
+       return changes.map((c) =>
+-        c.type === 'position' && (c as any).dragging && (c as any).position
+-          ? ({ ...c, position: { x: (c as any).position.x + dx, y: (c as any).position.y + dy } } as any)
++        c.type === 'position' && (c as any).dragging && c.position
++          ? ({ ...c, position: { x: c.position.x + dx, y: c.position.y + dy } } as Extract<NodeChange<CanvasNode>, { type: 'position' }>)
+           : c
+       );
+     }
+@@ -150,19 +146,4 @@ export function useCanvasSnapFollow() {
+   }, [nodes, getZoom]);
+ 
+   return { guides, processNodeChanges, onNodeDragStart, onNodeDragStop };
+-}
+-
+-export function SnapGuides({ guides }: { guides: SnapGuide[] }) {
+-  if (guides.length === 0) return null;
+-  return (
+-    <ViewportPortal>
+-      {guides.map((g) =>
+-        g.orientation === 'vertical' ? (
+-          <div key={g.id} className="pointer-events-none absolute z-50 w-px bg-fuchsia-500" style={{ left: g.position, top: -100000, height: 200000 }} />
+-        ) : (
+-          <div key={g.id} className="pointer-events-none absolute z-50 h-px bg-fuchsia-500" style={{ top: g.position, left: -100000, width: 200000 }} />
+-        )
+-      )}
+-    </ViewportPortal>
+-  );
+ }
+\ No newline at end of file
+diff --git a/src/features/canvas/nodes/TagGroupNode.tsx b/src/features/canvas/nodes/TagGroupNode.tsx
+index 41cb629..ea47dc6 100644
+--- a/src/features/canvas/nodes/TagGroupNode.tsx
++++ b/src/features/canvas/nodes/TagGroupNode.tsx
+@@ -19,6 +19,7 @@ import {
+ } from 'lucide-react';
+ import { NodeHeader, NODE_HEADER_FLOATING_POSITION_CLASS } from '@/features/canvas/ui/NodeHeader';
+ import { useCanvasStore } from '@/stores/canvasStore';
++import { useThemeStore } from '@/stores/themeStore';
+ import { UiCheckbox, UiChipButton, UiInput, UiPanel } from '@/components/ui';
+ import { BatchConnectModal } from '@/features/canvas/ui/BatchConnectModal';
+ import {
+@@ -169,34 +170,37 @@ function hslToHex(h: number, s: number, l: number): string {
+   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+ }
+ 
+-/**
+- * 馃帹 鏍囩缁勯厤鑹茶鍒欙細鐢便€岃繛鎺ョ殑婧愯妭鐐归泦鍚堛€嶅喅瀹氣€斺€?- * 杩炴帴鐩稿悓鐨勪竴鎵规簮鎵嶄細鍚岃壊锛涘彧鏈夌浉鍚屾簮鑺傜偣鎵嶅厑璁哥浉鍚岄鑹层€?- * 鏈繛鎺ユ簮鏃堕€€鍖栦负鎸夌粍鍚嶈绠楋紱鍚嶇О涔熶负绌烘椂鐢ㄥ洖閫€鑹层€?- */
+-function getGroupAutoColor(data: TagGroupNodeData): string {
++function resolveTagGroupColorKey(data: TagGroupNodeData): string {
+   const sourceIds = (data.sources || [])
+     .map((s) => s.sourceNodeId)
+     .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+     .sort();
+ 
+-  let contentKey: string;
+   if (sourceIds.length > 0) {
+-    contentKey = `src:${sourceIds.join('|')}`;
+-  } else {
+-    const name = (data.displayName || '').trim();
+-    if (!name) {
+-      return FALLBACK_TAG_GROUP_COLOR;
+-    }
+-    contentKey = `text:${name}`;
++    return `src:${sourceIds.join('|')}`;
++  }
++
++  const name = (data.displayName || '').trim();
++  return name ? `text:${name}` : '';
++}
++
++/**
++ * 馃帹 鏍囩缁勯厤鑹茶鍒欙細鐢便€岃繛鎺ョ殑婧愯妭鐐归泦鍚堛€嶅喅瀹氣€斺€?+ * 杩炴帴鐩稿悓鐨勪竴鎵规簮鎵嶄細鍚岃壊锛涘彧鏈夌浉鍚屾簮鑺傜偣鎵嶅厑璁哥浉鍚岄鑹层€?+ * 鏈繛鎺ユ簮鏃堕€€鍖栦负鎸夌粍鍚嶈绠楋紱鍚嶇О涔熶负绌烘椂鐢ㄥ洖閫€鑹层€?+ */
++function getGroupAutoColor(data: TagGroupNodeData, isDark: boolean): string {
++  const colorKey = resolveTagGroupColorKey(data);
++  if (!colorKey) {
++    return FALLBACK_TAG_GROUP_COLOR;
+   }
+ 
+-  const hueHash = hashString(contentKey, '#hue');
+-  const satHash = hashString(contentKey, '#sat');
+-  const lightHash = hashString(contentKey, '#light');
++  const hueHash = hashString(colorKey, '#hue');
++  const satHash = hashString(colorKey, '#sat');
++  const lightHash = hashString(colorKey, '#light');
+   const hue = hueHash % 360;
+   const sat = 55 + (satHash % 25); // 55鈥?0%
+-  const light = 40 + (lightHash % 14); // 40鈥?4%
++  const light = isDark ? 55 + ((lightHash >> 8) % 14) : 40 + (lightHash % 14);
+   return hslToHex(hue, sat, light);
+ }
+ 
+@@ -242,6 +246,7 @@ export const TagGroupNode = memo((props: any) => {
+   const deleteEdge = useCanvasStore((s) => s.deleteEdge);
+   const deleteNode = useCanvasStore((s) => s.deleteNode);
+   const nodes = useCanvasStore((s) => s.nodes);
++  const isDark = useThemeStore((s) => s.theme) === 'dark';
+   const updateNodeInternals = useUpdateNodeInternals();
+   const edges = useEdges();
+   const [preview, setPreview] = useState<{ url: string; left: number; top: number } | null>(null);
+@@ -399,8 +404,8 @@ export const TagGroupNode = memo((props: any) => {
+     if (typeof data.color === 'string' && isValidHexColor(data.color)) {
+       return data.color.trim();
+     }
+-    return getGroupAutoColor(data);
+-  }, [data]);
++    return getGroupAutoColor(data, isDark);
++  }, [data, isDark]);
+ 
+   const sources = data.sources || [];
+   const borderColor = selected ? accentColor : hexToRgba(accentColor, 0.55);
+diff --git a/src/features/canvas/ui/BatchConnectModal.tsx b/src/features/canvas/ui/BatchConnectModal.tsx
+index a25d285..ba61161 100644
+--- a/src/features/canvas/ui/BatchConnectModal.tsx
++++ b/src/features/canvas/ui/BatchConnectModal.tsx
+@@ -23,6 +23,7 @@ import {
+   Layers,
+ } from 'lucide-react';
+ import { useCanvasStore } from '@/stores/canvasStore';
++import { useThemeStore } from '@/stores/themeStore';
+ import { CANVAS_NODE_TYPES, type CanvasNode } from '@/features/canvas/domain/canvasNodes';
+ import { resolveImageDisplayUrl } from '@/features/canvas/application/imageData';
+ 
+@@ -243,25 +244,25 @@ function hslToHex(h: number, s: number, l: number): string {
+  * - 鍙牴鎹枃瀛楄绠楅鑹诧紙涓嶅惈 sourceId锛?  * - 楗卞拰搴?55鈥?0%锛屾槑搴?40鈥?4%
+  */
+-function getTagColor(node: CanvasNode): string {
++function resolveTagColorKey(name: string, sourceId: string | null): string {
++  if (sourceId) return `src:${sourceId}`;
++  return `text:${(name || '').trim()}`;
++}
++
++function getTagColor(node: CanvasNode, isDark: boolean): string {
+   const data = (node.data ?? {}) as Record<string, unknown>;
+   const name = (data.displayName as string) || (data.label as string) || '鏂版爣绛?;
+   const sourceId = (data.sourceId as string) || null;
+-  const contentKey = sourceId ? `src:${sourceId}` : `text:${(name || '').trim()}`;
++  const contentKey = resolveTagColorKey(name, sourceId);
+   const hueHash = hashString(contentKey, '#hue');
+   const toneHash = hashString(contentKey, '#tone');
+   const hue = hueHash % 360;
+   const sat = 55 + (toneHash % 25);
+-  const light = 40 + ((toneHash >> 8) % 14);
++  const light = isDark ? 55 + ((toneHash >> 8) % 14) : 40 + ((toneHash >> 8) % 14);
+   return `hsl(${hue}, ${sat}%, ${light}%)`;
+ }
+ 
+-/**
+- * 鉁?涓?TagGroupNode.tsx 鐨?getGroupAutoColor 瀹屽叏涓€鑷达細
+- * - 浣跨敤 FNV-1a 鍝堝笇
+- * - 鍙牴鎹?displayName 璁＄畻棰滆壊
+- */
+-function getTagGroupColor(node: CanvasNode): string {
++function resolveTagGroupColorKey(node: CanvasNode): string {
+   const data = (node.data ?? {}) as Record<string, unknown>;
+   const sources = Array.isArray(data.sources)
+     ? (data.sources as Array<{ sourceNodeId?: string }>)
+@@ -271,34 +272,37 @@ function getTagGroupColor(node: CanvasNode): string {
+     .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+     .sort();
+ 
+-  let contentKey: string;
+   if (sourceIds.length > 0) {
+-    contentKey = `src:${sourceIds.join('|')}`;
+-  } else {
+-    const name = typeof data.displayName === 'string' ? data.displayName.trim() : '';
+-    if (!name) return '#3b82f6';
+-    contentKey = `text:${name}`;
++    return `src:${sourceIds.join('|')}`;
+   }
+ 
++  const name = typeof data.displayName === 'string' ? data.displayName.trim() : '';
++  return name ? `text:${name}` : '';
++}
++
++function getTagGroupColor(node: CanvasNode, isDark: boolean): string {
++  const contentKey = resolveTagGroupColorKey(node);
++  if (!contentKey) return '#3b82f6';
++
+   const hueHash = hashString(contentKey, '#hue');
+   const satHash = hashString(contentKey, '#sat');
+   const lightHash = hashString(contentKey, '#light');
+   const hue = hueHash % 360;
+   const sat = 55 + (satHash % 25);
+-  const light = 40 + (lightHash % 14);
++  const light = isDark ? 55 + ((lightHash >> 8) % 14) : 40 + (lightHash % 14);
+   return hslToHex(hue, sat, light);
+ }
+ 
+ // ===================== 妯℃嫙鐢诲竷鐪熷疄鑺傜偣鏍峰紡鐨勯瑙?=====================
+ 
+ // 鍙充晶鍒楄〃锛氳糠浣犺妭鐐瑰崱鐗?-function NodeMiniCard({ node }: { node: CanvasNode }) {
++function NodeMiniCard({ node, isDark }: { node: CanvasNode; isDark: boolean }) {
+   const type = node.type as string;
+   const displayName = getNodeDisplayName(node) || getTypeLabel(type);
+ 
+   // 鏍囩鑺傜偣锛氫笌鐢诲竷涓€鑷寸殑鑳跺泭鏍峰紡
+   if (type === CANVAS_NODE_TYPES.tag) {
+-    const tagColor = getTagColor(node);
++    const tagColor = getTagColor(node, isDark);
+     return (
+       <div className="w-full h-full flex items-center justify-center">
+         <div
+@@ -314,7 +318,7 @@ function NodeMiniCard({ node }: { node: CanvasNode }) {
+ 
+   // 鉁?鏂板锛氭爣绛剧粍鑺傜偣棰勮
+   if (type === CANVAS_NODE_TYPES.tagGroup) {
+-    const groupColor = getTagGroupColor(node);
++    const groupColor = getTagGroupColor(node, isDark);
+     const data = (node.data ?? {}) as Record<string, unknown>;
+     const sources = Array.isArray(data.sources) ? data.sources : [];
+     return (
+@@ -374,14 +378,14 @@ function NodeMiniCard({ node }: { node: CanvasNode }) {
+ }
+ 
+ // 宸︿晶婧愯妭鐐癸細澶у昂瀵歌妭鐐瑰崱鐗?-function SourceNodeCard({ node }: { node: CanvasNode }) {
++function SourceNodeCard({ node, isDark }: { node: CanvasNode; isDark: boolean }) {
+   const type = node.type as string;
+   const displayName = getNodeDisplayName(node) || getTypeLabel(type);
+   const summary = getNodeSummaryText(node);
+ 
+   // 鏍囩鑺傜偣锛氫笌鐢诲竷涓€鑷寸殑澶ц兌鍥?   if (type === CANVAS_NODE_TYPES.tag) {
+-    const tagColor = getTagColor(node);
++    const tagColor = getTagColor(node, isDark);
+     return (
+       <div className="w-full flex justify-center py-3">
+         <div
+@@ -399,7 +403,7 @@ function SourceNodeCard({ node }: { node: CanvasNode }) {
+ 
+   // 鉁?鏂板锛氭爣绛剧粍鑺傜偣棰勮
+   if (type === CANVAS_NODE_TYPES.tagGroup) {
+-    const groupColor = getTagGroupColor(node);
++    const groupColor = getTagGroupColor(node, isDark);
+     const data = (node.data ?? {}) as Record<string, unknown>;
+     const sources = Array.isArray(data.sources) ? data.sources : [];
+     return (
+@@ -520,6 +524,7 @@ interface HoverPreviewState {
+ }
+ 
+ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProps) {
++  const isDark = useThemeStore((s) => s.theme) === 'dark';
+   const nodes = useCanvasStore((state) => state.nodes);
+   const edges = useCanvasStore((state) => state.edges);
+   const batchConnect = useCanvasStore((state) => state.batchConnect);
+@@ -872,7 +877,7 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
+                     )}
+                   </div>
+                 ) : (
+-                  <SourceNodeCard node={currentSourceNode} />
++                  <SourceNodeCard node={currentSourceNode} isDark={isDark} />
+                 )}
+               </div>
+             </div>
+@@ -1005,7 +1010,7 @@ export function BatchConnectModal({ sourceNode, onClose }: BatchConnectModalProp
+                     >
+                       {/* 缂╃暐鍥撅細妯℃嫙鐢诲竷鐪熷疄鑺傜偣鏍峰紡 */}
+                       <div className="relative w-14 h-14 shrink-0">
+-                        <NodeMiniCard node={node} />
++                        <NodeMiniCard node={node} isDark={isDark} />
+                       </div>
+                       {/* 鍚嶇О + 鎻愮ず璇?鍐呭鎽樿 */}
+                       <div className="flex-1 min-w-0">
+diff --git a/src/i18n/locales/en.json b/src/i18n/locales/en.json
+index 033944a..3f43ce0 100644
+--- a/src/i18n/locales/en.json
++++ b/src/i18n/locales/en.json
+@@ -773,7 +773,8 @@
+       "jsonCard": "JSON Card",
+       "panorama": "Panorama",
+       "blueprint": "Director Studio",
+-      "tag": "Tag"
++      "tag": "Tag",
++      "tagGroup": "Tag Group"
+     },
+     "imageNode": {
+       "title": "Image Node",
+diff --git a/src/i18n/locales/zh.json b/src/i18n/locales/zh.json
+index 3248af9..fb855c4 100644
+--- a/src/i18n/locales/zh.json
++++ b/src/i18n/locales/zh.json
+@@ -773,7 +773,8 @@
+       "jsonCard": "JSON 鍗＄墖",
+       "panorama": "鍏ㄦ櫙鍥?,
+       "blueprint": "瀵兼紨鍙?,
+-      "tag": "鏍囩"
++      "tag": "鏍囩",
++      "tagGroup": "鏍囩缁?
+     },
+     "imageNode": {
+       "title": "鍥剧墖鑺傜偣",
+diff --git a/tsconfig.json b/tsconfig.json
+index a361d9f..8a823da 100644
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -21,11 +21,11 @@
+     "noFallthroughCasesInSwitch": true,
+ 
+     /* Paths */
+-    "ignoreDeprecations": "6.0",
+     "baseUrl": ".",
+     "paths": {
+       "@/*": ["src/*"]
+-    }
++    },
++    "ignoreDeprecations": "5.0"
+   },
+   "include": ["src"],
+   "references": [{ "path": "./tsconfig.node.json" }]

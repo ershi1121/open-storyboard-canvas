@@ -130,12 +130,17 @@ export function useBatchToolbarPosition({
     const height = (maxY - minY) * zoom;
 
     return {
-      selectionBoundsRect: {
-        left: Math.max(0, left),
-        top: Math.max(0, top),
-        width: Math.max(0, width),
-        height: Math.max(0, height),
-      },
+      // 单选组时不画浅色外框（组自身已有高亮边框），
+      // 只有多选节点时才画选区范围框
+      selectionBoundsRect:
+        selectedNodeIds.length > 1
+          ? {
+              left: Math.max(0, left),
+              top: Math.max(0, top),
+              width: Math.max(0, width),
+              height: Math.max(0, height),
+            }
+          : null,
       batchToolbarPosition: {
         left: Math.max(12, Math.min(containerRect.width - 12, left + width / 2)),
         top: Math.max(12, top - 42),

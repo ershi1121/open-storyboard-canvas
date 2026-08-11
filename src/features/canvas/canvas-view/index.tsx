@@ -4,6 +4,7 @@ import {
   ReactFlow,
   Background,
   MiniMap,
+  Panel,
   BackgroundVariant,
   SelectionMode,
   useReactFlow,
@@ -12,6 +13,7 @@ import {
   type IsValidConnection,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { Magnet } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { useCustomProvidersStore } from '@/stores/customProvidersStore';
@@ -62,28 +64,40 @@ import { EmptyHint } from './components/EmptyHint';
 import { BatchToolbar } from './components/BatchToolbar';
 import { ContextMenu } from './components/ContextMenu';
 
-// 🧲 吸附参考线（zoom 补偿线宽，屏幕恒定 1px 细线）
+// 🧲 吸附参考线：淡蓝色 1px 细虚线（zoom 补偿，屏幕恒定粗细）
 function SnapGuides({ guides }: { guides: SnapGuide[] }) {
   const { zoom } = useViewport();
-  const thickness = Math.max(0.5, 1 / zoom);
+  const safeZoom = zoom > 0 ? zoom : 1;
+
+  // 屏幕像素 → flow 坐标（ViewportPortal 内会被 zoom 缩放）
+  const thickness = 1 / safeZoom; // 恒 1px，比原来细
+  const dash = 4 / safeZoom;      // 虚线段长
+  const gap = 3 / safeZoom;       // 虚线间隔
+  const color = 'rgba(96, 165, 250, 0.9)'; // 淡蓝色
+
   if (guides.length === 0) return null;
+
   return (
     <ViewportPortal>
-      {guides.map((g) =>
-        g.orientation === 'vertical' ? (
+      {guides.map((g) => {
+        const dashedGradient =
+          g.orientation === 'vertical'
+            ? `repeating-linear-gradient(to bottom, ${color} 0, ${color} ${dash}px, transparent ${dash}px, transparent ${dash + gap}px)`
+            : `repeating-linear-gradient(to right, ${color} 0, ${color} ${dash}px, transparent ${dash}px, transparent ${dash + gap}px)`;
+
+        const style =
+          g.orientation === 'vertical'
+            ? { left: g.position, top: -100000, width: thickness, height: 200000, backgroundImage: dashedGradient }
+            : { top: g.position, left: -100000, height: thickness, width: 200000, backgroundImage: dashedGradient };
+
+        return (
           <div
             key={g.id}
-            className="pointer-events-none absolute z-50 bg-fuchsia-500/80"
-            style={{ left: g.position, top: -100000, width: thickness, height: 200000 }}
+            className="pointer-events-none absolute z-50 transition-all duration-75"
+            style={style}
           />
-        ) : (
-          <div
-            key={g.id}
-            className="pointer-events-none absolute z-50 bg-fuchsia-500/80"
-            style={{ top: g.position, left: -100000, height: thickness, width: 200000 }}
-          />
-        )
-      )}
+        );
+      })}
     </ViewportPortal>
   );
 }
@@ -212,7 +226,7 @@ export function Canvas() {
     setPreviewConnectionVisual(null);
   }, [setPendingConnectStart, setPreviewConnectionVisual]);
 
-  const selection = useCanvasSelection({ wrapperRef, nodesRef });
+  const selection = useCanvasSelection({ nodesRef });
   const flowHandlers = useCanvasFlowHandlers({
     wrapperRef,
     nodes,
@@ -505,6 +519,23 @@ export function Canvas() {
       >
         {/* 🧲 修改4：渲染吸附参考线 */}
         <SnapGuides guides={snapFollow.guides} />
+        {/*
+        🧲 磁吸开关
+        */}
+        <Panel position="bottom-left" className="!m-3">
+          <button
+            type="button"
+            onClick={() => snapFollow.setSnapEnabled(!snapFollow.snapEnabled)}
+            title={snapFollow.snapEnabled ? '磁吸：开（点击关闭）' : '磁吸：关（点击开启）'}
+            className={`flex h-8 w-8 items-center justify-center rounded-full border shadow-sm backdrop-blur-sm transition-colors ${
+              snapFollow.snapEnabled
+                ? 'border-accent/55 bg-accent/15 text-accent'
+                : 'border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] text-text-muted hover:text-text-dark'
+            }`}
+          >
+            <Magnet className="h-4 w-4" />
+          </button>
+        </Panel>
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--canvas-grid-dot)" />
         <MiniMap
           className="canvas-minimap nopan nowheel"

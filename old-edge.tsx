@@ -10,23 +10,19 @@ import {
 import { CANVAS_NODE_TYPES, type CanvasNode } from '@/features/canvas/domain/canvasNodes';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useSettingsStore } from '@/stores/settingsStore';
-
 import { buildOrthogonalRoute } from './edgeRouting';
 
 const EMPTY_ROUTE_NODES: CanvasNode[] = [];
 
-type EdgeFlowState = 'idle' | 'processing' | 'failed';
-
-
 function resolveNodeWidth(node: CanvasNode): number | string {
   return node.measured?.width
-    ?? (node as any).width
+    ?? node.width
     ?? (typeof node.style?.width === 'number' || typeof node.style?.width === 'string' ? node.style.width : '');
 }
 
 function resolveNodeHeight(node: CanvasNode): number | string {
   return node.measured?.height
-    ?? (node as any).height
+    ?? node.height
     ?? (typeof node.style?.height === 'number' || typeof node.style?.height === 'string' ? node.style.height : '');
 }
 
@@ -58,57 +54,32 @@ export const DisconnectableEdge = memo(function DisconnectableEdge(props: EdgePr
     markerEnd,
     style,
   } = props;
-
   const deleteEdge = useCanvasStore((state) => state.deleteEdge);
   const canvasEdgeRoutingMode = useSettingsStore((state) => state.canvasEdgeRoutingMode);
-
   const nodeGeometrySignature = useCanvasStore((state) =>
-    canvasEdgeRoutingMode === 'smartOrthogonal' ? buildNodeGeometrySignature(state.nodes as CanvasNode[]) : ''
+    canvasEdgeRoutingMode === 'smartOrthogonal' ? buildNodeGeometrySignature(state.nodes) : ''
   );
-
   const routeNodes = useMemo(
     () => (canvasEdgeRoutingMode === 'smartOrthogonal' ? useCanvasStore.getState().nodes : EMPTY_ROUTE_NODES),
     [canvasEdgeRoutingMode, nodeGeometrySignature]
   );
-
-  // 三态判定：完全沿用你仓库原有业务规则（exportImage + storyboardGen/imageEdit）
-  const edgeFlowState = useCanvasStore((state) => {
+  const isProcessingEdge = useCanvasStore((state) => {
     const sourceNode = state.nodes.find((node) => node.id === source);
     const targetNode = state.nodes.find((node) => node.id === target);
 
     if (!sourceNode || !targetNode || targetNode.type !== CANVAS_NODE_TYPES.exportImage) {
-      return 'idle' as EdgeFlowState;
+      return false;
     }
 
     const isSupportedSource =
       sourceNode.type === CANVAS_NODE_TYPES.storyboardGen ||
       sourceNode.type === CANVAS_NODE_TYPES.imageEdit;
     if (!isSupportedSource) {
-      return 'idle' as EdgeFlowState;
+      return false;
     }
 
-    const d = (targetNode.data ?? {}) as Record<string, any>;
-
-    // 生成中：沿用你原版逻辑
-    if (d.isGenerating === true) {
-      return 'processing' as EdgeFlowState;
-    }
-
-    // 失败：你仓库用 generationError 记录失败信息（generationRetry.ts / ImageNode.tsx 同款判定）
-    const genErr = d.generationError;
-    if (
-      (typeof genErr === 'string' && genErr.length > 0) ||
-      (Array.isArray(genErr) && genErr.length > 0) ||
-      Boolean(d.error)
-    ) {
-      return 'failed' as EdgeFlowState;
-    }
-
-    return 'idle' as EdgeFlowState;
+    return (targetNode.data as { isGenerating?: boolean } | undefined)?.isGenerating === true;
   });
-
-  const isProcessingEdge = edgeFlowState === 'processing';
-  const isFailedEdge = edgeFlowState === 'failed';
 
   const { edgePath, labelX, labelY } = useMemo(() => {
     if (canvasEdgeRoutingMode === 'spline') {
@@ -120,7 +91,11 @@ export const DisconnectableEdge = memo(function DisconnectableEdge(props: EdgePr
         targetY,
         targetPosition,
       });
-      return { edgePath: path, labelX: nextLabelX, labelY: nextLabelY };
+      return {
+        edgePath: path,
+        labelX: nextLabelX,
+        labelY: nextLabelY,
+      };
     }
 
     const route = buildOrthogonalRoute({
@@ -132,10 +107,14 @@ export const DisconnectableEdge = memo(function DisconnectableEdge(props: EdgePr
       targetX,
       targetY,
       targetPosition: targetPosition ?? Position.Left,
-      nodes: routeNodes as CanvasNode[],
+      nodes: routeNodes,
       smartAvoidance: canvasEdgeRoutingMode === 'smartOrthogonal',
     });
-    return { edgePath: route.path, labelX: route.labelX, labelY: route.labelY };
+    return {
+      edgePath: route.path,
+      labelX: route.labelX,
+      labelY: route.labelY,
+    };
   }, [
     canvasEdgeRoutingMode,
     routeNodes,
@@ -149,32 +128,36 @@ export const DisconnectableEdge = memo(function DisconnectableEdge(props: EdgePr
     targetY,
   ]);
 
-  // ✨ 只有流光变色，底线永远保持原色
-  const flowClass = isProcessingEdge
-    ? 'canvas-edge-flow canvas-edge-flow--processing'
-    : isFailedEdge
-      ? 'canvas-edge-flow canvas-edge-flow--failed'
-      : 'canvas-edge-flow';
+  const processingStroke = 'rgb(var(--accent-rgb) / 0.94)';
+  const processingDashStroke = 'rgb(var(--accent-rgb) / 1)';
+  const baseStrokeWidth = isProcessingEdge
+    ? (selected ? 2.7 : 2.2)
+    : (selected ? 2.4 : 1.9);
 
   return (
     <>
+      {isProcessingEdge && (
+        <path
+          d={edgePath}
+          fill="none"
+          stroke={processingDashStroke}
+          strokeWidth={selected ? 2.5 : 2.1}
+          strokeLinecap="round"
+          strokeDasharray="8 10"
+          className="canvas-processing-edge__flow"
+          style={{ pointerEvents: 'none' }}
+        />
+      )}
       <BaseEdge
         id={id}
         path={edgePath}
         markerEnd={markerEnd}
         style={{
-          stroke: style?.stroke,
-          strokeWidth: selected ? 2.4 : 1.9,
+          stroke: isProcessingEdge ? processingStroke : style?.stroke,
+          strokeWidth: baseStrokeWidth,
           ...style,
         }}
       />
-
-      {/* 流动光带：亮核居中，两端柔和渐隐，无半透明尾巴 */}
-      <g className={flowClass}>
-        <path d={edgePath} className="edge-flow-streak edge-flow-streak--glow" />
-        <path d={edgePath} className="edge-flow-streak edge-flow-streak--core" />
-      </g>
-
       {selected && (
         <EdgeLabelRenderer>
           <button
@@ -194,7 +177,7 @@ export const DisconnectableEdge = memo(function DisconnectableEdge(props: EdgePr
               <path
                 fill="currentColor"
                 fillRule="evenodd"
-                d="M2 12C2 6.477 6.477 2 12 2s10 4.477 10 10s-4.477 10-10 10S2 17.523 2 12m7.707-3.707a1 1 0 0 0-1.414 1.414L10.586 12l-2.293 2.293a1 1 0 1 0 1.414 1.414L12 13.414l2.293-2.293a1 1 0 0 0-1.414-1.414L13.414 12l-2.293-2.293a1 1 0 0 0-1.414-1.414L12 10.586z"
+                d="M2 12C2 6.477 6.477 2 12 2s10 4.477 10 10s-4.477 10-10 10S2 17.523 2 12m7.707-3.707a1 1 0 0 0-1.414 1.414L10.586 12l-2.293 2.293a1 1 0 1 0 1.414 1.414L12 13.414l2.293 2.293a1 1 0 0 0 1.414-1.414L13.414 12l2.293-2.293a1 1 0 0 0-1.414-1.414L12 10.586z"
                 clipRule="evenodd"
               />
             </svg>

@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import type { NodeChange } from '@xyflow/react';
+import { useReactFlow, type NodeChange } from '@xyflow/react';
 import { useCanvasStore } from '@/stores/canvasStore';
-import { CANVAS_NODE_TYPES, type CanvasNode } from '@/features/canvas/domain/canvasNodes';
+import {
+  CANVAS_NODE_TYPES,
+  DEFAULT_NODE_WIDTH,
+  type CanvasNode,
+} from '@/features/canvas/domain/canvasNodes';
 import { CANVAS_BATCH_TRIGGER_TYPES } from '../constants';
 import type { CanvasMarqueeGesture } from '../types';
-import { escapeNodeDataId, rectsOverlap } from '../utils/geometry';
+import { rectsOverlap } from '../utils/geometry';
 
 interface UseCanvasSelectionOptions {
-  wrapperRef: { current: HTMLDivElement | null };
   nodesRef: { current: CanvasNode[] };
 }
 
@@ -29,7 +32,8 @@ function useStableStringArray(input: string[]): string[] {
   }, [input]);
 }
 
-export function useCanvasSelection({ wrapperRef, nodesRef }: UseCanvasSelectionOptions) {
+export function useCanvasSelection({ nodesRef }: UseCanvasSelectionOptions) {
+  const { flowToScreenPosition } = useReactFlow();
   const applyNodesChange = useCanvasStore((state) => state.onNodesChange);
   const setSelectedNode = useCanvasStore((state) => state.setSelectedNode);
   const selectedNodeId = useCanvasStore((state) => state.selectedNodeId);
@@ -118,36 +122,76 @@ export function useCanvasSelection({ wrapperRef, nodesRef }: UseCanvasSelectionO
         bottom: Math.max(gesture.startClientY, gesture.currentClientY),
       };
 
-      const nextSelectedIds = nodesRef.current
+      const allNodes = nodesRef.current;
+      const nodeMap = new Map(allNodes.map((node) => [node.id, node] as const));
+
+      const nextSelectedIds = allNodes
         .filter((node) => {
-          const nodeElement = wrapperRef.current?.querySelector<HTMLElement>(
-            `.react-flow__node[data-id="${escapeNodeDataId(node.id)}"]`
-          );
-          if (!nodeElement) {
-            return false;
+          // 节点"主体"真实尺寸：不含阴影、不含溢出的悬浮 Header
+          const width =
+            typeof node.measured?.width === 'number'
+              ? node.measured.width
+              : typeof node.style?.width === 'number'
+                ? node.style.width
+                : DEFAULT_NODE_WIDTH;
+          const height =
+            typeof node.measured?.height === 'number'
+              ? node.measured.height
+              : typeof node.style?.height === 'number'
+                ? node.style.height
+                : 200;
+
+          // 绝对 flow 坐标（正确处理 Group 嵌套的子节点）
+          let flowX = node.position.x;
+          let flowY = node.position.y;
+          let parentId = node.parentId;
+          const visited = new Set<string>();
+          while (parentId && !visited.has(parentId)) {
+            visited.add(parentId);
+            const parent = nodeMap.get(parentId);
+            if (!parent) break;
+            flowX += parent.position.x;
+            flowY += parent.position.y;
+            parentId = parent.parentId;
           }
-          const nodeRect = nodeElement.getBoundingClientRect();
-          return rectsOverlap(selectionClientRect, {
-            left: nodeRect.left,
-            top: nodeRect.top,
-            right: nodeRect.right,
-            bottom: nodeRect.bottom,
-          });
+
+          // flow 坐标 → 屏幕(client)坐标，与选区矩形同坐标系比较
+          const topLeft = flowToScreenPosition({ x: flowX, y: flowY });
+          const bottomRight = flowToScreenPosition({ x: flowX + width, y: flowY + height });
+
+          const nodeRect = {
+            left: Math.min(topLeft.x, bottomRight.x),
+            top: Math.min(topLeft.y, bottomRight.y),
+            right: Math.max(topLeft.x, bottomRight.x),
+            bottom: Math.max(topLeft.y, bottomRight.y),
+          };
+
+          // 关键补丁：组节点必须被选区"完全包含"才选中，
+          // 避免小选区擦到大组的半透明背景就吞掉整组
+          if (node.type === CANVAS_NODE_TYPES.group) {
+            return (
+              selectionClientRect.left <= nodeRect.left &&
+              selectionClientRect.top <= nodeRect.top &&
+              selectionClientRect.right >= nodeRect.right &&
+              selectionClientRect.bottom >= nodeRect.bottom
+            );
+          }
+
+          return rectsOverlap(selectionClientRect, nodeRect);
         })
         .map((node) => node.id);
 
       const nextSelectedSet = new Set(nextSelectedIds);
-      const selectionChanges: NodeChange<CanvasNode>[] = nodesRef.current.map((node) => ({
+      const selectionChanges: NodeChange<CanvasNode>[] = allNodes.map((node) => ({
         id: node.id,
         type: 'select',
         selected: nextSelectedSet.has(node.id),
       }));
-
       applyNodesChange(selectionChanges);
       setSelectedNode(nextSelectedIds.length === 1 ? nextSelectedIds[0] : null);
       return nextSelectedIds;
     },
-    [applyNodesChange, nodesRef, setSelectedNode, wrapperRef]
+    [applyNodesChange, flowToScreenPosition, nodesRef, setSelectedNode]
   );
 
   useEffect(() => {

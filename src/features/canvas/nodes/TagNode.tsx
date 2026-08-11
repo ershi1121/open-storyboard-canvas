@@ -5,7 +5,6 @@ import { useCanvasStore } from '@/stores/canvasStore';
 import { useThemeStore } from '@/stores/themeStore';
 import { UiChipButton, UiPanel } from '@/components/ui';
 import { BatchConnectModal } from '@/features/canvas/ui/BatchConnectModal';
-import { NodeHeader, NODE_HEADER_FLOATING_POSITION_CLASS } from '@/features/canvas/ui/NodeHeader';
 import {
   NODE_TOOLBAR_ALIGN,
   NODE_TOOLBAR_CLASS,
@@ -286,26 +285,6 @@ export const TagNode = memo((props: any) => {
         }}
         onClick={() => setSelectedNode(id)}
       >
-        {/* 左上角标识，与标签组/其他节点保持一致 */}
-        <NodeHeader
-          className={NODE_HEADER_FLOATING_POSITION_CLASS}
-          icon={
-            <span
-              className="flex h-5 w-5 items-center justify-center rounded-md border"
-              style={{
-                background: palette.ring,
-                borderColor: palette.border,
-                color: palette.dot,
-              }}
-            >
-              <Tag className="h-3.5 w-3.5" />
-            </span>
-          }
-          titleText={name}
-          editable
-          onTitleChange={(nextTitle) => updateNodeData(id, { displayName: nextTitle, label: nextTitle })}
-        />
-
         {/* 内层胶囊：文字支持自动换行，缩放时会跟着容器宽高实时重排。
             手动缩放到装不下时，用 line-clamp 按整行裁切并显示省略号，不会再露出半行文字 */}
         <div
