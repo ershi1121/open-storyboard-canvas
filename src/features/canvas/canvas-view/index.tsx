@@ -4,7 +4,6 @@ import {
   ReactFlow,
   Background,
   MiniMap,
-  Panel,
   BackgroundVariant,
   SelectionMode,
   useReactFlow,
@@ -13,7 +12,6 @@ import {
   type IsValidConnection,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Magnet } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { useCustomProvidersStore } from '@/stores/customProvidersStore';
@@ -64,40 +62,36 @@ import { EmptyHint } from './components/EmptyHint';
 import { BatchToolbar } from './components/BatchToolbar';
 import { ContextMenu } from './components/ContextMenu';
 
-// 🧲 吸附参考线：淡蓝色 1px 细虚线（zoom 补偿，屏幕恒定粗细）
+/** 标签胶囊类型集合：间接取值，避免字面量比较报错 */
+const NODE_TYPE_RECORD = CANVAS_NODE_TYPES as unknown as Record<string, string>;
+const TAG_CAPSULE_TYPES = new Set<string>(
+  [NODE_TYPE_RECORD.tag, NODE_TYPE_RECORD.tagGroup].filter(
+    (t): t is string => typeof t === 'string' && t.length > 0,
+  ),
+);
+
+// 🧲 吸附参考线（zoom 补偿线宽，屏幕恒定 1px 细线）
 function SnapGuides({ guides }: { guides: SnapGuide[] }) {
   const { zoom } = useViewport();
-  const safeZoom = zoom > 0 ? zoom : 1;
-
-  // 屏幕像素 → flow 坐标（ViewportPortal 内会被 zoom 缩放）
-  const thickness = 1 / safeZoom; // 恒 1px，比原来细
-  const dash = 4 / safeZoom;      // 虚线段长
-  const gap = 3 / safeZoom;       // 虚线间隔
-  const color = 'rgba(96, 165, 250, 0.9)'; // 淡蓝色
-
+  const thickness = Math.max(0.5, 1 / zoom);
   if (guides.length === 0) return null;
-
   return (
     <ViewportPortal>
-      {guides.map((g) => {
-        const dashedGradient =
-          g.orientation === 'vertical'
-            ? `repeating-linear-gradient(to bottom, ${color} 0, ${color} ${dash}px, transparent ${dash}px, transparent ${dash + gap}px)`
-            : `repeating-linear-gradient(to right, ${color} 0, ${color} ${dash}px, transparent ${dash}px, transparent ${dash + gap}px)`;
-
-        const style =
-          g.orientation === 'vertical'
-            ? { left: g.position, top: -100000, width: thickness, height: 200000, backgroundImage: dashedGradient }
-            : { top: g.position, left: -100000, height: thickness, width: 200000, backgroundImage: dashedGradient };
-
-        return (
+      {guides.map((g) =>
+        g.orientation === 'vertical' ? (
           <div
             key={g.id}
-            className="pointer-events-none absolute z-50 transition-all duration-75"
-            style={style}
+            className="pointer-events-none absolute z-50 bg-fuchsia-500/80"
+            style={{ left: g.position, top: -100000, width: thickness, height: 200000 }}
           />
-        );
-      })}
+        ) : (
+          <div
+            key={g.id}
+            className="pointer-events-none absolute z-50 bg-fuchsia-500/80"
+            style={{ top: g.position, left: -100000, height: thickness, width: 200000 }}
+          />
+        )
+      )}
     </ViewportPortal>
   );
 }
@@ -117,6 +111,14 @@ export function Canvas() {
   const [menuAllowedTypes, setMenuAllowedTypes] = useState<CanvasNodeType[] | undefined>(undefined);
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
+  // 🚨 彻底修复：胶囊退出 RF 内部选择体系（selectable: false）
+  const flowNodes = useMemo(
+    () =>
+      nodes.map((node) =>
+        TAG_CAPSULE_TYPES.has(node.type) ? { ...node, selectable: false } : node,
+      ),
+    [nodes],
+  );
   const addNode = useCanvasStore((state) => state.addNode);
   const connectNodes = useCanvasStore((state) => state.onConnect);
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
@@ -456,7 +458,7 @@ export function Canvas() {
       onAuxClick={mouseActions.handleCanvasAuxClick}
     >
       <ReactFlow
-        nodes={nodes}
+        nodes={flowNodes}
         edges={edges}
         isValidConnection={isValidConnection} // 👈 新增这一行
         // 🧲 修改1：吸附逻辑先处理 changes，再交给原有处理逻辑
@@ -509,8 +511,7 @@ export function Canvas() {
         panOnDrag={panOnDragButtons.length > 0 ? panOnDragButtons : false}
         selectionOnDrag={false}
         selectionMode={SelectionMode.Partial}
-        multiSelectionKeyCode={['Control', 'Meta']}
-        selectionKeyCode={['Control', 'Meta']}
+        selectionKeyCode={null}
         deleteKeyCode={null}
         onlyRenderVisibleElements
         zoomOnDoubleClick={false}
@@ -519,23 +520,6 @@ export function Canvas() {
       >
         {/* 🧲 修改4：渲染吸附参考线 */}
         <SnapGuides guides={snapFollow.guides} />
-        {/*
-        🧲 磁吸开关
-        */}
-        <Panel position="bottom-left" className="!m-3">
-          <button
-            type="button"
-            onClick={() => snapFollow.setSnapEnabled(!snapFollow.snapEnabled)}
-            title={snapFollow.snapEnabled ? '磁吸：开（点击关闭）' : '磁吸：关（点击开启）'}
-            className={`flex h-8 w-8 items-center justify-center rounded-full border shadow-sm backdrop-blur-sm transition-colors ${
-              snapFollow.snapEnabled
-                ? 'border-accent/55 bg-accent/15 text-accent'
-                : 'border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] text-text-muted hover:text-text-dark'
-            }`}
-          >
-            <Magnet className="h-4 w-4" />
-          </button>
-        </Panel>
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--canvas-grid-dot)" />
         <MiniMap
           className="canvas-minimap nopan nowheel"
