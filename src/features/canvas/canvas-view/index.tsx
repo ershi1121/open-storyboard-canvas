@@ -9,6 +9,7 @@ import {
   useReactFlow,
   useViewport,
   ViewportPortal,
+  Panel,
   type IsValidConnection,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -56,6 +57,8 @@ import { useContextMenuActions } from './hooks/useContextMenuActions';
 import { useCanvasMouseActions } from './hooks/useCanvasMouseActions';
 // 🧲 自动吸附 + 跟随移动（SnapGuides 在本文件内定义，JSX 只存在于 .tsx）
 import { useCanvasSnapFollow, type SnapGuide } from './hooks/useCanvasSnapFollow';
+import { useSnapStore } from '@/stores/snapStore';
+import { SnapToggle } from './components/SnapToggle';
 import { SelectionOverlays } from './components/SelectionOverlays';
 import { ConnectionPreview } from './components/ConnectionPreview';
 import { EmptyHint } from './components/EmptyHint';
@@ -70,10 +73,14 @@ const TAG_CAPSULE_TYPES = new Set<string>(
   ),
 );
 
-// 🧲 吸附参考线（zoom 补偿线宽，屏幕恒定 1px 细线）
+// 🧲 吸附参考线（蓝色虚线，zoom 补偿：屏幕恒定 1px 线宽 + 恒定虚线节奏）
 function SnapGuides({ guides }: { guides: SnapGuide[] }) {
   const { zoom } = useViewport();
   const thickness = Math.max(0.5, 1 / zoom);
+  const dash = 8 / zoom; // 虚线段：屏幕恒定 8px
+  const gap = 6 / zoom;  // 间隔：屏幕恒定 6px
+  const blue = 'rgba(59, 130, 246, 0.9)'; // blue-500，深浅主题都醒目
+
   if (guides.length === 0) return null;
   return (
     <ViewportPortal>
@@ -81,14 +88,26 @@ function SnapGuides({ guides }: { guides: SnapGuide[] }) {
         g.orientation === 'vertical' ? (
           <div
             key={g.id}
-            className="pointer-events-none absolute z-50 bg-fuchsia-500/80"
-            style={{ left: g.position, top: -100000, width: thickness, height: 200000 }}
+            className="pointer-events-none absolute z-50"
+            style={{
+              left: g.position,
+              top: -100000,
+              width: thickness,
+              height: 200000,
+              backgroundImage: `repeating-linear-gradient(to bottom, ${blue} 0, ${blue} ${dash}px, transparent ${dash}px, transparent ${dash + gap}px)`,
+            }}
           />
         ) : (
           <div
             key={g.id}
-            className="pointer-events-none absolute z-50 bg-fuchsia-500/80"
-            style={{ top: g.position, left: -100000, height: thickness, width: 200000 }}
+            className="pointer-events-none absolute z-50"
+            style={{
+              top: g.position,
+              left: -100000,
+              height: thickness,
+              width: 200000,
+              backgroundImage: `repeating-linear-gradient(to right, ${blue} 0, ${blue} ${dash}px, transparent ${dash}px, transparent ${dash + gap}px)`,
+            }}
           />
         )
       )}
@@ -111,6 +130,7 @@ export function Canvas() {
   const [menuAllowedTypes, setMenuAllowedTypes] = useState<CanvasNodeType[] | undefined>(undefined);
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
+  const snapEnabled = useSnapStore((s) => s.snapEnabled);
   // 🚨 彻底修复：胶囊退出 RF 内部选择体系（selectable: false）
   const flowNodes = useMemo(
     () =>
@@ -462,7 +482,11 @@ export function Canvas() {
         edges={edges}
         isValidConnection={isValidConnection} // 👈 新增这一行
         // 🧲 修改1：吸附逻辑先处理 changes，再交给原有处理逻辑
-        onNodesChange={(changes) => flowHandlers.handleNodesChange(snapFollow.processNodeChanges(changes))}
+        onNodesChange={(changes) =>
+          flowHandlers.handleNodesChange(
+            snapEnabled ? snapFollow.processNodeChanges(changes) : changes,
+          )
+        }
         onEdgesChange={flowHandlers.handleEdgesChange}
         onEdgeClick={flowHandlers.handleEdgeClick}
         onEdgeDoubleClick={flowHandlers.handleEdgeDoubleClick}
@@ -477,7 +501,7 @@ export function Canvas() {
           };
           enforceCursor();
 
-          snapFollow.onNodeDragStart(event, node);
+          if (snapEnabled) snapFollow.onNodeDragStart(event, node);
           altDrag.handleNodeDragStart(event, node);
         }}
         onNodeDrag={(event, node) => {
@@ -519,7 +543,7 @@ export function Canvas() {
         className="canvas-flow"
       >
         {/* 🧲 修改4：渲染吸附参考线 */}
-        <SnapGuides guides={snapFollow.guides} />
+        <SnapGuides guides={snapEnabled ? snapFollow.guides : []} />
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--canvas-grid-dot)" />
         <MiniMap
           className="canvas-minimap nopan nowheel"
@@ -530,6 +554,9 @@ export function Canvas() {
           zoomable
         />
         <SelectedNodeOverlay />
+        <Panel position="bottom-left">
+          <SnapToggle />
+        </Panel>
       </ReactFlow>
       <SelectionOverlays marqueeRect={marqueeRect} selectionBoundsRect={selectionBoundsRect} />
       <BatchToolbar
