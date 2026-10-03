@@ -1,8 +1,9 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { NodeToolbar as ReactFlowNodeToolbar } from '@xyflow/react';
-import { AlertCircle, Camera, Check, ChevronDown, Copy, Download, FolderOpen, Grid3x3, Link2, Maximize2, PenLine, RotateCcw, Scissors, Settings2, Sparkles, Sun, Trash2, X } from 'lucide-react';
+import { NodeToolbar as ReactFlowNodeToolbar, useViewport } from '@xyflow/react';
+import { AlertCircle, Camera, Check, ChevronDown, Copy, Download, FolderOpen, Grid3x3, Link2, Maximize2, PenLine, RotateCcw, Scissors, Settings2, SlidersHorizontal, Sparkles, Sun, Trash2, X } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { useTranslation } from 'react-i18next';
 import {
 isExportImageNode,
@@ -16,7 +17,6 @@ type CanvasNode,
 import { MULTI_FUNCTION_ITEMS } from '@/features/canvas/ui/MultiFunctionPanel';
 import { resolveImageDisplayUrl } from '@/features/canvas/application/imageData';
 import {
-resolveGeneratedImageSaveFileName,
 resolveGeneratedVideoSaveFileName,
 resolveSuggestedImageStem,
 resolveSuggestedVideoStem,
@@ -61,6 +61,18 @@ const TOOLBAR_NEUTRAL_BUTTON_CLASS =
 const PROMPT_PRESET_MENU_WIDTH = 260;
 const PROMPT_PRESET_MENU_GAP = 8;
 
+const CREATION_TOOLS: ReadonlyArray<{
+panelType: 'multiAngle' | 'lighting' | 'multiFunction' | 'edit' | 'gridSplit';
+icon: typeof Camera;
+labelKey: string;
+}> = [
+{ panelType: 'multiAngle', icon: Camera, labelKey: 'nodeToolbar.multiAngle' },
+{ panelType: 'lighting', icon: Sun, labelKey: 'nodeToolbar.lighting' },
+{ panelType: 'multiFunction', icon: Grid3x3, labelKey: 'nodeToolbar.multiFunction' },
+{ panelType: 'edit', icon: PenLine, labelKey: 'nodeToolbar.edit' },
+{ panelType: 'gridSplit', icon: Scissors, labelKey: 'nodeToolbar.gridSplit' },
+];
+
 function normalizeDownloadPresetPaths(paths: string[]): string[] {
 return Array.from(new Set(paths.map((path) => path.trim()).filter(Boolean)));
 }
@@ -101,11 +113,17 @@ return ext?.toLowerCase() || fallback;
 
 export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: NodeActionToolbarProps) => {
 const { t } = useTranslation();
+const { zoom } = useViewport();
+const toolbarScale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+const nodeFlowWidth = node.measured?.width ?? (typeof node.width === 'number' ? node.width : 680);
+const panelMaxWidth = `clamp(460px, ${Math.round(nodeFlowWidth)}px, 720px)`;
 const deleteNode = useCanvasStore((state) => state.deleteNode);
 const updateNodeData = useCanvasStore((state) => state.updateNodeData);
 const openPanel = usePanelStateStore((state) => state.openPanel);
-const closePanel = usePanelStateStore((state) => state.closePanel);
 const [isBatchConnectOpen, setIsBatchConnectOpen] = useState(false);
+const [functionMenu, setFunctionMenu] = useState<{ x: number; y: number } | null>(null);
+const functionButtonRef = useRef<HTMLButtonElement | null>(null);
+const functionMenuRef = useRef<HTMLDivElement | null>(null);
 
 /** Three UX variants:
 A: upload node (user's raw image) — full tool set.
@@ -145,6 +163,79 @@ const next = selectedChipId === chipId ? null : chipId;
 updateNodeData(node.id, { selectedFunctionChip: next, selectedPromptPresetId: null });
 }, [node, selectedChipId, updateNodeData]);
 
+const isFunctionMenuOpen = functionMenu !== null;
+const closeFunctionMenu = useCallback(() => setFunctionMenu(null), []);
+const handleOpenFunctionMenu = useCallback((event: MouseEvent<HTMLButtonElement>) => {
+event.stopPropagation();
+const button = event.currentTarget;
+if (isFunctionMenuOpen && functionButtonRef.current === button) {
+closeFunctionMenu();
+return;
+}
+functionButtonRef.current = button;
+setFunctionMenu(resolvePromptPresetMenuPosition(button));
+}, [closeFunctionMenu, isFunctionMenuOpen]);
+const handleSelectFunctionChip = useCallback((chipId: string) => {
+handleToggleChip(chipId);
+closeFunctionMenu();
+}, [handleToggleChip, closeFunctionMenu]);
+const functionTriggerLabel = useMemo(() => {
+if (caseKind === 'B' && selectedChipId) {
+const item = MULTI_FUNCTION_ITEMS.find((entry) => entry.id === selectedChipId);
+if (item) return t(item.titleKey) as string;
+}
+return t('nodeToolbar.function') as string;
+}, [caseKind, selectedChipId, t]);
+
+useEffect(() => {
+if (!isFunctionMenuOpen) {
+return;
+}
+const onPointerDown = (event: PointerEvent) => {
+const menuElement = functionMenuRef.current;
+if (menuElement?.contains(event.target as Node)) {
+return;
+}
+const anchorElement = functionButtonRef.current;
+if (anchorElement?.contains(event.target as Node)) {
+return;
+}
+closeFunctionMenu();
+};
+window.addEventListener('pointerdown', onPointerDown, true);
+return () => {
+window.removeEventListener('pointerdown', onPointerDown, true);
+};
+}, [closeFunctionMenu, isFunctionMenuOpen]);
+
+useEffect(() => {
+if (!isFunctionMenuOpen) {
+return;
+}
+let frameId: number | null = null;
+const updatePosition = () => {
+const button = functionButtonRef.current;
+if (!button || !button.isConnected) {
+closeFunctionMenu();
+return;
+}
+const nextPosition = resolvePromptPresetMenuPosition(button);
+setFunctionMenu((current) => {
+if (!current || (current.x === nextPosition.x && current.y === nextPosition.y)) {
+return current;
+}
+return nextPosition;
+});
+frameId = window.requestAnimationFrame(updatePosition);
+};
+updatePosition();
+return () => {
+if (frameId !== null) {
+window.cancelAnimationFrame(frameId);
+}
+};
+}, [closeFunctionMenu, isFunctionMenuOpen]);
+
 const downloadPresetPaths = useSettingsStore((state) => state.downloadPresetPaths);
 const normalizedDownloadPresetPaths = useMemo(
 () => normalizeDownloadPresetPaths(downloadPresetPaths),
@@ -156,7 +247,7 @@ const [downloadMenu, setDownloadMenu] = useState<{ x: number; y: number } | null
 const [promptPresetMenu, setPromptPresetMenu] = useState<{ x: number; y: number } | null>(null);
 const [isDownloadMenuVisible, setIsDownloadMenuVisible] = useState(false);
 const [isCopySuccess, setIsCopySuccess] = useState(false);
-const [feedbackToast, setFeedbackToast] = useState<{ message: string; tone: 'success' | 'error' } | null>(null);
+const [feedbackToast, setFeedbackToast] = useState<{ message: string; tone: 'success' | 'error'; action?: { label: string; onClick: () => void } } | null>(null);
 const [videoPreviewSource, setVideoPreviewSource] = useState<string | null>(null);
 
 const downloadMenuRef = useRef<HTMLDivElement | null>(null);
@@ -166,51 +257,41 @@ const promptPresetPanelButtonRef = useRef<HTMLButtonElement | null>(null);
 const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 const feedbackToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 const downloadMenuCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-const hoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-const multiAngleButtonRef = useRef<HTMLButtonElement | null>(null);
-const lightingButtonRef = useRef<HTMLButtonElement | null>(null);
-const multiFunctionButtonRef = useRef<HTMLButtonElement | null>(null);
-const editButtonRef = useRef<HTMLButtonElement | null>(null);
-const gridSplitButtonRef = useRef<HTMLButtonElement | null>(null);
-
-// Open panel on hover (for multiFunction, edit, gridSplit)
-const handleHoverOpen = useCallback((
-panelType: Parameters<typeof openPanel>[0],
-ref: RefObject<HTMLButtonElement | null>
-) => {
-if (hoverCloseTimerRef.current) {
-clearTimeout(hoverCloseTimerRef.current);
-hoverCloseTimerRef.current = null;
+const openToolPanel = useCallback((panelType: Parameters<typeof openPanel>[0]) => {
+const el = functionButtonRef.current;
+if (!el) {
+return;
 }
-if (ref.current) {
-const el = ref.current;
-// Tag the button with a stable data-attribute so SelectedNodeOverlay can
-// re-locate it each animation frame (panel follows node as node drags).
+// Anchor the opened panel to the 功能 trigger button so it tracks the node.
 el.dataset.panelAnchor = `${node.id}:${panelType}`;
+closeFunctionMenu();
 openPanel(panelType, {
 nodeId: node.id,
 buttonKey: panelType,
 fallbackRect: el.getBoundingClientRect(),
-}, 'hover');
-}
-}, [openPanel, node.id]);
+}, 'click');
+}, [closeFunctionMenu, node.id, openPanel]);
 
-const handleHoverLeave = useCallback(() => {
-hoverCloseTimerRef.current = setTimeout(() => {
-const currentPanelState = usePanelStateStore.getState();
-if (currentPanelState.openMode === 'click') {
-hoverCloseTimerRef.current = null;
-return;
+const functionMenuEntries = useMemo(() => {
+if (caseKind === 'B') {
+return MULTI_FUNCTION_ITEMS.map((item) => ({
+id: item.id,
+icon: item.icon as typeof Camera,
+label: t(item.titleKey) as string,
+title: t(item.descKey) as string,
+active: selectedChipId === item.id,
+onSelect: () => handleSelectFunctionChip(item.id),
+}));
 }
-// Don't close if pointer moved onto the panel itself
-if (currentPanelState.isPointerOverPanel) {
-hoverCloseTimerRef.current = null;
-return;
-}
-closePanel();
-hoverCloseTimerRef.current = null;
-}, 200);
-}, [closePanel]);
+return CREATION_TOOLS.map((tool) => ({
+id: tool.panelType,
+icon: tool.icon,
+label: t(tool.labelKey) as string,
+title: t(tool.labelKey) as string,
+active: false,
+onSelect: () => openToolPanel(tool.panelType),
+}));
+}, [caseKind, selectedChipId, t, handleSelectFunctionChip, openToolPanel]);
 
 const rawImageSource = useMemo(() => {
 if (isUploadNode(node) || isImageEditNode(node) || isExportImageNode(node)) {
@@ -257,13 +338,6 @@ const canHandleImage = Boolean(imageSource);
 const canHandleVideo = Boolean(rawVideoSource && videoSource);
 const canHandleAudio = Boolean(rawAudioSource && audioSource);
 const canRetryGeneration = canRetryGenerationFetch(node);
-
-const suggestedImageSavePath = useMemo(() => {
-if (isExportImageNode(node)) {
-return resolveGeneratedImageSaveFileName(node.data);
-}
-return `node-${node.id}.png`;
-}, [node]);
 
 const suggestedImageStem = useMemo(() => {
 if (isExportImageNode(node)) {
@@ -319,15 +393,27 @@ downloadMenuCloseTimerRef.current = null;
 }, UI_POPOVER_TRANSITION_MS);
 }, []);
 
-const showFeedbackToast = useCallback((message: string, tone: 'success' | 'error' = 'success') => {
-setFeedbackToast({ message, tone });
+const showFeedbackToast = useCallback((
+message: string,
+tone: 'success' | 'error' = 'success',
+action?: { label: string; onClick: () => void },
+) => {
+setFeedbackToast({ message, tone, action });
 if (feedbackToastTimerRef.current) {
 clearTimeout(feedbackToastTimerRef.current);
 }
+// 带“打开文件夹”这类操作按钮时多留一会儿，免得还没点 toast 就消失了。
 feedbackToastTimerRef.current = setTimeout(() => {
 setFeedbackToast(null);
 feedbackToastTimerRef.current = null;
-}, 1800);
+}, action ? 6000 : 1800);
+}, []);
+
+const revealDownloadedFile = useCallback((path: string | null | undefined) => {
+if (!path) return;
+void revealItemInDir(path).catch((error) => {
+console.error('Failed to reveal downloaded file', error);
+});
 }, []);
 
 const handleRetryGenerationFetch = useCallback((event: MouseEvent<HTMLButtonElement>) => {
@@ -450,9 +536,6 @@ clearTimeout(feedbackToastTimerRef.current);
 if (downloadMenuCloseTimerRef.current) {
 clearTimeout(downloadMenuCloseTimerRef.current);
 }
-if (hoverCloseTimerRef.current) {
-clearTimeout(hoverCloseTimerRef.current);
-}
 };
 }, []);
 
@@ -499,23 +582,39 @@ showFeedbackToast(t('nodeToolbar.copyFailed'), 'error');
 const handleDownloadSaveAs = useCallback(async () => {
 if (!rawImageSource) return;
 try {
-const selectedPath = await save({ defaultPath: suggestedImageSavePath });
+// 有预设目录时，把保存框的默认位置指到第一个预设目录，用户只需选格式、不必重挑文件夹。
+const presetDir = (normalizedDownloadPresetPaths[0] ?? '').replace(/[\\/]+$/, '');
+const defaultPath = presetDir ? `${presetDir}/${suggestedImageStem}` : suggestedImageStem;
+const selectedPath = await save({
+defaultPath,
+filters: [
+{ name: 'PNG', extensions: ['png'] },
+{ name: 'JPEG', extensions: ['jpg'] },
+{ name: 'WebP', extensions: ['webp'] },
+],
+});
 if (!selectedPath || Array.isArray(selectedPath)) return;
-await saveImageSourceToPath(rawImageSource, selectedPath);
+const savedPath = await saveImageSourceToPath(rawImageSource, selectedPath);
 closeDownloadMenu();
-showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+showFeedbackToast(t('nodeToolbar.downloadSuccess'), 'success', {
+label: t('nodeToolbar.openInFolder'),
+onClick: () => revealDownloadedFile(savedPath),
+});
 } catch (error) {
 console.error('Failed to save image with save-as', error);
 showFeedbackToast(t('nodeToolbar.downloadFailed'), 'error');
 }
-}, [closeDownloadMenu, rawImageSource, showFeedbackToast, suggestedImageSavePath, t]);
+}, [closeDownloadMenu, normalizedDownloadPresetPaths, rawImageSource, revealDownloadedFile, showFeedbackToast, suggestedImageStem, t]);
 
 const handleDownloadToDownloads = useCallback(async () => {
 if (!rawImageSource) return;
 try {
-await saveImageSourceToDownloads(rawImageSource, suggestedImageStem);
+const savedPath = await saveImageSourceToDownloads(rawImageSource, suggestedImageStem);
 closeDownloadMenu();
-showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+showFeedbackToast(t('nodeToolbar.downloadSuccess'), 'success', {
+label: t('nodeToolbar.openInFolder'),
+onClick: () => revealDownloadedFile(savedPath),
+});
 } catch (error) {
 console.error('Failed to save image to downloads', error);
 showFeedbackToast(t('nodeToolbar.downloadFailed'), 'error');
@@ -526,9 +625,12 @@ const handleDownloadToPreset = useCallback(
 async (targetDir: string) => {
 if (!rawImageSource) return;
 try {
-await saveImageSourceToDirectory(rawImageSource, targetDir, suggestedImageStem);
+const savedPath = await saveImageSourceToDirectory(rawImageSource, targetDir, suggestedImageStem);
 closeDownloadMenu();
-showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+showFeedbackToast(t('nodeToolbar.downloadSuccess'), 'success', {
+label: t('nodeToolbar.openInFolder'),
+onClick: () => revealDownloadedFile(savedPath),
+});
 } catch (error) {
 console.error('Failed to save image to preset dir', error);
 showFeedbackToast(t('nodeToolbar.downloadFailed'), 'error');
@@ -670,7 +772,7 @@ const renderPromptPresetButton = (disabled = false) => (
 <UiChipButton
 ref={caseKind === 'B' || caseKind === 'AI_VIDEO_INPUT' ? promptPresetAnchorRef : promptPresetPanelButtonRef}
 type="button"
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${(caseKind === 'B' || caseKind === 'AI_VIDEO_INPUT') && selectedPromptPresetId ? 'border-accent bg-accent/35 text-white ring-2 ring-accent/40' : TOOLBAR_NEUTRAL_BUTTON_CLASS} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${(caseKind === 'B' || caseKind === 'AI_VIDEO_INPUT') && selectedPromptPresetId ? 'border-accent bg-accent/35 text-white ring-2 ring-accent/40' : TOOLBAR_NEUTRAL_BUTTON_CLASS} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
 onClick={disabled ? undefined : handleOpenPromptPresetMenu}
 onMouseEnter={disabled || (caseKind !== 'B' && caseKind !== 'AI_VIDEO_INPUT')
 ? undefined
@@ -680,8 +782,8 @@ setPromptPresetMenu(resolvePromptPresetMenuPosition(event.currentTarget));
 }}
 title={t('nodeToolbar.promptPreset') as string}
 >
-{(caseKind === 'B' || caseKind === 'AI_VIDEO_INPUT') && selectedPromptPresetId && <Check className="h-3.5 w-3.5 text-white" />}
-<Sparkles className="h-3.5 w-3.5" />
+{(caseKind === 'B' || caseKind === 'AI_VIDEO_INPUT') && selectedPromptPresetId && <Check className="h-3 w-3 text-white" />}
+<Sparkles className="h-3 w-3" />
 {t('nodeToolbar.promptPreset')}
 <ChevronDown className="h-3 w-3 opacity-70" />
 </UiChipButton>
@@ -706,7 +808,7 @@ type="button"
 className="mb-1 flex w-full items-center gap-2 rounded-lg border border-[var(--canvas-node-field-border)] px-2.5 py-2 text-left text-sm text-text-muted transition-colors hover:bg-[var(--canvas-node-menu-hover)]"
 onClick={handleClearPromptPreset}
 >
-<X className="h-3.5 w-3.5 shrink-0" />
+<X className="h-3 w-3 shrink-0" />
 <span className="min-w-0 flex-1 truncate">清除当前预设</span>
 </button>
 )}
@@ -720,9 +822,9 @@ className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text
 title={preset.prompt}
 onClick={() => { void handleSelectPromptPreset(preset.id); }}
 >
-<Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" />
+<Sparkles className="h-3 w-3 shrink-0 text-accent" />
 <span className="min-w-0 flex-1 truncate">{preset.name}</span>
-{active && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
+{active && <Check className="h-3 w-3 shrink-0 text-accent" />}
 </button>
 );
 })}
@@ -737,9 +839,64 @@ type="button"
 className="mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-[var(--canvas-node-field-border)] px-2.5 text-sm text-text-dark transition-colors hover:bg-[var(--canvas-node-menu-hover)]"
 onClick={handleManagePromptPresets}
 >
-<Settings2 className="h-3.5 w-3.5" />
+<Settings2 className="h-3 w-3" />
 {t('nodeToolbar.managePromptPresets')}
 </button>
+</div>,
+document.body
+)
+: null;
+
+const renderFunctionDropdownButton = () => (
+<UiChipButton
+ref={functionButtonRef}
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${isFunctionMenuOpen || (caseKind === 'B' && selectedChipId) ? 'border-accent bg-accent/35 text-white ring-2 ring-accent/40' : TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
+onClick={handleOpenFunctionMenu}
+title={t('nodeToolbar.function') as string}
+>
+<SlidersHorizontal className="h-3 w-3" />
+{functionTriggerLabel}
+<ChevronDown className="h-3 w-3 opacity-70" />
+</UiChipButton>
+);
+
+const functionMenuElement = functionMenu && typeof document !== 'undefined'
+? createPortal(
+<div
+ref={functionMenuRef}
+className="fixed z-[1000] w-[260px] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] p-2 shadow-2xl backdrop-blur-sm"
+style={{ left: `${functionMenu.x}px`, top: `${functionMenu.y}px` }}
+onClick={(event) => event.stopPropagation()}
+>
+<div className="px-2.5 pb-2 text-xs font-medium text-text-muted">{t('nodeToolbar.functionMenuTitle')}</div>
+<div className="max-h-[320px] space-y-1 overflow-y-auto pr-1">
+{selectedChipId && (
+<button
+type="button"
+className="mb-1 flex w-full items-center gap-2 rounded-lg border border-[var(--canvas-node-field-border)] px-2.5 py-2 text-left text-sm text-text-muted transition-colors hover:bg-[var(--canvas-node-menu-hover)]"
+onClick={() => { handleToggleChip(selectedChipId); closeFunctionMenu(); }}
+>
+<X className="h-3.5 w-3.5 shrink-0" />
+<span className="min-w-0 flex-1 truncate">{t('nodeToolbar.clearFunction')}</span>
+</button>
+)}
+{functionMenuEntries.map((entry) => {
+const Icon = entry.icon;
+return (
+<button
+key={entry.id}
+type="button"
+title={entry.title}
+onClick={entry.onSelect}
+className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${entry.active ? 'bg-[var(--canvas-node-menu-active)] text-text-dark' : 'text-text-dark hover:bg-[var(--canvas-node-menu-hover)]'}`}
+>
+<Icon className="h-3.5 w-3.5 shrink-0 text-accent" />
+<span className="min-w-0 flex-1 truncate">{entry.label}</span>
+{entry.active && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
+</button>
+);
+})}
+</div>
 </div>,
 document.body
 )
@@ -755,6 +912,19 @@ className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm shadow
 ? <Check className="h-4 w-4" />
 : <AlertCircle className="h-4 w-4" />}
 <span>{feedbackToast.message}</span>
+{feedbackToast.action && (
+<button
+type="button"
+onClick={() => {
+feedbackToast.action?.onClick();
+setFeedbackToast(null);
+}}
+className="pointer-events-auto ml-1 flex shrink-0 items-center gap-1 rounded-full border border-white/30 bg-white/15 px-2.5 py-0.5 text-xs font-medium text-white transition-colors hover:bg-white/25"
+>
+<FolderOpen className="h-3 w-3" />
+{feedbackToast.action.label}
+</button>
+)}
 </div>
 </div>,
 document.body
@@ -764,7 +934,7 @@ document.body
 const videoPreviewElement = videoPreviewSource && typeof document !== 'undefined'
 ? createPortal(
 <div
-className="fixed inset-0 z-[1250] flex items-center justify-center bg-black/82 p-6 backdrop-blur-sm"
+className="fixed inset-0 z-[1250] flex items-center justify-center bg-black/80 p-6 backdrop-blur-sm"
 onClick={() => setVideoPreviewSource(null)}
 >
 <div
@@ -799,195 +969,83 @@ nodeId={node.id}
 isVisible
 position={NODE_TOOLBAR_POSITION}
 align={NODE_TOOLBAR_ALIGN}
-offset={offset}
+offset={offset * toolbarScale}
 className={NODE_TOOLBAR_CLASS}
 >
-<UiPanel className="flex max-w-[92vw] flex-wrap items-center justify-center gap-1 rounded-2xl p-1">
-{/* Case B: empty AI node — render multi-function chips only. Clicking
-a chip selects the module (blue highlight); clicking again
-clears. One at a time. The chip's prompt template is composed in
-ImageEditNode.handleGenerate at submit time. */}
-{caseKind === 'B' && MULTI_FUNCTION_ITEMS.map((item) => {
-const Icon = item.icon;
-const active = selectedChipId === item.id;
-return (
-<UiChipButton
-key={item.id}
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${active ? 'border-accent bg-accent/45 text-white ring-2 ring-accent/60 shadow-[0_0_0_1px_rgba(59,130,246,0.35)]' : TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
-onClick={(e) => { e.stopPropagation(); handleToggleChip(item.id); }}
-title={t(item.descKey) as string}
->
-{active && <Check className="h-3.5 w-3.5 text-white" />}
-<Icon className="h-3.5 w-3.5" />
-{t(item.titleKey) as string}
-</UiChipButton>
-);
-})}
+<UiPanel style={{ transform: `scale(${toolbarScale})`, transformOrigin: 'bottom center', maxWidth: panelMaxWidth }} className="flex flex-wrap items-center justify-center gap-x-1 gap-y-0.5 rounded-2xl p-1">
+{/* Case B: empty AI node — the multi-function modules are collapsed into a
+single "功能 ▾" dropdown (row 1) instead of a wide row of chips; selecting a
+module stores selectedFunctionChip and its prompt template is composed at
+submit time (ImageEditNode.handleGenerate). */}
+{caseKind === 'B' && renderFunctionDropdownButton()}
 {caseKind === 'B' && renderPromptPresetButton()}
+{caseKind === 'B' && <div className="w-full basis-full" />}
 {caseKind === 'AI_VIDEO_INPUT' && renderPromptPresetButton()}
 {/* Case A / C: full tool chips. */}
 {caseKind !== 'B' && caseKind !== 'V' && caseKind !== 'AUDIO' && caseKind !== 'AI_VIDEO_INPUT' && (<>
-{/* 多角度 - Multi-angle */}
-<UiChipButton
-ref={multiAngleButtonRef}
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
-onClick={(e) => {
-e.stopPropagation();
-if (multiAngleButtonRef.current) {
-{
-const el = multiAngleButtonRef.current;
-el.dataset.panelAnchor = `${node.id}:multiAngle`;
-openPanel('multiAngle', { nodeId: node.id, buttonKey: 'multiAngle', fallbackRect: el.getBoundingClientRect() }, 'click');
-}
-}
-}}
->
-<Camera className="h-3.5 w-3.5" />
-{t('nodeToolbar.multiAngle')}
-</UiChipButton>
-{/* 打光 - Lighting */}
-<UiChipButton
-ref={lightingButtonRef}
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
-onClick={(e) => {
-e.stopPropagation();
-if (lightingButtonRef.current) {
-{
-const el = lightingButtonRef.current;
-el.dataset.panelAnchor = `${node.id}:lighting`;
-openPanel('lighting', { nodeId: node.id, buttonKey: 'lighting', fallbackRect: el.getBoundingClientRect() }, 'click');
-}
-}
-}}
->
-<Sun className="h-3.5 w-3.5" />
-{t('nodeToolbar.lighting')}
-</UiChipButton>
-{/* 多功能 - Multi-function */}
-<UiChipButton
-ref={multiFunctionButtonRef}
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
-onClick={(e) => {
-e.stopPropagation();
-if (multiFunctionButtonRef.current) {
-{
-const el = multiFunctionButtonRef.current;
-el.dataset.panelAnchor = `${node.id}:multiFunction`;
-openPanel('multiFunction', { nodeId: node.id, buttonKey: 'multiFunction', fallbackRect: el.getBoundingClientRect() }, 'click');
-}
-}
-}}
-onMouseEnter={() => handleHoverOpen('multiFunction', multiFunctionButtonRef)}
-onMouseLeave={handleHoverLeave}
->
-<Grid3x3 className="h-3.5 w-3.5" />
-{t('nodeToolbar.multiFunction')}
-<ChevronDown className="h-3 w-3 opacity-70" />
-</UiChipButton>
-{/* 编辑 - Edit */}
-<UiChipButton
-ref={editButtonRef}
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
-onClick={(e) => {
-e.stopPropagation();
-if (editButtonRef.current) {
-{
-const el = editButtonRef.current;
-el.dataset.panelAnchor = `${node.id}:edit`;
-openPanel('edit', { nodeId: node.id, buttonKey: 'edit', fallbackRect: el.getBoundingClientRect() }, 'click');
-}
-}
-}}
-onMouseEnter={() => handleHoverOpen('edit', editButtonRef)}
-onMouseLeave={handleHoverLeave}
->
-<PenLine className="h-3.5 w-3.5" />
-{t('nodeToolbar.edit')}
-<ChevronDown className="h-3 w-3 opacity-70" />
-</UiChipButton>
-{/* 宫格切分 - Grid Split */}
-<UiChipButton
-ref={gridSplitButtonRef}
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
-onClick={(e) => {
-e.stopPropagation();
-if (gridSplitButtonRef.current) {
-{
-const el = gridSplitButtonRef.current;
-el.dataset.panelAnchor = `${node.id}:gridSplit`;
-openPanel('gridSplit', { nodeId: node.id, buttonKey: 'gridSplit', fallbackRect: el.getBoundingClientRect() }, 'click');
-}
-}
-}}
-onMouseEnter={() => handleHoverOpen('gridSplit', gridSplitButtonRef)}
-onMouseLeave={handleHoverLeave}
->
-<Scissors className="h-3.5 w-3.5" />
-{t('nodeToolbar.gridSplit')}
-<ChevronDown className="h-3 w-3 opacity-70" />
-</UiChipButton>
+{/* 功能下拉：多角度 / 打光 / 多功能 / 编辑 / 宫格切分 */}
+{renderFunctionDropdownButton()}
 {referenceImageSource && renderPromptPresetButton()}
 {/* 复制 - Copy */}
 {canHandleImage && (
 <UiChipButton
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS} ${
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${TOOLBAR_NEUTRAL_BUTTON_CLASS} ${
 isCopySuccess ? '!border-emerald-400/70 !bg-emerald-500/20 !text-emerald-200' : ''
 }`}
 onClick={() => { void handleCopyImage(); }}
 >
-<Copy className="h-3.5 w-3.5" />
+<Copy className="h-3 w-3" />
 {t('nodeToolbar.copy')}
 </UiChipButton>
 )}
 {/* 下载 - Download */}
 {canHandleImage && (
 <UiChipButton
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
 onClick={(event) => {
 event.stopPropagation();
-if (normalizedDownloadPresetPaths.length === 0) {
-void handleDownloadToDownloads();
-return;
-}
-if (normalizedDownloadPresetPaths.length === 1) {
-void handleDownloadToPreset(normalizedDownloadPresetPaths[0]);
+// 0 或 1 个预设目录时都弹保存框选格式(默认位置=该预设目录);≥2 个预设才走快捷菜单
+if (normalizedDownloadPresetPaths.length <= 1) {
+void handleDownloadSaveAs();
 return;
 }
 setDownloadMenu({ x: event.clientX, y: event.clientY });
 setIsDownloadMenuVisible(false);
 }}
 >
-<Download className="h-3.5 w-3.5" />
+<Download className="h-3 w-3" />
 {t('nodeToolbar.download')}
 </UiChipButton>
 )}
 {/* 放大预览 - Zoom Preview */}
 {canHandleImage && imageSource && (
 <UiChipButton
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
 onClick={(event) => {
 event.stopPropagation();
 useCanvasStore.getState().openImageViewer(imageSource);
 }}
 >
-<Maximize2 className="h-3.5 w-3.5" />
+<Maximize2 className="h-3 w-3" />
 {t('nodeToolbar.zoomPreview')}
 </UiChipButton>
 )}
+{/* 换行：下排=节点操作（重试/批量/删除） */}
+<div className="w-full basis-full" />
 </>)}{/* end case A/C */}
 {caseKind === 'V' && canHandleVideo && videoSource && (<>
 <UiChipButton
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
 onClick={(event) => {
 event.stopPropagation();
 setVideoPreviewSource(videoSource);
 }}
 >
-<Maximize2 className="h-3.5 w-3.5" />
+<Maximize2 className="h-3 w-3" />
 {t('nodeToolbar.zoomPreview')}
 </UiChipButton>
 <UiChipButton
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS} ${
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${TOOLBAR_NEUTRAL_BUTTON_CLASS} ${
 isCopySuccess ? '!border-emerald-400/70 !bg-emerald-500/20 !text-emerald-200' : ''
 }`}
 onClick={(event) => {
@@ -995,11 +1053,11 @@ event.stopPropagation();
 void handleCopyVideoSource();
 }}
 >
-<Copy className="h-3.5 w-3.5" />
+<Copy className="h-3 w-3" />
 {t('nodeToolbar.copy')}
 </UiChipButton>
 <UiChipButton
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
 onClick={(event) => {
 event.stopPropagation();
 if (normalizedDownloadPresetPaths.length === 0) {
@@ -1014,66 +1072,66 @@ setDownloadMenu({ x: event.clientX, y: event.clientY });
 setIsDownloadMenuVisible(false);
 }}
 >
-<Download className="h-3.5 w-3.5" />
+<Download className="h-3 w-3" />
 {t('nodeToolbar.download')}
 </UiChipButton>
 </>)}
 {caseKind === 'AUDIO' && canHandleAudio && (<>
 <UiChipButton
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
 onClick={(event) => { void handleDownloadAudio(event); }}
 >
-<Download className="h-3.5 w-3.5" />
+<Download className="h-3 w-3" />
 {t('nodeToolbar.download')}
 </UiChipButton>
 <UiChipButton
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
 onClick={openAudioTrimMode}
 >
-<Scissors className="h-3.5 w-3.5" />
+<Scissors className="h-3 w-3" />
 {t('nodeToolbar.audioTrim')}
 </UiChipButton>
 </>)}
 {canRetryGeneration && (
 <UiChipButton
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
 onClick={handleRetryGenerationFetch}
 title={t('nodeToolbar.retryFetch') as string}
 >
-<RotateCcw className="h-3.5 w-3.5" />
+<RotateCcw className="h-3 w-3" />
 {t('nodeToolbar.retryFetch')}
 </UiChipButton>
 )}
 {/* 批量连接 - Batch Connect */}
 {canBeBatchSource && (
 <UiChipButton
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2 text-[11px] ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
 onClick={(event) => {
 event.stopPropagation();
 setIsBatchConnectOpen(true);
 }}
 title="批量连接"
 >
-<Link2 className="h-3.5 w-3.5" />
+<Link2 className="h-3 w-3" />
 批量连接
 </UiChipButton>
 )}
 {/* 删除 - Delete (shared by A / B / C / V) */}
 <UiChipButton
-className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} border-red-500/45 bg-red-500/15 px-2.5 text-xs text-red-300 hover:bg-red-500/25`}
+className={`h-7 ${TOOLBAR_BUTTON_RADIUS_CLASS} border-red-500/45 bg-red-500/15 px-2 text-[11px] text-red-600 dark:text-red-400 hover:bg-red-500/25`}
 onClick={(event) => {
 event.stopPropagation();
 deleteNode(node.id);
 }}
 >
-<Trash2 className="h-3.5 w-3.5" />
+<Trash2 className="h-3 w-3" />
 {t('common.delete')}
 </UiChipButton>
 </UiPanel>
-{downloadMenu && (
+{downloadMenu && createPortal(
 <div
 ref={downloadMenuRef}
-className={`fixed z-[120] min-w-[280px] rounded-xl border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] p-2 shadow-2xl backdrop-blur-sm transition-opacity duration-150 ${isDownloadMenuVisible ? 'opacity-100' : 'opacity-0'}`}
+className={`fixed z-[1000] min-w-[280px] rounded-xl border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] p-2 shadow-2xl backdrop-blur-sm transition-opacity duration-150 ${isDownloadMenuVisible ? 'opacity-100' : 'opacity-0'}`}
 style={{ left: `${downloadMenu.x}px`, top: `${downloadMenu.y}px` }}
 >
 <button
@@ -1088,6 +1146,18 @@ void (caseKind === 'V'
 <Download className="h-4 w-4" />
 {t('nodeToolbar.saveAs')}
 </button>
+{caseKind !== 'V' && (
+<button
+type="button"
+className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm text-text-dark transition-colors hover:bg-[var(--canvas-node-menu-hover)]"
+onClick={() => {
+void handleDownloadToDownloads();
+}}
+>
+<Download className="h-4 w-4" />
+{t('nodeToolbar.downloadToDownloadsFolder')}
+</button>
+)}
 {normalizedDownloadPresetPaths.length > 0 ? (
 <div className="mt-1 space-y-1 border-t border-[var(--canvas-node-divider)] pt-2">
 {normalizedDownloadPresetPaths.map((path) => (
@@ -1102,7 +1172,7 @@ void (caseKind === 'V'
 }}
 title={path}
 >
-<FolderOpen className="h-3.5 w-3.5 shrink-0 text-text-muted" />
+<FolderOpen className="h-3 w-3 shrink-0 text-text-muted" />
 <span className="truncate">{path}</span>
 </button>
 ))}
@@ -1113,9 +1183,11 @@ title={path}
 </div>
 )}
 </div>
+, document.body
 )}
 </ReactFlowNodeToolbar>
 {promptPresetMenuElement}
+{functionMenuElement}
 {feedbackToastElement}
 {videoPreviewElement}
 {isBatchConnectOpen && (

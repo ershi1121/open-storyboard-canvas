@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useCallback, useState } from 'react';
-import { NodeToolbar as ReactFlowNodeToolbar } from '@xyflow/react';
+import { NodeToolbar as ReactFlowNodeToolbar, useViewport } from '@xyflow/react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -103,6 +103,8 @@ function resolvePanelImageGeometry(
 
 export const SelectedNodeOverlay = memo(() => {
   const { t } = useTranslation();
+  const { zoom } = useViewport();
+  const toolbarScale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
   const nodes = useCanvasStore((state) => state.nodes);
   const selectedNodeId = useCanvasStore((state) => state.selectedNodeId);
   const addNode = useCanvasStore((state) => state.addNode);
@@ -822,11 +824,12 @@ export const SelectedNodeOverlay = memo(() => {
           isVisible
           position={NODE_TOOLBAR_POSITION}
           align={NODE_TOOLBAR_ALIGN}
-          offset={COLLAPSED_ACTION_TOOLBAR_TOGGLE_OFFSET}
+          offset={COLLAPSED_ACTION_TOOLBAR_TOGGLE_OFFSET * toolbarScale}
           className={NODE_TOOLBAR_CLASS}
         >
           <button
             type="button"
+            style={{ transform: `scale(${toolbarScale})`, transformOrigin: 'bottom center' }}
             className="pointer-events-auto inline-flex h-7 items-center gap-1 rounded-full border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] px-2.5 text-[11px] font-medium text-text-dark shadow-lg backdrop-blur transition-colors hover:border-[var(--canvas-node-border-hover)] hover:bg-[var(--canvas-node-menu-hover)]"
             onClick={(event) => {
               event.stopPropagation();

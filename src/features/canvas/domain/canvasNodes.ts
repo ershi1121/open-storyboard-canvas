@@ -647,6 +647,9 @@ export interface StoryboardNodeCreationDto {
 export const NODE_TOOL_TYPES = {
   crop: 'crop',
   annotate: 'annotate',
+  // 没有独立的「文字」工具类型 —— 文字已经并进裁剪面板（裁剪 → 边框 → 文字
+  // 是同一条链路，共用 node.data.textLayers 这一份参数），
+  // 所以不再需要单独的 toolType / 插件 / 编辑器。
   splitStoryboard: 'split-storyboard',
   // Edit-family tools — these open a NodeToolDialog with a mask/form editor
   // and submit via the AI gateway. The current build registers them as

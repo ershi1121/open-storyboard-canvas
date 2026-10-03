@@ -13,6 +13,20 @@ import {
 } from './imageData';
 import { cropImageSource, readStoryboardImageMetadata } from '@/commands/image';
 import { drawAnnotations, parseAnnotationItems } from '../tools/annotation';
+import {
+  measureAutoCrop,
+  readAutoCropOptions,
+  readCropRect,
+  resolveEffectiveCropRect,
+  type CropRect,
+} from '../tools/autoCrop';
+import {
+  drawImageWithBorder,
+  isBorderNoop,
+  readBorderOptions,
+  resolveBorderGeometry,
+} from '../tools/border';
+import { drawTextLayersFromOptions } from '../tools/text';
 import type {
   AiGateway,
   IdGenerator,
@@ -61,8 +75,13 @@ export class CanvasToolProcessor implements ToolProcessor {
 
     switch (toolType) {
       case NODE_TOOL_TYPES.crop:
+        // 顺序固定：先裁剪 → 再补边 / 描边 / 圆角 → 最后叠文字。
+        // 文字的位置百分比是相对「最终画幅」的，和裁剪面板预览里看到的一致。
         return {
-          outputImageUrl: await this.cropImage(sourceImageUrl, options),
+          outputImageUrl: await this.applyTextLayersToImage(
+            await this.applyBorderToImage(await this.cropImage(sourceImageUrl, options), options),
+            options
+          ),
         };
       case NODE_TOOL_TYPES.annotate:
         // Keep annotate on frontend for now because it supports free-form vector annotations.
@@ -245,15 +264,53 @@ export class CanvasToolProcessor implements ToolProcessor {
     return await submitAndWait(compositePrompt, refs);
   }
 
+  /**
+   * 按颜色扫描出「内容边界」，算出自动裁剪矩形（原图像素空间）。
+   *
+   * 返回 null = 没开自动裁剪，或者检测跑不了（图片还没就绪 / 跨域污染画布）。
+   * 两种情况都当作「这一步没生效」，退回用户手画的裁剪框 ——
+   * 检测失败不该让整次出图失败。
+   */
+  private async resolveAutoCropRect(
+    sourceImage: string,
+    options: Record<string, unknown>
+  ): Promise<CropRect | null> {
+    const autoCrop = readAutoCropOptions(options);
+    if (!autoCrop.enabled) {
+      return null;
+    }
+
+    try {
+      const image = await loadImageElement(sourceImage);
+      return measureAutoCrop(image, autoCrop)?.contentRect ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 裁剪。顺序上自动裁剪在**最底层**：
+   *
+   *     自动裁剪（只动底图边界）→ 手动裁剪框 → 边框 / 描边 / 圆角 → 文字
+   *
+   * 所以这里先把「手动框 ∩ 内容边界」算成**一个**矩形再交给下游，
+   * 而不是先裁一次再裁一次 —— 边框是后面才叠上去的，永远不会被自动裁剪吃掉，
+   * 也就得到了用户要的「PS 图层」效果：上层的不会影响下层的。
+   */
   private async cropImage(sourceImage: string, options: Record<string, unknown>): Promise<string> {
+    const effectiveCrop = resolveEffectiveCropRect(
+      readCropRect(options),
+      await this.resolveAutoCropRect(sourceImage, options)
+    );
+
     try {
       return await cropImageSource({
         source: sourceImage,
         aspectRatio: String(options.aspectRatio ?? '1:1'),
-        cropX: Number(options.cropX),
-        cropY: Number(options.cropY),
-        cropWidth: Number(options.cropWidth),
-        cropHeight: Number(options.cropHeight),
+        cropX: effectiveCrop ? effectiveCrop.x : Number(options.cropX),
+        cropY: effectiveCrop ? effectiveCrop.y : Number(options.cropY),
+        cropWidth: effectiveCrop ? effectiveCrop.width : Number(options.cropWidth),
+        cropHeight: effectiveCrop ? effectiveCrop.height : Number(options.cropHeight),
       });
     } catch {
       // Fallback to local canvas implementation when backend command is unavailable.
@@ -263,10 +320,10 @@ export class CanvasToolProcessor implements ToolProcessor {
     const targetRatio = parseAspectRatio(aspectRatio);
     const image = await loadImageElement(sourceImage);
 
-    const cropX = Number(options.cropX);
-    const cropY = Number(options.cropY);
-    const cropWidthOption = Number(options.cropWidth);
-    const cropHeightOption = Number(options.cropHeight);
+    const cropX = effectiveCrop ? effectiveCrop.x : Number(options.cropX);
+    const cropY = effectiveCrop ? effectiveCrop.y : Number(options.cropY);
+    const cropWidthOption = effectiveCrop ? effectiveCrop.width : Number(options.cropWidth);
+    const cropHeightOption = effectiveCrop ? effectiveCrop.height : Number(options.cropHeight);
 
     const hasManualCropArea =
       Number.isFinite(cropX) &&
@@ -327,6 +384,41 @@ export class CanvasToolProcessor implements ToolProcessor {
     return canvasToDataUrl(canvas);
   }
 
+  /**
+   * 裁剪面板里的「边框」是可选收尾步骤：先裁再补边 / 描边。
+   *
+   * 之所以放在裁剪之后而不是之前，是因为边框的参数都以最终画幅为基准：
+   * 圆角半径按裁剪结果短边算，按比例补边也要知道裁剪后的真实比例。
+   * 全程走前端 canvas，不依赖 Tauri 命令，所以 Web 预览和桌面端行为一致。
+   *
+   * 边框可以是多层（每层一个颜色）。没有「开关」：层列表为空就是没有边框。
+   */
+  private async applyBorderToImage(
+    sourceImage: string,
+    options: Record<string, unknown>
+  ): Promise<string> {
+    const border = readBorderOptions(options);
+
+    const image = await loadImageElement(sourceImage);
+    const geometry = resolveBorderGeometry(image.naturalWidth, image.naturalHeight, border);
+    if (isBorderNoop(geometry)) {
+      // 没有边框层、参数也全是 0，等价于没开，别白跑一次 PNG 编码。
+      return sourceImage;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = geometry.canvasWidth;
+    canvas.height = geometry.canvasHeight;
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('无法初始化画布');
+    }
+
+    drawImageWithBorder(context, image, geometry);
+    return canvasToDataUrl(canvas);
+  }
+
   private async annotateImage(
     sourceImage: string,
     options: Record<string, unknown>
@@ -373,6 +465,46 @@ export class CanvasToolProcessor implements ToolProcessor {
       context.fillRect(x - boxWidth / 2, y - boxHeight / 2, boxWidth, boxHeight);
       context.fillStyle = color;
       context.fillText(text, x, y);
+    }
+
+    return canvasToDataUrl(canvas);
+  }
+
+  /**
+   * 文字落图：把（裁剪 + 边框之后的）图铺到同尺寸 canvas 上，再按图层叠文字。
+   *
+   * options.textOrderIndex 是这张图**在选择条里排第几**（0-based）—— 文字里的 {n} 由它决定。
+   * 这个值由裁剪面板同步进 options（拖条就变），这里只负责读，不去猜。
+   */
+  private async applyTextLayersToImage(
+    sourceImage: string,
+    options: Record<string, unknown>
+  ): Promise<string> {
+    const image = await loadImageElement(sourceImage);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('无法初始化画布');
+    }
+
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const rawIndex = Number(options.textOrderIndex);
+    const orderIndex = Number.isFinite(rawIndex) ? Math.max(0, Math.floor(rawIndex)) : 0;
+    const drew = drawTextLayersFromOptions(
+      context,
+      canvas.width,
+      canvas.height,
+      options,
+      orderIndex
+    );
+    if (!drew) {
+      // 没有可见文字层 —— 没必要白跑一次 PNG 编码。
+      return sourceImage;
     }
 
     return canvasToDataUrl(canvas);
