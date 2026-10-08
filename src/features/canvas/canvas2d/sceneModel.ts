@@ -5,7 +5,7 @@ import {
   type CanvasNode,
   type CanvasNodeType,
 } from '@/features/canvas/domain/canvasNodes';
-import { getNodeDefinition } from '@/features/canvas/domain/nodeRegistry';
+import { getNodeDefinition, nodeHasSourceHandle, nodeHasTargetHandle } from '@/features/canvas/domain/nodeRegistry';
 
 /**
  * Canvas2D 渲染层的场景模型（Render Model）。
@@ -58,6 +58,9 @@ export interface RenderNode {
   badge: string | null;
   /** 文本类节点的正文预览 */
   textPreview: string | null;
+  /** 连接桩能力（来自 nodeRegistry.connectivity） */
+  canSource: boolean;
+  canTarget: boolean;
 }
 
 export interface RenderEdge {
@@ -380,6 +383,8 @@ export function buildSceneModel(
       accent,
       badge,
       textPreview,
+      canSource: type ? nodeHasSourceHandle(type) : false,
+      canTarget: type ? nodeHasTargetHandle(type) : false,
     };
     byId.set(node.id, renderNode);
     if (renderNode.isGroup) groups.push(renderNode);

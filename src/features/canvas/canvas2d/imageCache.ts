@@ -44,9 +44,12 @@ export function getImage(url: string, onReady: () => void): HTMLImageElement | n
   };
   img.src = url;
 
-  // 淘汰最久未使用条目
+  // 淘汰最久未使用的【已完成】条目（loading 中的不淘汰，
+  // 否则全览几百张图时会互相驱逐造成加载风暴、图片永远显示不出来）
   if (cache.size > MAX_ENTRIES) {
     for (const key of cache.keys()) {
+      const candidate = cache.get(key);
+      if (candidate && candidate.state === 'loading') continue;
       cache.delete(key);
       if (cache.size <= MAX_ENTRIES) break;
     }

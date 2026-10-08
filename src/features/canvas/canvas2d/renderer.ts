@@ -26,6 +26,23 @@ export interface DrawStats {
   calls: number;
 }
 
+export interface SnapGuideLine {
+  orientation: 'vertical' | 'horizontal';
+  position: number;
+}
+
+export interface MinimapLayout {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  worldX: number;
+  worldY: number;
+  worldW: number;
+  worldH: number;
+  scale: number;
+}
+
 export interface DrawSceneOptions {
   ctx: CanvasRenderingContext2D;
   model: SceneModel;
@@ -37,10 +54,17 @@ export interface DrawSceneOptions {
   theme: 'dark' | 'light';
   time: number;
   hoverId: string | null;
+  hoverHandle: { nodeId: string; handle: 'source' | 'target' } | null;
   selectedIds: ReadonlySet<string>;
   dragIds: ReadonlySet<string>;
   dragDx: number;
   dragDy: number;
+  guides: SnapGuideLine[];
+  marqueeRect: { x: number; y: number; w: number; h: number } | null;
+  connectPreview: { fromX: number; fromY: number; toX: number; toY: number; valid: boolean; hasTarget: boolean } | null;
+  resizeOverride: { id: string; w: number; h: number } | null;
+  minimap: MinimapLayout | null;
+  showHandles: boolean;
   preferOriginal: boolean;
   onImageReady: () => void;
 }
@@ -488,6 +512,156 @@ function drawNode(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, 
   return drawCard(ctx, n, lod, opts, P, opts.cam.zoom);
 }
 
+/* ---------- v1 叠加层 ---------- */
+
+function drawHandles(ctx: CanvasRenderingContext2D, n: RenderNode, opts: DrawSceneOptions, dx: number, dy: number): number {
+  if (!opts.showHandles || n.isGroup || n.kind === 'tag' || n.kind === 'tagGroup') return 0;
+  const zoom = opts.cam.zoom;
+  const isHot = (h: 'source' | 'target') => opts.hoverHandle?.nodeId === n.id && opts.hoverHandle?.handle === h;
+  let calls = 0;
+  const dots: Array<{ handle: 'source' | 'target'; x: number; y: number; ok: boolean }> = [
+    { handle: 'source', x: n.x + n.w + dx, y: n.y + n.h / 2 + dy, ok: n.canSource },
+    { handle: 'target', x: n.x + dx, y: n.y + n.h / 2 + dy, ok: n.canTarget },
+  ];
+  for (const dot of dots) {
+    if (!dot.ok) continue;
+    const r = (isHot(dot.handle) ? 7 : 5) / zoom;
+    ctx.beginPath();
+    ctx.arc(dot.x, dot.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = dot.handle === 'source' ? SELECT_COLOR : opts.theme === 'dark' ? '#1c2333' : '#ffffff';
+    ctx.fill();
+    ctx.lineWidth = 1.6 / zoom;
+    ctx.strokeStyle = dot.handle === 'source' ? '#e0f2fe' : SELECT_COLOR;
+    ctx.stroke();
+    calls += 2;
+  }
+  return calls;
+}
+
+function drawConnectPreview(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions): number {
+  const c = opts.connectPreview;
+  if (!c) return 0;
+  const zoom = opts.cam.zoom;
+  const gap = Math.max(48, Math.abs(c.toX - c.fromX) * 0.4);
+  ctx.beginPath();
+  ctx.moveTo(c.fromX, c.fromY);
+  ctx.bezierCurveTo(c.fromX + gap, c.fromY, c.toX - gap, c.toY, c.toX, c.toY);
+  ctx.strokeStyle = c.hasTarget ? (c.valid ? GEN_COLOR : FAIL_COLOR) : SELECT_COLOR;
+  ctx.lineWidth = 2 / zoom;
+  ctx.setLineDash([8 / zoom, 6 / zoom]);
+  ctx.lineDashOffset = (-opts.time * 0.05) / zoom;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  return 1;
+}
+
+function drawMarquee(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions): number {
+  const m = opts.marqueeRect;
+  if (!m || m.w < 1 || m.h < 1) return 0;
+  const zoom = opts.cam.zoom;
+  ctx.fillStyle = 'rgba(56,189,248,0.10)';
+  ctx.fillRect(m.x, m.y, m.w, m.h);
+  ctx.strokeStyle = SELECT_COLOR;
+  ctx.lineWidth = 1 / zoom;
+  ctx.setLineDash([4 / zoom, 3 / zoom]);
+  ctx.strokeRect(m.x, m.y, m.w, m.h);
+  ctx.setLineDash([]);
+  return 2;
+}
+
+function drawGuides(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions, view: { x: number; y: number; w: number; h: number }): number {
+  if (opts.guides.length === 0) return 0;
+  const zoom = opts.cam.zoom;
+  const blue = 'rgba(59, 130, 246, 0.9)';
+  ctx.strokeStyle = blue;
+  ctx.lineWidth = Math.max(0.5, 1 / zoom);
+  ctx.setLineDash([8 / zoom, 6 / zoom]);
+  let calls = 0;
+  for (const g of opts.guides) {
+    ctx.beginPath();
+    if (g.orientation === 'vertical') {
+      ctx.moveTo(g.position, view.y - view.h);
+      ctx.lineTo(g.position, view.y + view.h * 2);
+    } else {
+      ctx.moveTo(view.x - view.w, g.position);
+      ctx.lineTo(view.x + view.w * 2, g.position);
+    }
+    ctx.stroke();
+    calls++;
+  }
+  ctx.setLineDash([]);
+  return calls;
+}
+
+function drawResizeGhost(ctx: CanvasRenderingContext2D, model: SceneModel, opts: DrawSceneOptions): number {
+  const r = opts.resizeOverride;
+  if (!r) return 0;
+  const n = model.byId.get(r.id);
+  if (!n) return 0;
+  const zoom = opts.cam.zoom;
+  ctx.strokeStyle = SELECT_COLOR;
+  ctx.lineWidth = 1.5 / zoom;
+  ctx.setLineDash([6 / zoom, 4 / zoom]);
+  ctx.strokeRect(n.x, n.y, r.w, r.h);
+  ctx.setLineDash([]);
+  const fs = 11 / Math.min(zoom, 1);
+  ctx.fillStyle = SELECT_COLOR;
+  ctx.font = `${fs}px system-ui, sans-serif`;
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(`${Math.round(r.w)} × ${Math.round(r.h)}`, n.x, n.y - 4 / zoom);
+  return 2;
+}
+
+function drawMinimap(ctx: CanvasRenderingContext2D, model: SceneModel, opts: DrawSceneOptions, P: Palette): number {
+  const m = opts.minimap;
+  if (!m) return 0;
+  let calls = 0;
+  ctx.setTransform(opts.dpr, 0, 0, opts.dpr, 0, 0);
+  ctx.fillStyle = opts.theme === 'dark' ? 'rgba(11,15,24,0.82)' : 'rgba(255,255,255,0.85)';
+  rr(ctx, m.x, m.y, m.w, m.h, 8);
+  ctx.fill();
+  ctx.strokeStyle = opts.theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.16)';
+  ctx.lineWidth = 1;
+  rr(ctx, m.x, m.y, m.w, m.h, 8);
+  ctx.stroke();
+  calls += 2;
+  ctx.save();
+  rr(ctx, m.x, m.y, m.w, m.h, 8);
+  ctx.clip();
+  const mx = (wx: number) => m.x + 6 + (wx - m.worldX) * m.scale;
+  const my = (wy: number) => m.y + 6 + (wy - m.worldY) * m.scale;
+  for (const n of model.nodes) {
+    const x = mx(n.x);
+    const y = my(n.y);
+    const w = Math.max(1, n.w * m.scale);
+    const h = Math.max(1, n.h * m.scale);
+    if (x + w < m.x || x > m.x + m.w || y + h < m.y || y > m.y + m.h) continue;
+    ctx.fillStyle = opts.selectedIds.has(n.id)
+      ? SELECT_COLOR
+      : n.isGroup
+        ? 'rgba(100,116,139,0.35)'
+        : opts.theme === 'dark'
+          ? 'rgba(148,163,184,0.55)'
+          : 'rgba(71,85,105,0.5)';
+    ctx.fillRect(x, y, w, h);
+    calls++;
+  }
+  // 视口框
+  const vx = mx(opts.cam.x);
+  const vy = my(opts.cam.y);
+  const vw2 = (opts.vw / opts.cam.zoom) * m.scale;
+  const vh2 = (opts.vh / opts.cam.zoom) * m.scale;
+  ctx.fillStyle = 'rgba(56,189,248,0.10)';
+  ctx.fillRect(vx, vy, vw2, vh2);
+  ctx.strokeStyle = SELECT_COLOR;
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(vx, vy, vw2, vh2);
+  calls += 2;
+  ctx.restore();
+  void P;
+  return calls;
+}
+
 export function drawScene(opts: DrawSceneOptions): DrawStats {
   const { ctx, model, grid, cam, vw, vh, dpr } = opts;
   const P: Palette = opts.theme === 'light' ? LIGHT : DARK;
@@ -522,10 +696,11 @@ export function drawScene(opts: DrawSceneOptions): DrawStats {
   // 网格候选按绘制顺序排序（候选数通常远小于总量；全览极端情况下为 O(V log V)）
   candidates.sort((a, b) => a - b);
   let prev = -1;
+  const handleNodes: Array<{ node: RenderNode; dx: number; dy: number }> = [];
   for (const idx of candidates) {
     if (idx === prev) continue;
     prev = idx;
-    const n = model.nodes[idx];
+    let n = model.nodes[idx];
     if (!n) continue;
     const dx = opts.dragIds.has(n.id) ? opts.dragDx : 0;
     const dy = opts.dragIds.has(n.id) ? opts.dragDy : 0;
@@ -534,6 +709,10 @@ export function drawScene(opts: DrawSceneOptions): DrawStats {
       continue;
     }
     visible++;
+    // 缩放中的实时尺寸覆盖
+    if (opts.resizeOverride && opts.resizeOverride.id === n.id) {
+      n = { ...n, w: opts.resizeOverride.w, h: opts.resizeOverride.h };
+    }
     if (dx !== 0 || dy !== 0) {
       ctx.save();
       ctx.translate(dx, dy);
@@ -542,7 +721,24 @@ export function drawScene(opts: DrawSceneOptions): DrawStats {
     } else {
       calls.n += drawNode(ctx, n, lod, opts, P);
     }
+    if (opts.selectedIds.has(n.id) || opts.hoverId === n.id) {
+      handleNodes.push({ node: n, dx, dy });
+    }
   }
+
+  // 连接桩（悬停/选中的节点）
+  for (const item of handleNodes) {
+    calls.n += drawHandles(ctx, item.node, opts, item.dx, item.dy);
+  }
+
+  // 叠加层：连线预览 / 框选 / 磁吸参考线 / 缩放幽灵框
+  calls.n += drawConnectPreview(ctx, opts);
+  calls.n += drawMarquee(ctx, opts);
+  calls.n += drawGuides(ctx, opts, view);
+  calls.n += drawResizeGhost(ctx, model, opts);
+
+  // 小地图（屏幕空间）
+  calls.n += drawMinimap(ctx, model, opts, P);
 
   return { visible, edgesDrawn, calls: calls.n };
 }

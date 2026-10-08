@@ -660,7 +660,7 @@ function normalizeCanvasEdgeRoutingMode(
 function normalizeCanvasRendererBackend(
   input: CanvasRendererBackend | string | null | undefined
 ): CanvasRendererBackend {
-  return input === 'canvas2d' ? 'canvas2d' : 'reactflow';
+  return input === 'reactflow' ? 'reactflow' : 'canvas2d';
 }
 
 function normalizePanoramaControlSensitivity(
@@ -972,7 +972,7 @@ export const useSettingsStore = create<SettingsState>()(
       themeTonePreset: 'neutral',
       accentColor: '#3B82F6',
       canvasEdgeRoutingMode: 'spline',
-      canvasRenderer: 'reactflow',
+      canvasRenderer: 'canvas2d',
       autoCheckAppUpdateOnLaunch: false,
       enableUpdateDialog: true,
       promptDefaultLanguage: 'zh',
