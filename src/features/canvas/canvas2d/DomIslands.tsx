@@ -11,6 +11,8 @@ import { selectDomIslands, type IslandViewport } from './domIslands';
 
 /** 每帧放行的新挂载岛显示数量（摊薄重绘成本） */
 const RESUME_BATCH_PER_FRAME = 8;
+/** 相机静止多久后降级合成层、强制清晰重栅（毫秒） */
+const RASTER_SETTLE_MS = 180;
 /** 调度器每帧新增挂载上限（相机运动中降为 1，摊薄切换顿挫） */
 const MOUNT_BATCH_PER_FRAME = 2;
 const MOUNT_BATCH_PER_FRAME_MOVING = 1;
@@ -90,6 +92,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
   const lastKeyRef = useRef('');
   const lastMemberLogRef = useRef(0);
   const lastCameraMoveRef = useRef(0);
+  const rasterSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [islandIds, setIslandIds] = useState<string[]>([]);
 
   const selectedSet = useRef(new Set<string>());
@@ -172,6 +175,16 @@ const DomIslandsInner = memo(function DomIslandsInner({
       recompute();
       unsub = engine.addCameraListener(() => {
         lastCameraMoveRef.current = performance.now();
+        // 运动中：提升合成层（transform 拉伸顺滑）；静止后降级强制按新缩放
+        // 重新光栅化——否则 will-change 常驻会让放大后的 DOM 岛持续模糊
+        const world = worldRef.current;
+        if (world && world.style.willChange !== 'transform') world.style.willChange = 'transform';
+        if (rasterSettleTimerRef.current) clearTimeout(rasterSettleTimerRef.current);
+        rasterSettleTimerRef.current = setTimeout(() => {
+          rasterSettleTimerRef.current = null;
+          const w = worldRef.current;
+          if (w) w.style.willChange = 'auto';
+        }, RASTER_SETTLE_MS);
         applyWorldTransform();
         recomputeRef.current(); // 成员变化经调度器分批生效，无集中挂载冻帧
       });
@@ -180,6 +193,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
+      if (rasterSettleTimerRef.current) clearTimeout(rasterSettleTimerRef.current);
       unsub?.();
     };
   }, [applyWorldTransform, recompute, engineRef]);
@@ -322,7 +336,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
       <div
         ref={worldRef}
         className="absolute left-0 top-0"
-        style={{ transformOrigin: '0 0', willChange: 'transform' }}
+        style={{ transformOrigin: '0 0' }}
       >
         {islandIds.map((id) => {
           const rendered = model?.byId.get(id);

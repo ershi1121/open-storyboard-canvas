@@ -120,7 +120,7 @@ const FAIL_COLOR = '#f87171';
 const SELECT_COLOR = '#38bdf8';
 const LOD0_ZOOM = 0.28;
 const LOD1_ZOOM = 0.75;
-const ORIGINAL_ZOOM = 1.45; // 与 imageData.shouldUseOriginalImageByZoom 保持一致
+const ORIGINAL_ZOOM = 1.2; // 与 imageData.shouldUseOriginalImageByZoom 保持一致
 
 const GLYPH: Record<string, string> = {
   image: '▣',
