@@ -254,9 +254,10 @@ const DomIslandsInner = memo(function DomIslandsInner({
 
       /* ---- 岛可见性：新挂载分批显示（防瞬时重绘尖峰） ---- */
       if (engine) {
-        // 相机运动中：仅选中岛保持可见，其余隐藏由等比微缩卡片接管
-        // （卡片已是"缩小的正常节点"，切换观感连续；静止后分批恢复）
-        const moving = performance.now() - lastCameraMoveRef.current < CAMERA_MOVING_MS;
+        // 单一样式原则：整个缩放手势中每个节点保持同一样式
+        // （编辑器保持编辑器、卡片保持卡片，随容器 transform 平滑缩放）；
+        // 表示形式的升级/降级只发生在静止 250ms 后跨过可读门槛时，
+        // 且卡片已是等比微缩复刻，观感连续
         const mountSet = islandSetRef.current;
         const zoom = engine.getViewport().zoom;
         const passesGate = (id: string): boolean => {
@@ -268,11 +269,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
         for (const id of mountSet) {
           if (!wrapperRefs.current.has(id)) continue;
           if (pendingRemoveSetRef.current.has(id)) continue;
-          if (moving) {
-            if (selectedSet.current.has(id)) desired.add(id);
-          } else if (passesGate(id) || selectedSet.current.has(id)) {
-            desired.add(id);
-          }
+          if (passesGate(id) || selectedSet.current.has(id)) desired.add(id);
         }
         const shown = shownSetRef.current;
         let changed = false;
