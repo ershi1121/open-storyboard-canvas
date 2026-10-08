@@ -8,6 +8,9 @@ import { nodeTypes } from '@/features/canvas/nodes';
 import { withNodeRenderErrorBoundary } from '@/features/canvas/nodes/NodeRenderErrorBoundary';
 import type { Canvas2DEngine } from './engine';
 import { selectDomIslands, type IslandViewport } from './domIslands';
+
+/** 相机静止多久后恢复 DOM 岛（毫秒） */
+const SUSPEND_RESUME_MS = 220;
 import type { RenderNode, SceneModel } from './sceneModel';
 
 /**
@@ -78,6 +81,15 @@ function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: Dom
   const selectedSet = useRef(new Set<string>());
   selectedSet.current = new Set(selectedIds);
 
+  /* ---------- 相机运动期间挂起 DOM 岛（缩放/平移性能关键路径） ----------
+   * 相机每帧变化时：隐藏非选中岛（display:none，保留挂载不卸载）、
+   * 引擎 domIslands 清空让画布卡片接管 → 零 DOM 重排重绘、零挂载抖动；
+   * 相机静止 SUSPEND_RESUME_MS 后恢复岛并刷新成员。
+   * 选中节点的岛保持可见：编辑焦点不在缩放时丢失。 */
+  const suspendedRef = useRef(false);
+  const suspendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const islandSetRef = useRef<ReadonlySet<string>>(new Set<string>());
+
   /* ---------- world 容器跟随相机 ---------- */
   const applyWorldTransform = useCallback(() => {
     const engine = engineRef.current;
@@ -108,12 +120,58 @@ function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: Dom
     };
     const ids = selectDomIslands(model.nodes, selectedSet.current, viewport);
     const key = ids.join('|');
-    if (key !== lastKeyRef.current) {
-      lastKeyRef.current = key;
-      setIslandIds(ids);
+    if (key === lastKeyRef.current) return;
+    lastKeyRef.current = key;
+    if (suspendedRef.current) {
+      // 挂起期间冻结 React 成员（避免缩放中挂载/卸载重型组件）
+      islandSetRef.current = new Set(ids);
+      return;
     }
+    islandSetRef.current = new Set(ids);
+    setIslandIds(ids);
   }, [engineRef, model]);
 
+  const recomputeRef = useRef(recompute);
+  recomputeRef.current = recompute;
+
+
+  /** 按挂起状态刷新：引擎 domIslands + 每个 wrapper 的 display */
+  const applyIslandVisibility = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const visibleSet = suspendedRef.current
+      ? new Set([...islandSetRef.current].filter((id) => selectedSet.current.has(id)))
+      : islandSetRef.current;
+    engine.setDomIslands(visibleSet);
+    for (const [id, el] of wrapperRefs.current) {
+      el.style.display = visibleSet.has(id) ? '' : 'none';
+    }
+  }, [engineRef]);
+
+  const suspendForCamera = useCallback(() => {
+    const becameSuspended = !suspendedRef.current;
+    suspendedRef.current = true;
+    if (becameSuspended) applyIslandVisibility();
+    if (suspendTimerRef.current) clearTimeout(suspendTimerRef.current);
+    suspendTimerRef.current = setTimeout(() => {
+      suspendTimerRef.current = null;
+      suspendedRef.current = false;
+      recomputeRef.current();
+      applyIslandVisibility();
+    }, SUSPEND_RESUME_MS);
+  }, [applyIslandVisibility]);
+
+  useEffect(() => {
+    islandSetRef.current = new Set(islandIds);
+    applyIslandVisibility();
+    onIslandsChange(new Set(islandIds));
+  }, [islandIds, applyIslandVisibility, onIslandsChange]);
+
+  useEffect(() => {
+    return () => {
+      if (suspendTimerRef.current) clearTimeout(suspendTimerRef.current);
+    };
+  }, []);
   useEffect(() => {
     // 引擎由父组件 effect 创建（晚于子组件 effect），需等待其就绪后再注册监听
     let unsub: (() => void) | null = null;
@@ -127,9 +185,10 @@ function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: Dom
       }
       applyWorldTransform();
       recompute();
+      applyIslandVisibility();
       unsub = engine.addCameraListener(() => {
         applyWorldTransform();
-        recompute();
+        suspendForCamera(); // 相机运动：挂起岛并续期恢复计时器
       });
     };
     attach();
@@ -138,13 +197,8 @@ function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: Dom
       cancelAnimationFrame(raf);
       unsub?.();
     };
-  }, [applyWorldTransform, recompute, engineRef]);
+  }, [applyWorldTransform, recompute, applyIslandVisibility, suspendForCamera, engineRef]);
 
-  useEffect(() => {
-    const set = new Set(islandIds);
-    engineRef.current?.setDomIslands(set);
-    onIslandsChange(set);
-  }, [islandIds, engineRef, onIslandsChange]);
 
   /* ---------- 拖拽期间岛跟随（rAF 直写 transform） ---------- */
   const modelRef = useRef<SceneModel | null>(null);
