@@ -24,9 +24,6 @@ const CAMERA_MOVING_MS = 200;
 /** 显示门槛（屏幕像素）：挂载集合内达到该尺寸才显示为活编辑器 */
 const SHOW_GATE_W = 140;
 const SHOW_GATE_H = 40;
-/** 调度器每帧新增挂载上限（相机运动中降为 1，摊薄切换顿挫） */
-const MOUNT_BATCH_PER_FRAME = 2;
-const MOUNT_BATCH_PER_FRAME_MOVING = 1;
 /** 调度器每帧卸载上限 */
 const UNMOUNT_BATCH_PER_FRAME = 6;
 /** 拖拽快速路径阈值：同时移动的岛达到该数量时运动期降级为画布卡片 */
@@ -117,6 +114,8 @@ const DomIslandsInner = memo(function DomIslandsInner({
   const shownSetRef = useRef<Set<string>>(new Set<string>());
   /** 目标岛有序列表（选中优先、距离排序）与集合镜像 */
   const targetOrderRef = useRef<string[]>([]);
+  /** 待空闲挂载队列（有序） */
+  const pendingAddRef = useRef<string[]>([]);
   /** 已挂载（React 状态）镜像 */
   const mountedSetRef = useRef<Set<string>>(new Set<string>());
 
@@ -165,8 +164,9 @@ const DomIslandsInner = memo(function DomIslandsInner({
       console.warn(`[canvas2d] 岛成员变化 +${added}/-${removed}（总计 ${ids.length}）`);
     }
     lastKeyRef.current = key;
-    // 成员变化只更新目标；实际挂载/卸载由 rAF 调度器分批执行
+    // 成员变化只更新目标；挂载由空闲回调调度、卸载由 rAF 分批
     islandSetRef.current = new Set(ids);
+    pendingAddRef.current = ids.filter((id) => !mountedSetRef.current.has(id));
   }, [engineRef, model]);
 
   const recomputeRef = useRef(recompute);
@@ -302,22 +302,11 @@ const DomIslandsInner = memo(function DomIslandsInner({
               removeChunk.push(id);
             }
           }
-          const addChunk: string[] = [];
-          if (removeChunk.length === 0) {
-            const moving = performance.now() - lastCameraMoveRef.current < 300;
-            const batch = moving ? MOUNT_BATCH_PER_FRAME_MOVING : MOUNT_BATCH_PER_FRAME;
-            for (const id of targetOrderRef.current) {
-              if (addChunk.length >= batch) break;
-              if (!mounted.has(id)) addChunk.push(id);
-            }
-          }
-          if (removeChunk.length > 0 || addChunk.length > 0) {
+          if (removeChunk.length > 0) {
             const removeSet = new Set(removeChunk);
-            const addSet = new Set(addChunk);
             setIslandIds((prev) => {
               const next = new Set(prev);
               for (const id of removeSet) next.delete(id);
-              for (const id of addSet) next.add(id);
               return [...next];
             });
           }
@@ -359,6 +348,41 @@ const DomIslandsInner = memo(function DomIslandsInner({
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [engineRef]);
+
+  /* ---------- 空闲时段挂载：主线程空闲才挂一个，交互永远优先 ---------- */
+  useEffect(() => {
+    let cancelled = false;
+    let handle = 0;
+    const win = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (h: number) => void;
+    };
+    const schedule = () => {
+      if (cancelled) return;
+      if (win.requestIdleCallback) {
+        handle = win.requestIdleCallback(step, { timeout: 800 });
+      } else {
+        handle = window.setTimeout(step, 120);
+      }
+    };
+    const step = () => {
+      if (cancelled) return;
+      const moving = performance.now() - lastCameraMoveRef.current < CAMERA_MOVING_MS;
+      if (!moving && pendingAddRef.current.length > 0) {
+        const id = pendingAddRef.current.shift() as string;
+        if (!mountedSetRef.current.has(id) && islandSetRef.current.has(id)) {
+          setIslandIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+        }
+      }
+      schedule();
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      if (win.cancelIdleCallback) win.cancelIdleCallback(handle);
+      else clearTimeout(handle);
+    };
+  }, []);
 
   /* ---------- 滚轮转发（nowheel 区域交给组件） ---------- */
   useEffect(() => {
