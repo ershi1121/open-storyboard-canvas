@@ -241,6 +241,7 @@ export class Canvas2DEngine {
   private cameraListeners = new Set<() => void>();
   private lastCamKey = '';
   private lastCameraMoveT = 0;
+  private lastSlowFrameLogT = 0;
 
   private stats: EngineStats = { fps: 0, frameMs: 0, visible: 0, edgesDrawn: 0, calls: 0, zoom: 1, total: 0 };
   private fpsFrames = 0;
@@ -1071,6 +1072,13 @@ export class Canvas2DEngine {
     }
     this.notifyCameraIfMoved();
     const t1 = performance.now();
+    const frameCost = t1 - t0;
+    if (frameCost > 48 && t - this.lastSlowFrameLogT > 1000) {
+      this.lastSlowFrameLogT = t;
+      console.warn(
+        `[canvas2d] 慢帧 ${frameCost.toFixed(0)}ms：可见 ${this.stats.visible}/${this.stats.total} 节点，边 ${this.stats.edgesDrawn}，zoom ${this.cam.zoom.toFixed(2)}`,
+      );
+    }
     this.ema = this.ema * 0.9 + (t1 - t0) * 0.1;
     this.stats.frameMs = this.ema;
     this.stats.zoom = this.cam.zoom;

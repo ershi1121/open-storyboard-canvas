@@ -1,4 +1,4 @@
-import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Component, memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { useCanvasStore } from '@/stores/canvasStore';
 import type { CanvasNodeData } from '@/features/canvas/domain/canvasNodes';
@@ -73,11 +73,17 @@ interface DomIslandsProps {
   onFallback?: () => void;
 }
 
-function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: DomIslandsProps) {
+const DomIslandsInner = memo(function DomIslandsInner({
+  engineRef,
+  model,
+  selectedIds,
+  onIslandsChange,
+}: DomIslandsProps) {
   const layerRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const wrapperRefs = useRef(new Map<string, HTMLDivElement>());
   const lastKeyRef = useRef('');
+  const lastMemberLogRef = useRef(0);
   const [islandIds, setIslandIds] = useState<string[]>([]);
 
   const selectedSet = useRef(new Set<string>());
@@ -125,6 +131,14 @@ function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: Dom
     const ids = selectDomIslands(model.nodes, selectedSet.current, viewport);
     const key = ids.join('|');
     if (key === lastKeyRef.current) return;
+    const prevSet = islandSetRef.current;
+    const added = ids.filter((id) => !prevSet.has(id)).length;
+    const removed = [...prevSet].filter((id) => !key.split('|').includes(id)).length;
+    const now = Date.now();
+    if (added + removed > 0 && now - lastMemberLogRef.current > 1000) {
+      lastMemberLogRef.current = now;
+      console.warn(`[canvas2d] 岛成员变化 +${added}/-${removed}（总计 ${ids.length}）`);
+    }
     lastKeyRef.current = key;
     if (suspendedRef.current) {
       // 挂起期间冻结 React 成员（避免缩放中挂载/卸载重型组件）
@@ -301,7 +315,7 @@ function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: Dom
       </div>
     </div>
   );
-}
+});
 
 /* ---------------- 单个 DOM 岛 ---------------- */
 
@@ -312,7 +326,12 @@ interface IslandNodeProps {
   registerRef: (id: string, el: HTMLDivElement | null) => void;
 }
 
-function IslandNode({ rendered, selected, engineRef, registerRef }: IslandNodeProps) {
+const IslandNode = memo(function IslandNode({
+  rendered,
+  selected,
+  engineRef,
+  registerRef,
+}: IslandNodeProps) {
   const node = useCanvasStore((state) => state.nodes.find((n) => n.id === rendered.id));
   const innerRef = useRef<HTMLDivElement | null>(null);
   const lastSizeRef = useRef<{ w: number; h: number } | null>(null);
@@ -450,7 +469,7 @@ function IslandNode({ rendered, selected, engineRef, registerRef }: IslandNodePr
       </IslandHostContext.Provider>
     </div>
   );
-}
+});
 
 export function DomIslands({ onFallback, ...rest }: DomIslandsProps) {
   return (

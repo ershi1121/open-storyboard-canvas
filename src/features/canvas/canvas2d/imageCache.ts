@@ -22,6 +22,25 @@ interface CacheEntry {
 const MAX_ENTRIES = 240;
 const cache = new Map<string, CacheEntry>();
 
+/* 原图加载探针：1 秒内超过 8 张 original 层级加载时告警（限流） */
+let originalLoadWindowStart = 0;
+let originalLoadCount = 0;
+let originalLoadLogAt = 0;
+function noteOriginalLoad(): void {
+  const now = Date.now();
+  if (now - originalLoadWindowStart > 1000) {
+    originalLoadWindowStart = now;
+    originalLoadCount = 0;
+  }
+  originalLoadCount++;
+  if (originalLoadCount > 8 && now - originalLoadLogAt > 3000) {
+    originalLoadLogAt = now;
+    console.warn(
+      `[canvas2d] 1 秒内触发 ${originalLoadCount} 张原图加载（解码虽异步，仍可能造成 IO/内存压力）`,
+    );
+  }
+}
+
 /**
  * 请求图片。已就绪返回 <img>；加载中/失败返回 null（调用方画占位）。
  * onReady 在图片解码完成时回调一次（用于触发画布重绘）。
@@ -39,6 +58,7 @@ export function getImage(
     return existing.state === 'ready' ? existing.img : null;
   }
 
+  if (tier === 'original') noteOriginalLoad();
   const img = new Image();
   img.decoding = 'async';
   const entry: CacheEntry = { img, state: 'loading', tier };
