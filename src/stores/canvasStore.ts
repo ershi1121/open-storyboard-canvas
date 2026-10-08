@@ -1,13 +1,10 @@
 import { create } from 'zustand';
+import type { Connection, EdgeChange, NodeChange, Viewport } from '@xyflow/react';
 import {
-  Connection,
-  EdgeChange,
-  NodeChange,
-  type Viewport,
-  addEdge,
-  applyEdgeChanges,
-  applyNodeChanges,
-} from '@xyflow/react';
+  addEdgeInternal as addEdge,
+  applyEdgeChangesInternal as applyEdgeChanges,
+  applyNodeChangesInternal as applyNodeChanges,
+} from '@/features/canvas/domain/graphMutations';
 import {
   CANVAS_NODE_TYPES,
   DEFAULT_ASPECT_RATIO,

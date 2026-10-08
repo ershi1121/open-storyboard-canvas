@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react';
-import { ReactFlowProvider } from '@xyflow/react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
-import { Canvas } from './features/canvas/Canvas';
 import { Canvas2DView } from './features/canvas/canvas2d';
+
+// React Flow 画布整体懒加载：Canvas2D 模式（默认）下 @xyflow 代码完全不加载
+const ReactFlowCanvasRoot = lazy(() =>
+  import('./features/canvas/ReactFlowCanvasRoot').then((module) => ({
+    default: module.ReactFlowCanvasRoot,
+  })),
+);
 import { TitleBar } from './components/TitleBar';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -219,17 +224,14 @@ function App() {
 
   if (!isHydrated) {
     return (
-      <ReactFlowProvider>
-        <AppErrorBoundary>
-          <div className="w-full h-full bg-bg-dark" />
-        </AppErrorBoundary>
-      </ReactFlowProvider>
+      <AppErrorBoundary>
+        <div className="w-full h-full bg-bg-dark" />
+      </AppErrorBoundary>
     );
   }
 
   return (
-    <ReactFlowProvider>
-      <AppErrorBoundary>
+    <AppErrorBoundary>
         <div className="w-full h-full flex flex-col bg-bg-dark">
           <TitleBar
             onSettingsClick={() => {
@@ -258,7 +260,13 @@ function App() {
 
           <main className="relative min-h-0 flex-1 overflow-hidden">
             {currentProjectId ? (
-              canvasRenderer === 'canvas2d' ? <Canvas2DView /> : <Canvas />
+              canvasRenderer === 'canvas2d' ? (
+                <Canvas2DView />
+              ) : (
+                <Suspense fallback={null}>
+                  <ReactFlowCanvasRoot />
+                </Suspense>
+              )
             ) : (
               <ProjectHome />
             )}
@@ -286,8 +294,7 @@ function App() {
             onClose={() => setGlobalError(null)}
           />
         </div>
-      </AppErrorBoundary>
-    </ReactFlowProvider>
+    </AppErrorBoundary>
   );
 }
 
