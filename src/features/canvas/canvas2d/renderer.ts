@@ -439,13 +439,30 @@ function drawCard(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, 
   const areaW = n.w - 6;
   const areaH = n.h - headerH - 6;
   const hasImage = Boolean(n.imageUrl || n.previewUrl);
-  if (n.textPreview && !hasImage && screenW >= 24) {
+  const showText = Boolean(n.textPreview) && screenW >= 24;
+  if (showText && hasImage) {
+    // 与编辑器一致的四行式布局：文本区在上、图像区在下
+    const textH = Math.max(18, areaH * 0.42);
+    const fsScreen = micro ? 6 : 11.5;
+    const fsWorld = fsScreen / zoom;
+    const lineH = fsWorld * 1.45;
+    const maxLines = Math.max(1, Math.min(12, Math.floor((textH * zoom) / (fsScreen * 1.45))));
+    const lines = wrapLinesCached(n.textPreview as string, fsWorld, areaW - 12, maxLines);
+    ctx.fillStyle = P.titleText;
+    ctx.font = `${fsWorld}px system-ui, sans-serif`;
+    ctx.textBaseline = 'top';
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], areaX + 6, areaY + 4 + i * lineH);
+      calls++;
+    }
+    calls += drawMedia(ctx, n, areaX, areaY + textH + 2, areaW, Math.max(0, areaH - textH - 2), micro ? 3 : 8, opts, P);
+  } else if (showText) {
     // 屏幕恒定字号：微型档 6px（呈现为"文本纹理"），常规档 11.5px
     const fsScreen = micro ? 6 : 11.5;
     const fsWorld = fsScreen / zoom;
     const lineH = fsWorld * 1.45;
     const maxLines = Math.max(1, Math.min(12, Math.floor((areaH * zoom) / (fsScreen * 1.45))));
-    const lines = wrapLinesCached(n.textPreview, fsWorld, areaW - 12, maxLines);
+    const lines = wrapLinesCached(n.textPreview as string, fsWorld, areaW - 12, maxLines);
     ctx.fillStyle = P.titleText;
     ctx.font = `${fsWorld}px system-ui, sans-serif`;
     ctx.textBaseline = 'top';
@@ -495,6 +512,16 @@ function drawCard(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, 
     ctx.fillText(n.badge, n.x + n.w - chipW / 2 - 6, n.y + headerH + 6 + chipH / 2);
     ctx.textAlign = 'left';
     calls += 2;
+  }
+
+  // 迷你主按钮角标（与编辑器底部主按钮同色同位，保持缩小版视觉一致）
+  if (lod >= 1 && !micro && screenW >= 90 && (n.kind === 'ai' || n.kind === 'image' || n.kind === 'video')) {
+    const bh = 16 / zoom;
+    const bw = 34 / zoom;
+    ctx.fillStyle = '#3B82F6';
+    rr(ctx, n.x + n.w - bw - 6 / zoom, n.y + n.h - bh - 6 / zoom, bw, bh, bh / 2);
+    ctx.fill();
+    calls++;
   }
 
   // 状态：生成中脉冲 / 失败红框
