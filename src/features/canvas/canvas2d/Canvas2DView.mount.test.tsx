@@ -103,6 +103,10 @@ describe('Canvas2DView / DomIslands 挂载诊断（防黑屏回归）', () => {
       await sleep(80);
     });
     expect(container?.querySelector('canvas')).not.toBeNull();
+    // 正常路径不再渲染右侧检视面板（编辑全部在画布岛内完成）
+    const text = (container as HTMLDivElement).textContent ?? '';
+    expect(text).not.toContain('节点编辑');
+    expect(text).not.toContain('Node Editor');
     await act(async () => {
       root?.unmount();
     });
@@ -141,10 +145,10 @@ describe('Canvas2DView / DomIslands 挂载诊断（防黑屏回归）', () => {
     });
   });
 
-  it('DomIslands 直挂：低缩放不挂载岛', async () => {
+  it('DomIslands 直挂：极端全览且无选中不挂载岛', async () => {
     useCanvasStore.setState({ nodes: [AI_NODE], edges: [] });
     const engine = makeStubEngine();
-    engine.ref.current.getViewport = () => ({ x: 0, y: 0, zoom: 0.4 });
+    engine.ref.current.getViewport = () => ({ x: 0, y: 0, zoom: 0.1 });
     const model = buildSceneModel([AI_NODE], []);
 
     let root: Root | null = null;

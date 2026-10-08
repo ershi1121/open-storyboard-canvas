@@ -62,9 +62,10 @@ import { Canvas2DEngine, type ConnectHandleType, type EngineStats, type Viewport
  * Ctrl+A 全选、Ctrl+G 打组/解组、WASD 平移、小地图导航、多选批量工具条
  * （复制/打组/解组/批量触发/删除，批量触发经 HiddenTriggerHost 补齐订阅）。
  *
- * 节点编辑：选中节点在 NodeInspector 停靠渲染原版编辑组件（经
- * compat/nodeHostApi 宿主 API 接入），SelectedNodeOverlay / NodeToolDialog /
- * CanvasSideToolbar / AssetPanel 全套面板生态可用。
+ * 节点编辑：视口内节点以 DOM 岛内嵌原版编辑组件（与旧版画布内编辑一致，
+ * 无右侧检视面板；仅岛层整体异常时回退启用 NodeInspector 兜底），
+ * SelectedNodeOverlay / NodeToolDialog / CanvasSideToolbar / AssetPanel
+ * 全套面板生态可用。
  */
 
 const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
@@ -114,8 +115,8 @@ export function Canvas2DView() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   /** 批量触发时隐藏挂载的节点编辑组件 id（订阅 generation-node/trigger 用） */
   const [triggerHostIds, setTriggerHostIds] = useState<string[]>([]);
-  /** 当前以 DOM 岛渲染的节点集合（选中节点在岛内时隐藏检视面板） */
-  const [islandIds, setIslandIds] = useState<ReadonlySet<string>>(() => new Set<string>());
+  /** DOM 岛层整体异常时回退启用检视面板（正常路径不渲染侧栏） */
+  const [islandsBroken, setIslandsBroken] = useState(false);
 
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
@@ -182,21 +183,10 @@ export function Canvas2DView() {
     scheduleCanvasPersist,
   });
 
-  const handleIslandsChange = useCallback((next: ReadonlySet<string>) => {
-    setIslandIds((prev) => {
-      if (prev.size === next.size) {
-        let same = true;
-        for (const id of next) {
-          if (!prev.has(id)) {
-            same = false;
-            break;
-          }
-        }
-        if (same) return prev;
-      }
-      return next;
-    });
+  const handleIslandsChange = useCallback((_next: ReadonlySet<string>) => {
+    /* 岛集合由岛层内部管理；宿主无需镜像 */
   }, []);
+  const handleIslandsFallback = useCallback(() => setIslandsBroken(true), []);
 
   /* ---------- 渲染模型 ---------- */
   const model = useMemo(
@@ -966,6 +956,7 @@ export function Canvas2DView() {
         model={model}
         selectedIds={selectedIds}
         onIslandsChange={handleIslandsChange}
+        onFallback={handleIslandsFallback}
       />
 
       {/* 状态 HUD */}
@@ -1054,7 +1045,8 @@ export function Canvas2DView() {
       {/* 选中节点的浮动工具栏与生成面板（全套面板生态） */}
       <SelectedNodeOverlay />
       <NodeToolDialog />
-      <NodeInspector hidden={selectedNodeId ? islandIds.has(selectedNodeId) : false} />
+      {/* 仅岛层异常回退时渲染检视面板；正常编辑全部在画布岛内完成 */}
+      {islandsBroken && <NodeInspector />}
 
       {nodes.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6">
@@ -1117,7 +1109,7 @@ function safeComponent<T extends React.ComponentType<any>>(Comp: T): React.Compo
  * Handle 渲染为空（连接桩由 canvas 绘制）、NodeToolbar 浮动定位到画布节点上方、
  * useCanvasApi/useViewport 桥接到 Canvas2D 引擎。编辑能力零重写、全保留。
  */
-function NodeInspector({ hidden = false }: { hidden?: boolean }) {
+function NodeInspector() {
   const { t } = useTranslation();
   const selectedNodeId = useCanvasStore((state) => state.selectedNodeId);
   const imageViewerOpen = useCanvasStore((state) => state.imageViewer.isOpen);
@@ -1140,7 +1132,7 @@ function NodeInspector({ hidden = false }: { hidden?: boolean }) {
     [selectedNodeId],
   );
 
-  if (hidden || !node || !node.type || imageViewerOpen) return null;
+  if (!node || !node.type || imageViewerOpen) return null;
   const Comp = nodeTypes[node.type];
   if (!Comp) return null;
   const SafeComp = safeComponent(Comp);

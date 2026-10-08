@@ -42,7 +42,7 @@ function safeComponent<T extends React.ComponentType<any>>(Comp: T): React.Compo
 
 /** 岛层整体兜底边界：任何未预料异常回退为纯画布卡片，绝不拖累主界面 */
 class DomIslandsBoundary extends Component<
-  { children: ReactNode },
+  { children: ReactNode; onFallback?: () => void },
   { error: Error | null }
 > {
   state = { error: null as Error | null };
@@ -50,7 +50,8 @@ class DomIslandsBoundary extends Component<
     return { error };
   }
   componentDidCatch(error: Error): void {
-    console.error('[DomIslands] 岛层渲染异常，已回退为画布卡片模式', error);
+    console.error('[DomIslands] 岛层渲染异常，已回退为画布卡片+检视面板模式', error);
+    this.props.onFallback?.();
   }
   render() {
     if (this.state.error) return null;
@@ -63,6 +64,8 @@ interface DomIslandsProps {
   model: SceneModel | null;
   selectedIds: string[];
   onIslandsChange: (ids: ReadonlySet<string>) => void;
+  /** 岛层整体异常回退时通知宿主（启用检视面板兜底） */
+  onFallback?: () => void;
 }
 
 function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: DomIslandsProps) {
@@ -375,10 +378,10 @@ function IslandNode({ rendered, selected, engineRef, registerRef }: IslandNodePr
   );
 }
 
-export function DomIslands(props: DomIslandsProps) {
+export function DomIslands({ onFallback, ...rest }: DomIslandsProps) {
   return (
-    <DomIslandsBoundary>
-      <DomIslandsInner {...props} />
+    <DomIslandsBoundary onFallback={onFallback}>
+      <DomIslandsInner {...rest} />
     </DomIslandsBoundary>
   );
 }

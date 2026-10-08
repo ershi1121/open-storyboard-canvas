@@ -10,9 +10,22 @@ const VP = { camX: 0, camY: 0, zoom: 1, viewW: 1200, viewH: 800 };
 const NONE = new Set<string>();
 
 describe('selectDomIslands（DOM 岛候选选择）', () => {
-  it('zoom 低于阈值：全部回退画布卡片', () => {
-    const ids = selectDomIslands([rect('a', 0, 0)], NONE, { ...VP, zoom: 0.5 });
+  it('极端全览（zoom < minZoom）且无选中：不挂载岛', () => {
+    const ids = selectDomIslands([rect('a', 0, 0)], NONE, { ...VP, zoom: 0.1 });
     expect(ids).toEqual([]);
+  });
+
+  it('极端全览下选中节点仍然入岛（内联编辑永远可用）', () => {
+    const ids = selectDomIslands([rect('a', 0, 0), rect('b', 400, 0)], new Set(['b']), {
+      ...VP,
+      zoom: 0.1,
+    });
+    expect(ids).toEqual(['b']);
+  });
+
+  it('常规缩放（zoom 0.5）视口内节点入岛', () => {
+    const ids = selectDomIslands([rect('a', 0, 0)], NONE, { ...VP, zoom: 0.5 });
+    expect(ids).toEqual(['a']);
   });
 
   it('zoom 达标且视口内：入选', () => {
@@ -40,16 +53,19 @@ describe('selectDomIslands（DOM 岛候选选择）', () => {
     expect(ids.indexOf('c')).toBeLessThan(ids.indexOf('b'));
   });
 
-  it('超过上限截断，但选中节点始终保留', () => {
-    const nodes: ReturnType<typeof rect>[] = [];
-    for (let i = 0; i < 40; i++) nodes.push(rect(`n${i}`, (i % 8) * 140, Math.floor(i / 8) * 160, 100, 100));
-    const ids = selectDomIslands(nodes, new Set(['n39']), VP);
-    expect(ids.length).toBeLessThanOrEqual(DOM_ISLAND_DEFAULTS.cap);
-    expect(ids).toContain('n39');
-  });
-
   it('zoom 恰为阈值：启用', () => {
     const ids = selectDomIslands([rect('a', 0, 0)], NONE, { ...VP, zoom: DOM_ISLAND_DEFAULTS.minZoom });
     expect(ids).toEqual(['a']);
+  });
+
+  it('超过上限截断，但选中节点始终保留', () => {
+    const nodes: ReturnType<typeof rect>[] = [];
+    for (let i = 0; i < 70; i++) {
+      nodes.push(rect(`n${i}`, (i % 10) * 110, Math.floor(i / 10) * 110, 100, 100));
+    }
+    const ids = selectDomIslands(nodes, new Set(['n69']), VP);
+    expect(ids.length).toBe(DOM_ISLAND_DEFAULTS.cap);
+    expect(ids).toContain('n69');
+    expect(ids[0]).toBe('n69'); // 选中排序优先
   });
 });

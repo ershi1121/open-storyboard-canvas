@@ -36,9 +36,12 @@ domain/
 
 - **文档模型与渲染模型分离**：`canvasStore`（zustand）持有 nodes/edges；
   `buildSceneModel` 仅在引用变化时重建扁平渲染结构；拖拽等每帧手势不触碰 store。
-- **节点编辑零重写**：原节点编辑组件（nodes/、SelectedNodeOverlay、NodeActionToolbar
-  等约 1.5 万行业务逻辑）通过 `nodeHostApi` 宿主 API 运行——选中节点在 NodeInspector
-  停靠渲染，浮动工具栏按引擎世界坐标 DOM 直写定位。
+- **节点编辑零重写 + 画布内联（DOM 岛混合渲染）**：原节点编辑组件（nodes/、
+  SelectedNodeOverlay、NodeActionToolbar 等约 1.5 万行业务逻辑）通过 `nodeHostApi`
+  宿主 API 运行。视口内节点以 DOM 岛形式内嵌原版组件（与旧版画布内编辑一致，
+  无右侧检视面板）：单层 world 容器跟随相机 transform，岛内指针按 nodrag 约定
+  路由，尺寸经 ResizeObserver 回写 store；缩小到极端全览或超出上限（60）时
+  回退画布卡片，选中节点始终入岛。NodeInspector 仅作为岛层整体异常的兜底。
 - **数据语义内部化**：`graphMutations` 逐行对齐历史数据层语义（含 `xy-edge__` 边 id
   约定——该前缀已随项目文件持久化，属数据格式兼容约定，不可变更）。
 
@@ -63,6 +66,8 @@ rightPending），经 `EngineHost` 回调在手势边界一次性提交：
 
 已完成迁移：
 
+- **画布内联节点编辑**（DOM 岛，见 §2）：点击节点直接在画布内编辑/生成，
+  与旧版 React Flow 体验一致；
 - 连线拖出（合法/非法预览、标签单源规则、文本内容传递）；
 - 框选（右键拖 / Ctrl+左键拖，部分相交即选中）；
 - 磁吸：对齐参考线（滞回锁定）+ **贴合跟随移动**（间隙 ≤1px 的节点簇随动，
@@ -92,6 +97,7 @@ rightPending），经 `EngineHost` 回调在手势边界一次性提交：
 
 ## 5. 已知差异与约束
 
+- DOM 岛同屏上限 60 个（选中豁免）；极端全览（zoom < 0.2）仅挂载选中节点；
 - 连线视觉为 Canvas2D 自绘三态（空闲/生成中流动虚线/失败红色），旧版 SVG
   "三股麻花流光"特效未复刻（canvas 光栅下成本高，按需再评估）；
 - 批量触发依赖节点组件内的生成逻辑，隐藏挂载数量极大时（数百个重型编辑组件）

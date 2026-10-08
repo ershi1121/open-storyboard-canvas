@@ -32,12 +32,12 @@ export interface DomIslandOptions {
 }
 
 export const DOM_ISLAND_DEFAULTS = {
-  /** 低于该缩放不启用 DOM 岛（LOD1 阈值，与渲染器文字档一致） */
-  minZoom: 0.75,
+  /** 低于该缩放仅挂载选中节点（极端全览保护） */
+  minZoom: 0.2,
   /** 视口外扩（世界像素），提前挂载边缘节点 */
   margin: 200,
-  /** 同时挂载的 DOM 岛上限（保护交互性能） */
-  cap: 24,
+  /** 同时挂载的 DOM 岛上限（保护交互性能）；选中节点不受上限约束 */
+  cap: 60,
 };
 
 export function selectDomIslands(
@@ -50,8 +50,6 @@ export function selectDomIslands(
   const margin = options.margin ?? DOM_ISLAND_DEFAULTS.margin;
   const cap = options.cap ?? DOM_ISLAND_DEFAULTS.cap;
 
-  if (viewport.zoom < minZoom || viewport.zoom <= 0) return [];
-
   const worldW = viewport.viewW / viewport.zoom;
   const worldH = viewport.viewH / viewport.zoom;
   const wx = viewport.camX - margin;
@@ -62,6 +60,11 @@ export function selectDomIslands(
   const inView = nodes.filter(
     (n) => n.x + n.w > wx && n.x < wx + ww && n.y + n.h > wy && n.y < wy + wh,
   );
+
+  // 极端全览（zoom < minZoom）：仅挂载选中节点，保证随时可内联编辑
+  if (viewport.zoom < minZoom || viewport.zoom <= 0) {
+    return inView.filter((n) => selectedIds.has(n.id)).map((n) => n.id);
+  }
 
   const centerX = viewport.camX + worldW / 2;
   const centerY = viewport.camY + worldH / 2;
@@ -78,5 +81,14 @@ export function selectDomIslands(
     return dist(a) - dist(b);
   });
 
-  return inView.slice(0, cap).map((n) => n.id);
+  const picked = inView.slice(0, cap).map((n) => n.id);
+  // 选中节点始终入岛（不受上限约束）：内联编辑永远可用
+  const pickedSet = new Set(picked);
+  for (const n of inView) {
+    if (selectedIds.has(n.id) && !pickedSet.has(n.id)) {
+      picked.push(n.id);
+      pickedSet.add(n.id);
+    }
+  }
+  return picked;
 }
