@@ -190,7 +190,7 @@ function normalizeGeneratedImageSource(rawSource: string): { source: string; not
   return { source: trimmed };
 }
 
-const ORIGINAL_IMAGE_ZOOM_THRESHOLD = 1.2;
+const ORIGINAL_IMAGE_ZOOM_THRESHOLD = 1.45;
 
 export function shouldUseOriginalImageByZoom(zoom: number): boolean {
   return Number.isFinite(zoom) && zoom >= ORIGINAL_IMAGE_ZOOM_THRESHOLD;

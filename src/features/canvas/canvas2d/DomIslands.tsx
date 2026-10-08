@@ -16,8 +16,6 @@ import type { IslandViewport } from './domIslands';
 
 /** 每帧放行的新挂载岛显示数量（摊薄重绘成本） */
 const RESUME_BATCH_PER_FRAME = 8;
-/** 相机静止多久后降级合成层、强制清晰重栅（毫秒） */
-const RASTER_SETTLE_MS = 180;
 /** 相机静止多久后结算岛成员变化（毫秒） */
 const MEMBER_SETTLE_MS = 250;
 /** 相机运动判定窗口（毫秒）：窗口内岛隐藏由卡片接管 */
@@ -98,7 +96,6 @@ const DomIslandsInner = memo(function DomIslandsInner({
   const lastKeyRef = useRef('');
   const lastMemberLogRef = useRef(0);
   const lastCameraMoveRef = useRef(0);
-  const rasterSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const memberSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [islandIds, setIslandIds] = useState<string[]>([]);
 
@@ -217,16 +214,8 @@ const DomIslandsInner = memo(function DomIslandsInner({
           memberSettleTimerRef.current = null;
           recomputeRef.current();
         }, MEMBER_SETTLE_MS);
-        // 运动中：提升合成层（transform 拉伸顺滑）；静止后降级强制按新缩放
-        // 重新光栅化——否则 will-change 常驻会让放大后的 DOM 岛持续模糊
-        const world = worldRef.current;
-        if (world && world.style.willChange !== 'transform') world.style.willChange = 'transform';
-        if (rasterSettleTimerRef.current) clearTimeout(rasterSettleTimerRef.current);
-        rasterSettleTimerRef.current = setTimeout(() => {
-          rasterSettleTimerRef.current = null;
-          const w = worldRef.current;
-          if (w) w.style.willChange = 'auto';
-        }, RASTER_SETTLE_MS);
+        // 不做合成层提升/降级管理：提升与降级各触发一次全量光栅（百节点
+        // 秒级卡顿）。裸 transform 交浏览器启发式——与旧版 ReactFlow 一致
         applyWorldTransform();
       });
     };
@@ -234,7 +223,6 @@ const DomIslandsInner = memo(function DomIslandsInner({
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
-      if (rasterSettleTimerRef.current) clearTimeout(rasterSettleTimerRef.current);
       if (memberSettleTimerRef.current) clearTimeout(memberSettleTimerRef.current);
       unsub?.();
     };
