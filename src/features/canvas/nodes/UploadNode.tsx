@@ -15,7 +15,7 @@ import {
   useUpdateNodeInternals,
   useViewport,
   type NodeProps,
-} from '@/features/canvas/compat/flowShim';
+} from '@/features/canvas/compat/nodeHostApi';
 import { AlertTriangle, Loader2, RefreshCw, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 

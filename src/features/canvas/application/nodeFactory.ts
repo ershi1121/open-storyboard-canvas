@@ -31,9 +31,10 @@ export class CanvasNodeFactory implements NodeFactory {
       // ⚠️ 不要写进 node.style：style.width/height 是固定的行内 CSS，
       // 会在每次渲染时把 DOM 强制钉死到创建时的初始尺寸，导致
       // NodeResizeControl 缩小节点后一松手又弹回原始大小。
-      // React Flow 通过节点顶层的 width/height 字段来管理可变尺寸，
-      // 缩放产生的 dimensions change（见 canvasStore.onNodesChange）
-      // 更新的也正是这两个字段，所以初始值也应该写在这里。
+      // 数据层约定：可变尺寸由节点顶层的 width/height 字段管理
+      // （历史持久化格式），缩放产生的 dimensions change（见
+      // canvasStore.onNodesChange）更新的也正是这两个字段，
+      // 所以初始值也应该写在这里。
       node.width = definition.defaultSize.width;
       node.height = definition.defaultSize.height;
     }

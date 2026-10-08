@@ -61,6 +61,8 @@ export interface DrawSceneOptions {
   dragDy: number;
   guides: SnapGuideLine[];
   marqueeRect: { x: number; y: number; w: number; h: number } | null;
+  /** 多选联合包围盒（世界坐标），选中 ≥2 个节点时绘制浅色虚线框 */
+  selectionBounds: { x: number; y: number; w: number; h: number } | null;
   connectPreview: { fromX: number; fromY: number; toX: number; toY: number; valid: boolean; hasTarget: boolean } | null;
   resizeOverride: { id: string; w: number; h: number } | null;
   minimap: MinimapLayout | null;
@@ -569,6 +571,21 @@ function drawMarquee(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions): num
   return 2;
 }
 
+function drawSelectionBounds(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions): number {
+  const b = opts.selectionBounds;
+  if (!b) return 0;
+  const zoom = opts.cam.zoom;
+  const pad = 6 / zoom;
+  ctx.fillStyle = 'rgba(56,189,248,0.05)';
+  ctx.fillRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+  ctx.strokeStyle = 'rgba(56,189,248,0.55)';
+  ctx.lineWidth = 1 / zoom;
+  ctx.setLineDash([6 / zoom, 4 / zoom]);
+  ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+  ctx.setLineDash([]);
+  return 2;
+}
+
 function drawGuides(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions, view: { x: number; y: number; w: number; h: number }): number {
   if (opts.guides.length === 0) return 0;
   const zoom = opts.cam.zoom;
@@ -732,6 +749,7 @@ export function drawScene(opts: DrawSceneOptions): DrawStats {
   }
 
   // 叠加层：连线预览 / 框选 / 磁吸参考线 / 缩放幽灵框
+  calls.n += drawSelectionBounds(ctx, opts);
   calls.n += drawConnectPreview(ctx, opts);
   calls.n += drawMarquee(ctx, opts);
   calls.n += drawGuides(ctx, opts, view);

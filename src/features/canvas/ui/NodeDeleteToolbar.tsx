@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { NodeToolbar as ReactFlowNodeToolbar } from '@/features/canvas/compat/flowShim';
+import { NodeToolbar as FloatingNodeToolbar } from '@/features/canvas/compat/nodeHostApi';
 import { RotateCcw, Trash2, Ungroup } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -31,7 +31,7 @@ export const NodeDeleteToolbar = memo(({ nodeId, node }: NodeDeleteToolbarProps)
   const canUngroup = node?.type === CANVAS_NODE_TYPES.group;
 
   return (
-    <ReactFlowNodeToolbar
+    <FloatingNodeToolbar
       nodeId={nodeId}
       isVisible
       position={NODE_TOOLBAR_POSITION}
@@ -78,7 +78,7 @@ export const NodeDeleteToolbar = memo(({ nodeId, node }: NodeDeleteToolbarProps)
           {t('common.delete')}
         </UiChipButton>
       </UiPanel>
-    </ReactFlowNodeToolbar>
+    </FloatingNodeToolbar>
   );
 });
 

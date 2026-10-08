@@ -1,4 +1,4 @@
-import { Position } from '@/features/canvas/compat/flowShim';
+import { Position } from '@/features/canvas/compat/nodeHostApi';
 
 export const NODE_TOOLBAR_POSITION = Position.Top;
 export const NODE_TOOLBAR_ALIGN = 'center' as const;

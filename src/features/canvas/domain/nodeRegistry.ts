@@ -589,3 +589,11 @@ export function getConnectMenuNodeTypes(handleType: 'source' | 'target'): Canvas
       : definition.connectivity.sourceHandle))
     .map((definition) => definition.type);
 }
+/** 支持"批量触发"入口（generation-node/trigger 事件）的节点类型 */
+export const CANVAS_BATCH_TRIGGER_TYPES = new Set<CanvasNodeType>([
+  CANVAS_NODE_TYPES.imageEdit,
+  CANVAS_NODE_TYPES.aiVideo,
+  CANVAS_NODE_TYPES.aiText,
+  CANVAS_NODE_TYPES.storyboardGen,
+  CANVAS_NODE_TYPES.tag,
+]);

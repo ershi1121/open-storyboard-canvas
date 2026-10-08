@@ -6,7 +6,7 @@ import { useCanvasStore } from '@/stores/canvasStore';
 /**
  * Canvas2D 引擎桥接单例。
  *
- * 节点编辑组件（原 React Flow 节点）通过 flowShim 的 useReactFlow()/useViewport()
+ * 节点编辑组件通过 nodeHostApi 的 useCanvasApi()/useViewport()
  * 访问画布相机；引擎实例由 Canvas2DView 在挂载时注册到这里。
  * 只有检视面板中的单个（或少量隐藏挂载的）组件消费，更新频率已节流，
  * 不会重现"每帧全员重渲染"问题。
@@ -28,8 +28,13 @@ export function getCanvas2DEngine(): Canvas2DEngine | null {
   return bridge.engine;
 }
 
+/** 画布 canvas 元素（容器定位 / client 坐标换算用） */
+export function getCanvasElement(): HTMLCanvasElement | null {
+  return bridge.canvasEl;
+}
+
 /** 客户端坐标 → 画布世界坐标 */
-export function clientToFlowPosition(clientPos: XYPosition): XYPosition {
+export function clientToWorldPosition(clientPos: XYPosition): XYPosition {
   const engine = bridge.engine;
   const rect = bridge.canvasEl?.getBoundingClientRect();
   if (!engine || !rect) {
@@ -40,7 +45,7 @@ export function clientToFlowPosition(clientPos: XYPosition): XYPosition {
 }
 
 /** 画布世界坐标 → 客户端坐标 */
-export function flowToClientPosition(flowPos: XYPosition): XYPosition {
+export function worldToClientPosition(flowPos: XYPosition): XYPosition {
   const engine = bridge.engine;
   const rect = bridge.canvasEl?.getBoundingClientRect();
   if (!engine || !rect) return { ...flowPos };

@@ -1,5 +1,6 @@
 import { memo, useCallback, useRef, useState, type ChangeEvent } from 'react';
-import { useReactFlow } from '@/features/canvas/compat/flowShim';
+import { useCanvasApi } from '@/features/canvas/compat/nodeHostApi';
+import { getCanvasElement } from '@/features/canvas/compat/engineBridge';
 import { useTranslation } from 'react-i18next';
 import {
   ImagePlus,
@@ -105,7 +106,7 @@ interface CanvasSideToolbarProps {
 
 export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps) => {
   const { t } = useTranslation();
-  const reactFlow = useReactFlow();
+  const canvasApi = useCanvasApi();
   const addNode = useCanvasStore((s) => s.addNode);
   const nodes = useCanvasStore((s) => s.nodes); // ✅ 新增：用于计算递增名称
   const excelInputRef = useRef<HTMLInputElement>(null);
@@ -120,15 +121,15 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
     (type: CanvasNodeType, data?: Partial<CanvasNodeData>) => {
       let position = { x: 240, y: 160 };
       try {
-        const vp = reactFlow.getViewport();
-        const container = document.querySelector('.react-flow') as HTMLElement | null;
+        const vp = canvasApi.getViewport();
+        const container = getCanvasElement();
         if (container) {
           const rect = container.getBoundingClientRect();
           const screenCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-          const flowPos = reactFlow.screenToFlowPosition(screenCenter);
+          const worldPos = canvasApi.screenToWorldPosition(screenCenter);
           position = {
-            x: flowPos.x + (Math.random() - 0.5) * 120,
-            y: flowPos.y + (Math.random() - 0.5) * 120,
+            x: worldPos.x + (Math.random() - 0.5) * 120,
+            y: worldPos.y + (Math.random() - 0.5) * 120,
           };
         } else {
           position = { x: -vp.x / vp.zoom + 120, y: -vp.y / vp.zoom + 120 };
@@ -138,7 +139,7 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
       }
       addNode(type, position, data);
     },
-    [addNode, reactFlow]
+    [addNode, canvasApi]
   );
 
   // 打开新建标签弹窗
@@ -153,16 +154,16 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
     if (!newTagName.trim()) return;
     let position = { x: 240, y: 160 };
     try {
-      const container = document.querySelector('.react-flow') as HTMLElement | null;
+      const container = getCanvasElement();
       if (container) {
         const rect = container.getBoundingClientRect();
-        const flowPos = reactFlow.screenToFlowPosition({
+        const worldPos = canvasApi.screenToWorldPosition({
           x: rect.left + rect.width / 2,
           y: rect.top + rect.height / 2,
         });
         position = {
-          x: flowPos.x + (Math.random() - 0.5) * 80,
-          y: flowPos.y + (Math.random() - 0.5) * 80,
+          x: worldPos.x + (Math.random() - 0.5) * 80,
+          y: worldPos.y + (Math.random() - 0.5) * 80,
         };
       }
     } catch {
@@ -178,7 +179,7 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
       sourceId: null,
     });
     setIsCreateTagOpen(false);
-  }, [addNode, reactFlow, newTagName, nodes]);
+  }, [addNode, canvasApi, newTagName, nodes]);
 
   // 确认创建标签组
   const handleConfirmCreateTagGroup = useCallback(() => {
@@ -186,16 +187,16 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
     if (!displayName) return;
     let position = { x: 240, y: 160 };
     try {
-      const container = document.querySelector('.react-flow') as HTMLElement | null;
+      const container = getCanvasElement();
       if (container) {
         const rect = container.getBoundingClientRect();
-        const flowPos = reactFlow.screenToFlowPosition({
+        const worldPos = canvasApi.screenToWorldPosition({
           x: rect.left + rect.width / 2,
           y: rect.top + rect.height / 2,
         });
         position = {
-          x: flowPos.x + (Math.random() - 0.5) * 80,
-          y: flowPos.y + (Math.random() - 0.5) * 80,
+          x: worldPos.x + (Math.random() - 0.5) * 80,
+          y: worldPos.y + (Math.random() - 0.5) * 80,
         };
       }
     } catch {
@@ -210,7 +211,7 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
       sources: [],
     });
     setIsCreateTagOpen(false);
-  }, [addNode, reactFlow, newTagName, nodes]);
+  }, [addNode, canvasApi, newTagName, nodes]);
 
   // 统一确认创建
   const handleConfirmCreate = useCallback(() => {
@@ -232,14 +233,14 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
       setImportFile(null);
       let origin = { x: 120, y: 120 };
       try {
-        const container = document.querySelector('.react-flow') as HTMLElement | null;
+        const container = getCanvasElement();
         if (container) {
           const rect = container.getBoundingClientRect();
-          const flowPos = reactFlow.screenToFlowPosition({
+          const worldPos = canvasApi.screenToWorldPosition({
             x: rect.left + 140,
             y: rect.top + 120,
           });
-          origin = { x: flowPos.x, y: flowPos.y };
+          origin = { x: worldPos.x, y: worldPos.y };
         }
       } catch {
         /* keep default origin */
@@ -259,7 +260,7 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
       }
       alert(`导入成功！已按「${selection.label}」的顺序生成 ${prompts.length} 个 AI 图片节点。`);
     },
-    [addNode, reactFlow]
+    [addNode, canvasApi]
   );
 
   return (

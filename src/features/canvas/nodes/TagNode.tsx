@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Handle, NodeResizeControl, NodeToolbar, Position } from '@/features/canvas/compat/flowShim';
+import { Handle, NodeResizeControl, NodeToolbar, Position } from '@/features/canvas/compat/nodeHostApi';
 import { Link2, Tag, Trash2 } from 'lucide-react';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useThemeStore } from '@/stores/themeStore';

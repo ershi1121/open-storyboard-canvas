@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import type { NodeProps } from '@/features/canvas/compat/flowShim';
-import { Handle, Position } from '@/features/canvas/compat/flowShim';
+import type { NodeProps } from '@/features/canvas/compat/nodeHostApi';
+import { Handle, Position } from '@/features/canvas/compat/nodeHostApi';
 import { useTranslation } from 'react-i18next';
 import { Camera, Maximize2 } from 'lucide-react';
 

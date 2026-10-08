@@ -1,4 +1,4 @@
-import { NodeResizeControl } from '@/features/canvas/compat/flowShim';
+import { NodeResizeControl } from '@/features/canvas/compat/nodeHostApi';
 
 type NodeResizeHandleProps = {
   minWidth?: number;

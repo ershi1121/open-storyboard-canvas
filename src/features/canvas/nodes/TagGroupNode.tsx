@@ -6,7 +6,7 @@ import {
   Position,
   useEdges,
   useUpdateNodeInternals,
-} from '@/features/canvas/compat/flowShim';
+} from '@/features/canvas/compat/nodeHostApi';
 import {
   FileText,
   Image as ImageIcon,

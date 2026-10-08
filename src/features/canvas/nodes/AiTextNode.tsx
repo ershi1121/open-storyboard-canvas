@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { Handle, Position, type NodeProps } from '@/features/canvas/compat/flowShim';
+import { Handle, Position, type NodeProps } from '@/features/canvas/compat/nodeHostApi';
 import { AlertTriangle, Bug, Check, ChevronDown, Copy, LoaderCircle, MoreHorizontal, Play, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 

@@ -1,5 +1,5 @@
 import { Component, type ComponentType, type ErrorInfo, type ReactNode } from 'react';
-import type { NodeProps } from '@/features/canvas/compat/flowShim';
+import type { NodeProps } from '@/features/canvas/compat/nodeHostApi';
 
 interface NodeRenderErrorBoundaryProps {
   nodeId: string;

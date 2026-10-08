@@ -9,7 +9,7 @@ import {
   useEffect,
   useRef,
 } from 'react';
-import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@/features/canvas/compat/flowShim';
+import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@/features/canvas/compat/nodeHostApi';
 import { Bug, Check, ChevronRight, Copy, Sparkles, Video, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {

@@ -89,3 +89,65 @@ export function filterDragDescendants(ids: string[], parentOf: Map<string, strin
     return true;
   });
 }
+
+/* ---------------- 磁吸跟随簇 ---------------- */
+
+/** 跟随判定间隙（世界像素）：几乎贴着的节点才互相跟随 */
+const FOLLOW_GAP = 1;
+
+export interface FollowRect {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function followRectGap(
+  a: FollowRect,
+  b: FollowRect,
+): number {
+  const dx = Math.max(a.x - (b.x + b.w), b.x - (a.x + a.w), 0);
+  const dy = Math.max(a.y - (b.y + b.h), b.y - (a.y + a.h), 0);
+  return Math.max(dx, dy);
+}
+
+function followRectsOverlap(a: FollowRect, b: FollowRect): boolean {
+  const overlapX = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const overlapY = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return overlapX > 0.5 && overlapY > 0.5;
+}
+
+/**
+ * 收集"跟随簇"：与被拖拽集合几乎贴合（间隙 ≤ 1 世界像素、互不重叠）的节点，
+ * 拖拽时随动，保持拼贴排版不散架。BFS 传播：A 贴 B、B 贴 C ⇒ 拖 A 时 B、C 都跟随。
+ * 语义与旧版 useCanvasSnapFollow.collectFollowCluster 一致。
+ *
+ * @param seeds 被拖拽的节点集合（含其后代展开），不会出现在返回值中
+ * @param nodes 全量渲染节点
+ * @returns 需要跟随移动的节点 id 集合（不含 seeds）
+ */
+export function collectFollowCluster(
+  seeds: ReadonlySet<string>,
+  nodes: FollowRect[],
+): Set<string> {
+  const byId = new Map<string, FollowRect>();
+  for (const n of nodes) byId.set(n.id, n);
+  const cluster = new Set<string>(seeds);
+  const queue: string[] = [...seeds];
+  while (queue.length > 0) {
+    const curId = queue.pop() as string;
+    const cur = byId.get(curId);
+    if (!cur) continue;
+    for (const other of nodes) {
+      if (cluster.has(other.id)) continue;
+      if (followRectsOverlap(cur, other)) continue;
+      if (followRectGap(cur, other) <= FOLLOW_GAP) {
+        cluster.add(other.id);
+        queue.push(other.id);
+      }
+    }
+  }
+  for (const id of seeds) cluster.delete(id);
+  return cluster;
+}

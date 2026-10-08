@@ -10,7 +10,7 @@ import {
   type FocusEvent,
   type KeyboardEvent,
 } from 'react';
-import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@/features/canvas/compat/flowShim';
+import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@/features/canvas/compat/nodeHostApi';
 import { AlertTriangle, Bug, Check, ChevronDown, Copy, LoaderCircle, Music2, Settings2, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 

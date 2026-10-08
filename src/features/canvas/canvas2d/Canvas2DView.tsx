@@ -13,6 +13,8 @@ import { resolveImageDisplayUrl } from '@/features/canvas/application/imageData'
 import { canvasEventBus } from '@/features/canvas/application/canvasServices';
 import { useCanvasPersistence } from '@/features/canvas/hooks/useCanvasPersistence';
 import { useCanvasGenerationPolling } from '@/features/canvas/hooks/useCanvasGenerationPolling';
+import { useMaterialImport } from '@/features/canvas/hooks/useMaterialImport';
+import { useCanvasSystemClipboard } from '@/features/canvas/hooks/useCanvasSystemClipboard';
 import {
   CANVAS_NODE_TYPES,
   type CanvasEdge,
@@ -24,6 +26,8 @@ import {
   resolveAllowedNodeTypes,
 } from '@/features/canvas/shared/utils/node-helpers';
 import { NodeSelectionMenu } from '@/features/canvas/NodeSelectionMenu';
+import { BatchToolbar } from '@/features/canvas/shared/components/BatchToolbar';
+import { resolveBatchToolbarState, type BatchToolbarState } from '@/features/canvas/domain/batchToolbar';
 import { ContextMenu } from '@/features/canvas/shared/components/ContextMenu';
 import type { NodeContextMenuState } from '@/features/canvas/shared/types';
 import { SnapToggle } from '@/features/canvas/shared/components/SnapToggle';
@@ -34,27 +38,31 @@ import { AssetPanel, type CanvasAssetItem } from '@/features/canvas/ui/AssetPane
 import { CanvasSideToolbar } from '@/features/canvas/CanvasSideToolbar';
 import { nodeTypes } from '@/features/canvas/nodes';
 import { extractCanvasAssets } from '@/features/canvas/shared/utils/assets';
-import { ShimNodeIdContext } from '@/features/canvas/compat/flowShim';
+import { HiddenHostContext, NodeHostIdContext } from '@/features/canvas/compat/nodeHostApi';
 import { registerCanvas2DEngine, useViewportSnapshotStore } from '@/features/canvas/compat/engineBridge';
 import { buildSceneModel, type SceneModel } from './sceneModel';
 import { filterDragDescendants } from './spatialGrid';
 import { Canvas2DEngine, type ConnectHandleType, type EngineStats, type ViewportLike } from './engine';
 
 /**
- * Canvas2D 渲染后端 v1 —— React Flow 的替代画布。
+ * Canvas2D 画布视图 —— 本项目唯一渲染引擎。
  *
  * 设计原则：手势期间零 store 写入、零 React 渲染；手势结束一次性 commit。
- * 与 RF 版共享：canvasStore 文档模型、useCanvasPersistence 持久化、
+ * 共享基础设施：canvasStore 文档模型、useCanvasPersistence 持久化、
  * useCanvasGenerationPolling 生成轮询、撤销历史、NodeSelectionMenu /
- * ContextMenu / ImageViewerModal / SnapToggle 等 DOM 组件。
+ * ContextMenu / ImageViewerModal / SnapToggle / AssetPanel 等 DOM 组件。
  *
- * v1 支持：平移/缩放/全览、拖拽（含分组带子节点、Alt 复制）、磁吸对齐参考线、
- * Shift 多选、右键/Ctrl 框选、连接桩拖拽连线（落空白弹新建菜单）、单节点
- * 右下角缩放、右键菜单（复制/粘贴/删除/文本生图）、双击看图/标签跳源/空白建节点、
- * 内部剪贴板（Ctrl+C/V）、Ctrl+A 全选、Ctrl+G 打组、WASD 平移、小地图导航。
+ * 画布交互：平移/缩放/全览、拖拽（分组带子节点、Alt 复制、磁吸对齐参考线、
+ * 贴合节点跟随移动）、Shift 多选、右键/Ctrl 框选、连接桩拖拽连线（落空白弹
+ * 新建菜单）、单节点右下角缩放、右键菜单（复制/粘贴/删除/文本生图）、双击
+ * 看图/标签跳源/空白建节点、内部剪贴板（Ctrl+C/V）、系统剪贴板图片/媒体/
+ * 文本粘贴（Ctrl+V 双通道 + 目标节点规则）、素材文件拖入（OS 文件/本地路径）、
+ * Ctrl+A 全选、Ctrl+G 打组/解组、WASD 平移、小地图导航、多选批量工具条
+ * （复制/打组/解组/批量触发/删除，批量触发经 HiddenTriggerHost 补齐订阅）。
  *
- * 尚未接入（RF 引擎下仍可用）：节点内编辑表单与功能工具栏（多角度/打光/宫格等）、
- * 系统剪贴板图片粘贴、素材文件拖入、跟随移动（磁吸仅对齐）、Alt 拖拽的偏移迭代。
+ * 节点编辑：选中节点在 NodeInspector 停靠渲染原版编辑组件（经
+ * compat/nodeHostApi 宿主 API 接入），SelectedNodeOverlay / NodeToolDialog /
+ * CanvasSideToolbar / AssetPanel 全套面板生态可用。
  */
 
 const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
@@ -100,6 +108,10 @@ export function Canvas2DView() {
   const [contextMenu, setContextMenu] = useState<NodeContextMenuState | null>(null);
   const [assetPanelOpen, setAssetPanelOpen] = useState(false);
   const [assetButtonRect, setAssetButtonRect] = useState<DOMRect | null>(null);
+  /** 引擎多选集合的 React 镜像（仅在选区变更回调时更新，手势期间零写入） */
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  /** 批量触发时隐藏挂载的节点编辑组件 id（订阅 generation-node/trigger 用） */
+  const [triggerHostIds, setTriggerHostIds] = useState<string[]>([]);
 
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
@@ -116,7 +128,7 @@ export function Canvas2DView() {
   const enableCanvasWasdPan = useSettingsStore((state) => state.enableCanvasWasdPan);
   const canvasWasdPanSensitivity = useSettingsStore((state) => state.canvasWasdPanSensitivity);
 
-  /* ---------- 持久化（复用 RF 版同一套 hook，传入视口适配器） ---------- */
+  /* ---------- 持久化（与旧版共用同一套 hook，传入视口适配器） ---------- */
   const persistenceAdapter = useMemo(
     () =>
       ({
@@ -136,6 +148,35 @@ export function Canvas2DView() {
   schedulePersistRef.current = scheduleCanvasPersist;
 
   useCanvasGenerationPolling(nodes, apiKeys);
+
+  /* ---------- 素材拖入（OS 文件 / 本地路径文本 → 上传/视频/音频节点） ---------- */
+  const materialImport = useMaterialImport({ scheduleCanvasPersist });
+
+  /* ---------- 系统剪贴板（图片/媒体/文本粘贴 + 单节点复制同步） ---------- */
+  const resolvePasteWorldPosition = useCallback(() => {
+    const engine = engineRef.current;
+    if (engine) {
+      const local = lastPointerLocalRef.current;
+      const rect = containerRef.current?.getBoundingClientRect();
+      const lx = rect && (local.x <= 0 || local.y <= 0 || local.x >= rect.width || local.y >= rect.height)
+        ? { x: rect.width / 2, y: rect.height / 2 }
+        : local;
+      return engine.toWorld(lx.x, lx.y);
+    }
+    const vp = useCanvasStore.getState().currentViewport ?? DEFAULT_VIEWPORT;
+    return {
+      x: (window.innerWidth / 2 - vp.x) / vp.zoom,
+      y: (window.innerHeight / 2 - vp.y) / vp.zoom,
+    };
+  }, []);
+  const systemClipboard = useCanvasSystemClipboard({
+    resolvePasteWorldPosition,
+    getInternalSnapshot: () => clipboardRef.current,
+    pasteInternal: (worldPos) => pasteAtWorld(worldPos),
+    createUploadImageNodeAtWorldPosition: materialImport.createUploadImageNodeAtWorldPosition,
+    createMaterialNodeFromFileAtWorldPosition: materialImport.createMaterialNodeFromFileAtWorldPosition,
+    scheduleCanvasPersist,
+  });
 
   /* ---------- 渲染模型 ---------- */
   const model = useMemo(
@@ -161,7 +202,7 @@ export function Canvas2DView() {
     useCanvasStore.getState().openImageViewer(url, [url]);
   }, []);
 
-  /* ---------- 工具对话框事件总线（与 RF 版一致的订阅） ---------- */
+  /* ---------- 工具对话框事件总线 ---------- */
   useEffect(() => {
     const unsubscribeOpen = canvasEventBus.subscribe('tool-dialog/open', (payload) => {
       openToolDialog(payload);
@@ -300,10 +341,16 @@ export function Canvas2DView() {
     clipboardRef.current = { nodes: snapNodes, edges: snapEdges };
   }, [expandWithDescendants]);
 
+  /** 复制选中节点：内部快照 + 单节点内容同步到系统剪贴板（可粘贴到外部应用） */
+  const copySelectionWithSync = useCallback(() => {
+    copySelection();
+    systemClipboard.noteInternalCopy(clipboardRef.current);
+  }, [copySelection, systemClipboard]);
+
   const pasteAtWorld = useCallback(
-    (worldPos: { x: number; y: number } | null) => {
+    (worldPos: { x: number; y: number } | null): boolean => {
       const snapshot = clipboardRef.current;
-      if (!snapshot || snapshot.nodes.length === 0) return;
+      if (!snapshot || snapshot.nodes.length === 0) return false;
       const store = useCanvasStore.getState();
       const storeById = new Map(store.nodes.map((node) => [node.id, node]));
       const snapIds = new Set(snapshot.nodes.map((node) => node.id));
@@ -317,12 +364,14 @@ export function Canvas2DView() {
         minX = Math.min(minX, abs.x);
         minY = Math.min(minY, abs.y);
       }
-      if (!Number.isFinite(minX)) return;
+      if (!Number.isFinite(minX)) return false;
       const offset = worldPos ? { x: worldPos.x - minX, y: worldPos.y - minY } : { x: 32, y: 32 };
       const newIds = duplicateSnapshot(snapshot, offset, false);
       engineRef.current?.setSelection(newIds);
+      setSelectedIds(newIds);
       lastEmittedSelectionRef.current = newIds[newIds.length - 1] ?? null;
       schedulePersistRef.current(0);
+      return true;
     },
     [absoluteOf, duplicateSnapshot],
   );
@@ -332,8 +381,9 @@ export function Canvas2DView() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const engine = new Canvas2DEngine({
-      onSelect: (_ids, primary) => {
+      onSelect: (ids, primary) => {
         lastEmittedSelectionRef.current = primary;
+        setSelectedIds(ids);
         const store = useCanvasStore.getState();
         if (store.selectedNodeId !== primary) store.setSelectedNode(primary);
       },
@@ -430,7 +480,7 @@ export function Canvas2DView() {
         setContextMenu({
           nodeId: payload.nodeId,
           position: { x: payload.sx, y: payload.sy },
-          flowPosition: payload.world,
+          worldPosition: payload.world,
           selectedText: '',
         });
       },
@@ -547,7 +597,18 @@ export function Canvas2DView() {
     if (selectedNodeId === lastEmittedSelectionRef.current) return;
     lastEmittedSelectionRef.current = selectedNodeId;
     engineRef.current?.setSelection(selectedNodeId ? [selectedNodeId] : []);
+    setSelectedIds(selectedNodeId ? [selectedNodeId] : []);
   }, [selectedNodeId]);
+
+  /* ---------- 选区镜像清理：节点被删除后同步剔除失效 id ---------- */
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.length === 0) return prev;
+      const alive = new Set(nodes.map((node) => node.id));
+      const next = prev.filter((id) => alive.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [nodes]);
 
   useEffect(() => {
     if (viewportEquals(currentViewport, lastCommittedViewportRef.current)) return;
@@ -648,6 +709,7 @@ export function Canvas2DView() {
       lastEmittedSelectionRef.current = newNodeId;
       useCanvasStore.getState().setSelectedNode(newNodeId);
       engineRef.current?.setSelection([newNodeId]);
+      setSelectedIds([newNodeId]);
       schedulePersistRef.current(0);
       setNodeMenu(null);
     },
@@ -668,14 +730,18 @@ export function Canvas2DView() {
     };
     const newIds = duplicateSnapshot(snapshot, { x: 24, y: 24 }, false);
     engineRef.current?.setSelection(newIds);
+    setSelectedIds(newIds);
     schedulePersistRef.current(0);
   }, [contextMenu, duplicateSnapshot, expandWithDescendants]);
 
   const handleContextMenuPaste = useCallback(() => {
     const state = contextMenu;
     setContextMenu(null);
-    pasteAtWorld(state ? state.flowPosition : null);
-  }, [contextMenu, pasteAtWorld]);
+    void systemClipboard.handleContextMenuPaste({
+      nodeId: state ? state.nodeId : null,
+      worldPosition: state ? state.worldPosition : resolvePasteWorldPosition(),
+    });
+  }, [contextMenu, resolvePasteWorldPosition, systemClipboard]);
 
   const handleContextMenuDelete = useCallback(() => {
     const state = contextMenu;
@@ -708,6 +774,56 @@ export function Canvas2DView() {
   const handleContextMenuCopySelectedText = useCallback(() => {
     setContextMenu(null);
   }, []);
+
+  /* ---------- 多选批量工具条 ---------- */
+  const batchState = useMemo(() => resolveBatchToolbarState(nodes, selectedIds), [nodes, selectedIds]);
+
+  const handleBatchGroup = useCallback(() => {
+    if (selectedIds.length < 2) return;
+    const grouped = useCanvasStore.getState().groupNodes(selectedIds);
+    if (grouped) schedulePersistRef.current(0);
+  }, [selectedIds]);
+
+  const handleBatchUngroup = useCallback(() => {
+    let changed = false;
+    for (const groupId of batchState.groupIds) {
+      changed = useCanvasStore.getState().ungroupNode(groupId) || changed;
+    }
+    if (changed) schedulePersistRef.current(0);
+  }, [batchState.groupIds]);
+
+  const handleBatchDelete = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    useCanvasStore.getState().deleteNodes(selectedIds);
+    schedulePersistRef.current(0);
+  }, [selectedIds]);
+
+  /**
+   * 批量触发：检视面板中已挂载的节点直接发事件；其余可触发节点先经
+   * HiddenTriggerHost 隐藏挂载（补齐事件订阅）再统一发布。
+   * 生成提交后的轮询/结果落盘由视图级 useCanvasGenerationPolling 接管，
+   * 宿主组件延时卸载不影响进行中的任务。
+   */
+  const handleBatchTrigger = useCallback(() => {
+    const ids = batchState.triggerIds;
+    if (ids.length === 0) return;
+    const mountedId = useCanvasStore.getState().selectedNodeId;
+    if (mountedId && ids.includes(mountedId)) {
+      canvasEventBus.publish('generation-node/trigger', { nodeId: mountedId });
+    }
+    const unmounted = ids.filter((id) => id !== mountedId);
+    if (unmounted.length > 0) setTriggerHostIds(unmounted);
+  }, [batchState.triggerIds]);
+
+  // 触发宿主自动回收：20s 兜底卸载；选区变化立即卸载
+  useEffect(() => {
+    if (triggerHostIds.length === 0) return;
+    const timer = setTimeout(() => setTriggerHostIds([]), 20_000);
+    return () => clearTimeout(timer);
+  }, [triggerHostIds]);
+  useEffect(() => {
+    setTriggerHostIds((prev) => (prev.length === 0 ? prev : []));
+  }, [selectedIds]);
 
   /* ---------- 快捷键 ---------- */
   useEffect(() => {
@@ -748,13 +864,12 @@ export function Canvas2DView() {
       }
       if (mod && (key === 'c' || key === 'C')) {
         event.preventDefault();
-        copySelection();
+        copySelectionWithSync();
         return;
       }
       if (mod && (key === 'v' || key === 'V')) {
-        event.preventDefault();
-        const local = lastPointerLocalRef.current;
-        pasteAtWorld(engineRef.current ? engineRef.current.toWorld(local.x, local.y) : null);
+        // 不 preventDefault：让 document paste 事件先走同步通道（40ms 兜底在 hook 内）
+        systemClipboard.requestShortcutPaste();
         return;
       }
       if (mod && (key === 'g' || key === 'G')) {
@@ -801,14 +916,19 @@ export function Canvas2DView() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [closeMenus, copySelection, pasteAtWorld]);
+  }, [closeMenus, copySelectionWithSync, systemClipboard]);
 
   /* ---------- HUD ---------- */
   const hudFps = stats?.fps ?? 0;
   const fpsClass = hudFps >= 50 ? 'text-emerald-400' : hudFps >= 30 ? 'text-amber-400' : 'text-red-400';
 
   return (
-    <div ref={containerRef} className="relative h-full w-full overflow-hidden bg-bg-dark">
+    <div
+      ref={containerRef}
+      className="relative h-full w-full overflow-hidden bg-bg-dark"
+      onDragOver={materialImport.handleCanvasDragOver}
+      onDrop={materialImport.handleCanvasDrop}
+    >
       <canvas
         ref={canvasRef}
         className="block h-full w-full touch-none"
@@ -864,20 +984,35 @@ export function Canvas2DView() {
         </div>
       </div>
 
-      {/* 预览版提示 */}
+      {/* 操作提示横幅 */}
       <div className="pointer-events-none absolute left-3 top-3 max-w-[460px] rounded-lg border border-sky-500/30 bg-[rgba(12,42,61,0.88)] px-3 py-2 text-[11px] leading-4 text-sky-200 backdrop-blur-sm">
         <b className="text-sky-100">{t('canvas2d.badge')}</b>
         <span className="mx-1.5 opacity-50">|</span>
         {t('canvas2d.banner')}
       </div>
 
-      {/* 磁吸开关（复用 RF 版组件，读同一个 snapStore） */}
+      {/* 磁吸开关（读 snapStore） */}
       <div className="absolute bottom-3 left-3">
         <SnapToggle />
       </div>
 
-      {/* 左侧节点工具栏（复用组件，经 flowShim 桥接引擎坐标） */}
+      {/* 左侧节点工具栏（经 nodeHostApi 桥接引擎坐标） */}
       <CanvasSideToolbar onOpenAssets={handleOpenAssets} />
+
+      {/* 多选批量工具条（复制/打组/解组/批量触发/删除） */}
+      <BatchToolbarLayer
+        engineRef={engineRef}
+        containerRef={containerRef}
+        state={batchState}
+        onCopy={copySelectionWithSync}
+        onGroup={handleBatchGroup}
+        onUngroup={handleBatchUngroup}
+        onTrigger={handleBatchTrigger}
+        onDelete={handleBatchDelete}
+      />
+
+      {/* 批量触发隐藏宿主：为未挂载的可触发节点补齐事件订阅 */}
+      {triggerHostIds.length > 0 && <HiddenTriggerHost ids={triggerHostIds} />}
 
       <AssetPanel
         isOpen={assetPanelOpen}
@@ -888,7 +1023,7 @@ export function Canvas2DView() {
         onActivate={handleAssetActivate}
       />
 
-      {/* 选中节点的浮动工具栏与生成面板（复用 RF 版全套面板生态） */}
+      {/* 选中节点的浮动工具栏与生成面板（全套面板生态） */}
       <SelectedNodeOverlay />
       <NodeToolDialog />
       <NodeInspector />
@@ -933,9 +1068,9 @@ export function Canvas2DView() {
 
 /**
  * 节点检视面板：选中单个节点时，在右侧停靠渲染其【原版节点编辑组件】。
- * 原 React Flow 节点组件通过 compat/flowShim 提供的同名 API 运行：
+ * 节点编辑组件通过 compat/nodeHostApi 提供的宿主 API 运行：
  * Handle 渲染为空（连接桩由 canvas 绘制）、NodeToolbar 浮动定位到画布节点上方、
- * useReactFlow/useViewport 桥接到 Canvas2D 引擎。编辑能力零重写、全保留。
+ * useCanvasApi/useViewport 桥接到 Canvas2D 引擎。编辑能力零重写、全保留。
  */
 function NodeInspector() {
   const { t } = useTranslation();
@@ -1006,12 +1141,157 @@ function NodeInspector() {
         </button>
       </div>
       <div className="ui-scrollbar flex-1 overflow-x-auto overflow-y-auto p-3">
-        <ShimNodeIdContext.Provider value={node.id}>
+        <NodeHostIdContext.Provider value={node.id}>
           <div className="relative mx-auto" style={{ width: nodeWidth, minHeight: 120 }}>
             <Comp {...editorProps} />
           </div>
-        </ShimNodeIdContext.Provider>
+        </NodeHostIdContext.Provider>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 批量工具条定位层：rAF 读取引擎实时选区包围盒（含拖拽偏移），
+ * 位置写入本组件 state（epsilon 去抖），不触发父组件重渲染。
+ * 仅多选可见时运行 rAF 循环。
+ */
+function BatchToolbarLayer({
+  engineRef,
+  containerRef,
+  state,
+  onCopy,
+  onGroup,
+  onUngroup,
+  onTrigger,
+  onDelete,
+}: {
+  engineRef: { current: Canvas2DEngine | null };
+  containerRef: { current: HTMLDivElement | null };
+  state: BatchToolbarState;
+  onCopy: () => void;
+  onGroup: () => void;
+  onUngroup: () => void;
+  onTrigger: () => void;
+  onDelete: () => void;
+}) {
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    if (!state.visible) {
+      setPosition(null);
+      return;
+    }
+    let raf = 0;
+    const tick = () => {
+      const engine = engineRef.current;
+      const container = containerRef.current;
+      if (engine && container) {
+        const rect = engine.getSelectionWorldRect();
+        if (rect) {
+          const containerRect = container.getBoundingClientRect();
+          const center = engine.toScreen(rect.x + rect.w / 2, rect.y);
+          const left = Math.max(12, Math.min(containerRect.width - 12, center.x));
+          const top = Math.max(12, center.y - 42);
+          setPosition((prev) =>
+            prev && Math.abs(prev.left - left) < 0.5 && Math.abs(prev.top - top) < 0.5
+              ? prev
+              : { left, top },
+          );
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [state.visible, engineRef, containerRef]);
+
+  if (!state.visible) return null;
+
+  return (
+    <BatchToolbar
+      position={position}
+      selectedCount={state.count}
+      canGroup={state.canGroup}
+      canUngroup={state.canUngroup}
+      canTrigger={state.canTrigger}
+      onCopy={onCopy}
+      onGroup={onGroup}
+      onUngroup={onUngroup}
+      onTrigger={onTrigger}
+      onDelete={onDelete}
+    />
+  );
+}
+
+/**
+ * 批量触发隐藏宿主：把选中但未挂载的可触发节点编辑组件挂载到 1px 隐藏容器中，
+ * 等待其 generation-node/trigger 订阅生效后（双 rAF）统一发布触发事件。
+ * HiddenHostContext 抑制 NodeToolbar / NodeResizeControl 的可见渲染。
+ */
+function HiddenTriggerHost({ ids }: { ids: string[] }) {
+  const nodes = useCanvasStore((state) => state.nodes);
+  const publishedRef = useRef(false);
+
+  useEffect(() => {
+    if (publishedRef.current || ids.length === 0) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        publishedRef.current = true;
+        for (const id of ids) {
+          canvasEventBus.publish('generation-node/trigger', { nodeId: id });
+        }
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [ids]);
+
+  return (
+    <div
+      className="pointer-events-none absolute h-px w-px overflow-hidden opacity-0"
+      aria-hidden="true"
+    >
+      <HiddenHostContext.Provider value={true}>
+        {ids.map((id) => {
+          const node = nodes.find((n) => n.id === id);
+          if (!node || !node.type) return null;
+          const Comp = nodeTypes[node.type];
+          if (!Comp) return null;
+          const updateNodeData = (update: unknown) => {
+            const current = useCanvasStore.getState().nodes.find((n) => n.id === id);
+            const next =
+              typeof update === 'function'
+                ? (update as (data: unknown) => unknown)(current?.data ?? {})
+                : update;
+            useCanvasStore.getState().updateNodeData(id, next as Partial<CanvasNodeData>);
+          };
+          return (
+            <NodeHostIdContext.Provider key={id} value={id}>
+              <Comp
+                id={node.id}
+                data={node.data}
+                type={node.type}
+                selected={false}
+                dragging={false}
+                isConnectable={false}
+                zIndex={node.zIndex ?? 0}
+                width={node.measured?.width ?? node.width ?? 360}
+                height={node.measured?.height ?? node.height ?? 240}
+                positionAbsoluteX={node.position.x}
+                positionAbsoluteY={node.position.y}
+                parentId={node.parentId}
+                updateNodeData={updateNodeData}
+                sourcePosition={'right' as const}
+                targetPosition={'left' as const}
+              />
+            </NodeHostIdContext.Provider>
+          );
+        })}
+      </HiddenHostContext.Provider>
     </div>
   );
 }

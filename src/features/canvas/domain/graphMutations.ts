@@ -1,7 +1,8 @@
 /**
  * 图变更应用工具 —— 画布数据层的变更应用实现（无第三方图编辑器依赖）。
  *
- * 语义与 React Flow v12 的 applyChanges / addEdge 逐行对齐（历史移植，已完全内部化）：
+ * 语义与旧版画布数据层的 applyChanges / addEdge 逐行对齐（历史移植，已完全内部化；
+ * 该语义决定了项目文件持久化格式，不可随意变更）：
  * - remove 优先于同元素的其他变更
  * - replace 直接替换为新对象（浅拷贝）
  * - 同一元素的多个变更合并为一次浅拷贝后依次可变应用
@@ -40,7 +41,7 @@ interface MutableElementFields {
   resizing?: boolean;
 }
 
-/** 单个变更的可变应用（与 React Flow v12 applyChange 语义一致） */
+/** 单个变更的可变应用（历史数据层 applyChange 语义） */
 function applyChange<T extends Identified>(change: GraphElementChange<T>, element: T): void {
   const target = element as T & MutableElementFields;
   switch (change.type) {
@@ -79,7 +80,7 @@ function applyChange<T extends Identified>(change: GraphElementChange<T>, elemen
   }
 }
 
-/** 变更批量应用（与 React Flow v12 applyChanges 语义一致） */
+/** 变更批量应用（历史数据层 applyChanges 语义） */
 export function applyChanges<T extends Identified>(
   changes: Array<GraphElementChange<T>>,
   elements: T[],
@@ -183,7 +184,7 @@ function connectionExists<E extends EdgeLike>(edge: E, edges: E[]): boolean {
   );
 }
 
-/** 与 React Flow v12 addEdge 语义一致：去重、无 id 时按约定生成、清理 null handle */
+/** 历史数据层 addEdge 语义：去重、无 id 时按 xy-edge__ 约定生成、清理 null handle */
 export function addEdgeInternal<EdgeType extends EdgeLike>(
   edgeParams: Partial<EdgeType> & ConnectionLike & { id?: string },
   edges: EdgeType[],

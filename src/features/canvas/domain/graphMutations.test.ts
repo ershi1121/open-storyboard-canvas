@@ -31,7 +31,7 @@ interface TestEdge {
 
 const node = (id: string, x = 0, y = 0): TestNode => ({ id, position: { x, y }, data: {} });
 
-describe('applyNodeChangesInternal（与 React Flow v12 applyChanges 语义对齐）', () => {
+describe('applyNodeChangesInternal（历史数据层 applyChanges 语义对齐）', () => {
   it('position 变更写入 position 与 dragging', () => {
     const nodes = [node('a'), node('b')];
     const changes: Array<GraphElementChange<TestNode>> = [
@@ -126,7 +126,7 @@ describe('applyEdgeChangesInternal', () => {
   });
 });
 
-describe('addEdgeInternal（与 React Flow v12 addEdge 语义对齐）', () => {
+describe('addEdgeInternal（历史数据层 addEdge 语义对齐）', () => {
   const edges: TestEdge[] = [{ id: 'e1', source: 'a', target: 'b', sourceHandle: 'source', targetHandle: 'target' }];
 
   it('无 id 时按 xy-edge__ 约定生成', () => {

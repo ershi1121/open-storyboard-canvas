@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
-import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@/features/canvas/compat/flowShim';
+import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@/features/canvas/compat/nodeHostApi';
 import { AlertTriangle, Bug, Camera, Check, ChevronDown, ChevronRight, Copy, Sparkles, Video, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 

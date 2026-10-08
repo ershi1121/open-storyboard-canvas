@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { NodeProps } from '@/features/canvas/compat/flowShim';
-import { Handle, Position } from '@/features/canvas/compat/flowShim';
+import type { NodeProps } from '@/features/canvas/compat/nodeHostApi';
+import { Handle, Position } from '@/features/canvas/compat/nodeHostApi';
 import { Camera, Grid3x3, Loader2, Maximize2, RotateCcw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Viewer } from '@photo-sphere-viewer/core';

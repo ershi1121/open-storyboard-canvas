@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import type { Viewport } from '@/features/canvas/domain/graphTypes';
 
-/** 视口宿主接口：ReactFlowInstance 的最小替代（Canvas2D 引擎适配器实现） */
+/** 画布视口宿主接口（由 Canvas2D 引擎适配器实现） */
 export interface CanvasViewportHost {
   getViewport(): Viewport;
   setViewport(viewport: Viewport, options?: unknown): void;
@@ -31,7 +31,7 @@ export interface UseCanvasPersistenceResult {
  *
  *  1. **Restore on currentProjectId change** — when the user enters a
  *     project, push the persisted nodes/edges/history into canvasStore
- *     and snap the React Flow viewport. The flag `isRestoringCanvasRef`
+ *     and snap the canvas viewport. The flag `isRestoringCanvasRef`
  *     is set true around this so the persist watcher below doesn't
  *     immediately echo the same data back to SQLite.
  *  2. **Persist watcher** — whenever nodes/edges/history changes (and
@@ -51,7 +51,7 @@ export interface UseCanvasPersistenceResult {
  * explicit exit, and (b) this hook's persist watcher debouncing edits.
  */
 export function useCanvasPersistence(
-  reactFlowInstance: CanvasViewportHost,
+  viewportHost: CanvasViewportHost,
 ): UseCanvasPersistenceResult {
   const isRestoringCanvasRef = useRef(true);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -90,10 +90,10 @@ export function useCanvasPersistence(
     saveCurrentProject(
       currentNodes,
       currentEdges,
-      reactFlowInstance.getViewport(),
+      viewportHost.getViewport(),
       currentHistory,
     );
-  }, [getCurrentProject, reactFlowInstance, saveCurrentProject]);
+  }, [getCurrentProject, viewportHost, saveCurrentProject]);
 
   const scheduleCanvasPersist = useCallback(
     (delayMs = 140) => {
@@ -117,7 +117,7 @@ export function useCanvasPersistence(
       setCanvasData(project.nodes, project.edges, project.history);
       setViewportState(project.viewport ?? DEFAULT_VIEWPORT);
       requestAnimationFrame(() => {
-        reactFlowInstance.setViewport(project.viewport ?? DEFAULT_VIEWPORT, { duration: 0 });
+        viewportHost.setViewport(project.viewport ?? DEFAULT_VIEWPORT, { duration: 0 });
       });
     } else {
       setViewportState(DEFAULT_VIEWPORT);
@@ -137,7 +137,7 @@ export function useCanvasPersistence(
       // for the cross-project clobber that would result.
     };
     // currentProjectId is the only dep we want to re-run on; the rest are
-    // stable callbacks/instance refs from zustand/react-flow.
+    // stable callbacks/instance refs from zustand.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProjectId]);
 

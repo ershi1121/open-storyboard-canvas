@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useCallback, useState } from 'react';
-import { NodeToolbar as ReactFlowNodeToolbar } from '@/features/canvas/compat/flowShim';
+import { NodeToolbar as FloatingNodeToolbar } from '@/features/canvas/compat/nodeHostApi';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -817,7 +817,7 @@ export const SelectedNodeOverlay = memo(() => {
   return (
     <>
       {selectedNodeToolbarMode === 'full' && shouldCollapseActionToolbar && (
-        <ReactFlowNodeToolbar
+        <FloatingNodeToolbar
           nodeId={selectedNode.id}
           isVisible
           position={NODE_TOOLBAR_POSITION}
@@ -841,7 +841,7 @@ export const SelectedNodeOverlay = memo(() => {
             )}
             {t('nodeToolbar.toolbarToggle')}
           </button>
-        </ReactFlowNodeToolbar>
+        </FloatingNodeToolbar>
       )}
       {selectedNodeToolbarMode === 'full' && isActionToolbarExpanded && (
         <NodeActionToolbar

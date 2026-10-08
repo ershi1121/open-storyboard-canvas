@@ -7,7 +7,7 @@ import {
   type SnapGuideLine,
 } from './renderer';
 import type { RenderNode, SceneModel } from './sceneModel';
-import { SpatialGrid } from './spatialGrid';
+import { collectFollowCluster, SpatialGrid } from './spatialGrid';
 
 /**
  * Canvas2D 画布引擎 v1：相机、手势状态机、磁吸、rAF 循环。
@@ -16,7 +16,7 @@ import { SpatialGrid } from './spatialGrid';
  * 回调一次性 commit（位置/尺寸/选区/连线/视口），由视图层写入 canvasStore。
  *
  * 手势清单：
- * - 左键拖节点：移动（Alt=复制后移动；磁吸开启时对齐参考线）
+ * - 左键拖节点：移动（Alt=复制后移动；磁吸开启时对齐参考线，贴合节点跟随移动）
  * - 左键拖空白：平移画布
  * - 右键拖 / Ctrl(⌘)+左键拖：框选（部分相交即选中）
  * - 右键单击：上下文菜单（节点/空白）
@@ -86,6 +86,8 @@ type Gesture =
       kind: 'drag';
       ids: string[];
       renderIds: Set<string>;
+      /** 磁吸跟随簇：与被拖集合贴合的节点随动（不含被拖集合自身） */
+      followIds: Set<string>;
       baseRect: Rect;
       startWorldX: number;
       startWorldY: number;
@@ -145,7 +147,7 @@ const CROSS_PROXIMITY_PX = 6;
 
 const EMPTY_SET: ReadonlySet<string> = new Set<string>();
 
-/* ---------------- 磁吸（移植自 useCanvasSnapFollow 的纯计算部分） ---------------- */
+/* ---------------- 磁吸（对齐参考线 + 滞回锁定的纯计算部分） ---------------- */
 
 function resolveAxisSnap(
   axis: 'x' | 'y',
@@ -509,6 +511,24 @@ export class Canvas2DEngine {
     return this.gesture.kind !== 'none';
   }
 
+  /** 当前选区的世界包围盒（含分组后代展开；拖拽手势期间叠加实时偏移） */
+  getSelectionWorldRect(): { x: number; y: number; w: number; h: number } | null {
+    if (!this.model || this.selectedIds.size === 0) return null;
+    const g = this.gesture;
+    const dragging = g.kind === 'drag' && g.moved;
+    const ids = dragging ? g.renderIds : this.expandWithDescendants([...this.selectedIds]);
+    const rect = this.unionRect(ids);
+    if (!rect) return null;
+    const dx = dragging ? g.dx : 0;
+    const dy = dragging ? g.dy : 0;
+    return {
+      x: rect.left + dx,
+      y: rect.top + dy,
+      w: rect.right - rect.left,
+      h: rect.bottom - rect.top,
+    };
+  }
+
   /* ---------- 小地图 ---------- */
 
   private computeMinimapLayout(): MinimapLayout | null {
@@ -555,7 +575,7 @@ export class Canvas2DEngine {
 
     const w = this.toWorld(sx, sy);
 
-    // 右键：菜单或框选（与 RF 版 rightDrag=selectionBox 对齐）
+    // 右键：菜单或框选（与旧版右键框选行为一致）
     if (opts.button === 2) {
       const hit = this.grid.hitTest(w.x, w.y);
       if (hit && !this.selectedIds.has(hit.id)) {
@@ -566,7 +586,7 @@ export class Canvas2DEngine {
       return;
     }
 
-    // Ctrl/⌘ + 左键拖空白：框选（与 RF 版自定义选框对齐）
+    // Ctrl/⌘ + 左键拖空白：框选（与旧版自定义选框行为一致）
     const wantMarquee = opts.ctrlKey || opts.metaKey;
 
     const handle = this.findHandleAt(w.x, w.y);
@@ -624,11 +644,20 @@ export class Canvas2DEngine {
       }
       const ids = [...this.selectedIds];
       this.host.onSelect(ids, ids.length > 0 ? ids[ids.length - 1] : null);
-      const baseRect = this.unionRect(this.expandWithDescendants(ids));
+      const dragRender = this.expandWithDescendants(ids);
+      const baseRect = this.unionRect(dragRender);
+      // 跟随簇：磁吸开启且非 Shift（临时单选）/ Alt（复制）拖拽时，贴合节点随动
+      const followIds =
+        this.snapEnabled && !opts.shiftKey && !opts.altKey
+          ? collectFollowCluster(dragRender, this.model.nodes)
+          : new Set<string>();
+      const renderIds =
+        followIds.size > 0 ? this.expandWithDescendants([...ids, ...followIds]) : dragRender;
       this.gesture = {
         kind: 'drag',
         ids,
-        renderIds: this.expandWithDescendants(ids),
+        renderIds,
+        followIds,
         baseRect: baseRect ?? { left: w.x, top: w.y, right: w.x, bottom: w.y },
         startWorldX: w.x,
         startWorldY: w.y,
@@ -688,12 +717,18 @@ export class Canvas2DEngine {
           if (newIds && newIds.length > 0) {
             g2.duplicated = true;
             g2.ids = newIds;
+            // 复制拖拽不带动跟随簇（跟随属于"排版保持"，副本脱离原排版）
+            g2.followIds = new Set<string>();
             g2.renderIds = this.expandWithDescendants(newIds);
             this.selectedIds = new Set(newIds);
             this.host.onSelect(newIds, newIds[newIds.length - 1]);
           }
         }
-        if (!g2.duplicated) this.host.onDragStart(g2.ids);
+        if (!g2.duplicated) {
+          this.host.onDragStart(
+            g2.followIds.size > 0 ? [...g2.ids, ...g2.followIds] : g2.ids,
+          );
+        }
       }
       // 磁吸对齐
       g2.dx = g2.rawDx;
@@ -830,7 +865,11 @@ export class Canvas2DEngine {
       this.guides = [];
       if (g.moved) {
         if (g.duplicated) this.host.onSelect(g.ids, g.ids[g.ids.length - 1]);
-        this.host.onDragCommit(g.ids, g.dx, g.dy);
+        this.host.onDragCommit(
+          g.followIds.size > 0 ? [...g.ids, ...g.followIds] : g.ids,
+          g.dx,
+          g.dy,
+        );
       }
     } else if (g.kind === 'pan') {
       if (g.moved) this.scheduleViewportCommit();
@@ -961,6 +1000,7 @@ export class Canvas2DEngine {
         dragDy: dragging ? g.dy : 0,
         guides: this.guides,
         marqueeRect: marquee,
+        selectionBounds: this.selectedIds.size > 1 ? this.getSelectionWorldRect() : null,
         connectPreview: connect,
         resizeOverride: this.resizeOverride,
         minimap: this.minimapLayout,

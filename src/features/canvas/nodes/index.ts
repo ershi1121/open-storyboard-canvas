@@ -1,4 +1,4 @@
-import type { NodeTypes } from '@/features/canvas/compat/flowShim';
+import type { NodeTypes } from '@/features/canvas/compat/nodeHostApi';
 
 import { AiAudioNode } from './AiAudioNode';
 import { AiTextNode } from './AiTextNode';

@@ -275,7 +275,7 @@ interface AxisSliderProps {
 
 function AxisSlider({ axis, value, min, max, color, onChange }: AxisSliderProps) {
   // The four pointer handlers + className `nodrag nopan` are the canonical
-  // recipe that prevents ReactFlow from hijacking drags into pan/node-move.
+  // recipe that prevents the canvas gesture layer from hijacking drags into pan/node-move.
   // Don't strip any of them — see commit 4aeda5e for the bug history.
   return (
     <label className="grid grid-cols-[24px_minmax(0,1fr)_72px] items-center gap-3 text-[11px] uppercase">

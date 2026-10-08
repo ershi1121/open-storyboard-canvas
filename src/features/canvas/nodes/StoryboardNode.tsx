@@ -13,7 +13,7 @@ import {
   useUpdateNodeInternals,
   useViewport,
   type NodeProps,
-} from '@/features/canvas/compat/flowShim';
+} from '@/features/canvas/compat/nodeHostApi';
 import { Download, FolderOpen, ImagePlus, SlidersHorizontal, SquareArrowOutUpRight } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
