@@ -131,7 +131,15 @@ describe('Canvas2DView / DomIslands 挂载诊断（防黑屏回归）', () => {
       );
     });
 
-    expect(engine.islands.current.has('ai1')).toBe(true);
+    // 挂载经 rAF 调度器分批执行：轮询等待岛出现
+    let ok = false;
+    for (let i = 0; i < 50 && !ok; i++) {
+      await act(async () => {
+        await sleep(40);
+      });
+      ok = engine.islands.current.has('ai1');
+    }
+    expect(ok).toBe(true);
     expect(reported.some((ids) => ids.has('ai1'))).toBe(true);
 
     const textareas = Array.from(
