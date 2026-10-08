@@ -15,6 +15,10 @@ interface UseBatchToolbarPositionOptions {
 
 type NodeWithParent = CanvasNode & { parentId?: string | null };
 
+// 没有批量工具栏需要跟随时，用它这个**稳定引用**代替 currentViewport，
+// 避免平移/缩放每帧触发订阅 → 整个 canvas-view 每帧重渲染。
+const IDLE_VIEWPORT = { x: 0, y: 0, zoom: 1 };
+
 /**
  * 解析节点的画布绝对坐标。
  * 分组(Group)内的子节点 position 是相对父节点的，
@@ -64,7 +68,12 @@ export function useBatchToolbarPosition({
   batchToolbarPosition: { left: number; top: number } | null;
   selectionBoundsRect: CanvasMarqueeRect | null;
 } {
-  const currentViewport = useCanvasStore((state) => state.currentViewport);
+  // 只有真正需要显示批量工具栏（多选 / 单选组）时才订阅实时视口；
+  // 否则订阅稳定常量，平移/缩放不再每帧重渲染 canvas-view。
+  const hasMultiSelection = selectedNodeIds.length > 1 || isSingleSelectedGroup;
+  const currentViewport = useCanvasStore((state) =>
+    hasMultiSelection ? state.currentViewport : IDLE_VIEWPORT
+  );
 
   // wrapperRef.current 要在组件挂载后才可用，
   // 这里对齐旧版 useEffect「挂载后执行一次」的时机。
