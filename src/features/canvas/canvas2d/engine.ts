@@ -143,6 +143,8 @@ const MINIMAP_H = 120;
 const MINIMAP_MARGIN = 12;
 /** 相机静止多久后才允许切换原图层级（毫秒）：运动期只用 preview，防解码风暴 */
 const CAMERA_SETTLE_MS = 300;
+/** 交互期画布分辨率缩放（像素数降至 36%，光栅成本同比例下降） */
+const INTERACTION_RENDER_SCALE = 0.6;
 const SNAP_ENTER_PX = 14;
 const SNAP_RELEASE_PX = 40;
 const CROSS_PROXIMITY_PX = 6;
@@ -214,6 +216,8 @@ export class Canvas2DEngine {
   private vw = 800;
   private vh = 600;
   private dpr = 1;
+  /** 交互期动态降分辨率（软件光栅化下像素数=成本），静止后恢复清晰 */
+  private renderScale = 1;
   private theme: 'dark' | 'light' = 'dark';
   private hoverId: string | null = null;
   private hoverHandle: { nodeId: string; handle: ConnectHandleType } | null = null;
@@ -267,10 +271,14 @@ export class Canvas2DEngine {
     this.vh = Math.max(1, h);
     this.dpr = dpr;
     this.dirty = true;
-    if (this.canvas) {
-      this.canvas.width = Math.round(this.vw * dpr);
-      this.canvas.height = Math.round(this.vh * dpr);
-    }
+    this.applyBuffer();
+  }
+
+  private applyBuffer(): void {
+    if (!this.canvas) return;
+    const eff = this.dpr * this.renderScale;
+    this.canvas.width = Math.max(1, Math.round(this.vw * eff));
+    this.canvas.height = Math.max(1, Math.round(this.vh * eff));
   }
 
   start(): void {
@@ -1015,6 +1023,16 @@ export class Canvas2DEngine {
   frameOnce(t: number): void {
     const t0 = performance.now();
 
+    // 交互期（手势中/相机刚动过）降分辨率渲染，静止后恢复
+    const interacting =
+      this.gesture.kind !== 'none' || this.wasdActive || t - this.lastCameraMoveT < 150;
+    const targetScale = interacting ? INTERACTION_RENDER_SCALE : 1;
+    if (targetScale !== this.renderScale) {
+      this.renderScale = targetScale;
+      this.applyBuffer();
+      this.dirty = true;
+    }
+
     // WASD 平移
     if (this.wasd.enabled && this.wasdKeys.size > 0) {
       const dt = this.lastFrameT ? Math.min(0.05, (t - this.lastFrameT) / 1000) : 0.016;
@@ -1068,7 +1086,7 @@ export class Canvas2DEngine {
         cam: this.cam,
         vw: this.vw,
         vh: this.vh,
-        dpr: this.dpr,
+        dpr: this.dpr * this.renderScale,
         theme: this.theme,
         time: t,
         hoverId: this.hoverId,

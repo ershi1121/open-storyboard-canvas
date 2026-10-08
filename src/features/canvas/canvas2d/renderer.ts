@@ -646,6 +646,115 @@ function drawResizeGhost(ctx: CanvasRenderingContext2D, model: SceneModel, opts:
   return 2;
 }
 
+interface MinimapCacheState {
+  canvas: HTMLCanvasElement;
+  layout: MinimapLayout;
+  model: SceneModel;
+  theme: string;
+  dpr: number;
+  t: number;
+}
+let minimapCacheState: MinimapCacheState | null = null;
+/** 小地图点阵刷新周期（毫秒）：运动期 5Hz 足够，每帧仅 blit + 视口框 */
+const MINIMAP_REFRESH_MS = 200;
+
+/** 小地图静态部分（背景/边框/节点点阵）渲染到离屏画布 */
+function renderMinimapBase(
+  cctx: CanvasRenderingContext2D,
+  model: SceneModel,
+  m: MinimapLayout,
+  opts: DrawSceneOptions,
+): void {
+  cctx.setTransform(opts.dpr, 0, 0, opts.dpr, 0, 0);
+  cctx.clearRect(0, 0, m.w, m.h);
+  cctx.fillStyle = opts.theme === 'dark' ? 'rgba(11,15,24,0.82)' : 'rgba(255,255,255,0.85)';
+  rr(cctx, m.x, m.y, m.w, m.h, 8);
+  cctx.fill();
+  cctx.strokeStyle = opts.theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.16)';
+  cctx.lineWidth = 1;
+  rr(cctx, m.x, m.y, m.w, m.h, 8);
+  cctx.stroke();
+  cctx.save();
+  rr(cctx, m.x, m.y, m.w, m.h, 8);
+  cctx.clip();
+  const mx = (wx: number) => m.x + 6 + (wx - m.worldX) * m.scale;
+  const my = (wy: number) => m.y + 6 + (wy - m.worldY) * m.scale;
+  for (const n of model.nodes) {
+    const x = mx(n.x);
+    const y = my(n.y);
+    const w = Math.max(1, n.w * m.scale);
+    const h = Math.max(1, n.h * m.scale);
+    if (x + w < m.x || x > m.x + m.w || y + h < m.y || y > m.y + m.h) continue;
+    cctx.fillStyle = opts.selectedIds.has(n.id)
+      ? SELECT_COLOR
+      : n.isGroup
+        ? 'rgba(100,116,139,0.35)'
+        : opts.theme === 'dark'
+          ? 'rgba(148,163,184,0.55)'
+          : 'rgba(71,85,105,0.5)';
+    cctx.fillRect(x, y, w, h);
+  }
+  cctx.restore();
+}
+
+/** 小地图：离屏缓存 blit + 实时视口框（O(1)/帧，替代 O(N)/帧） */
+function drawMinimapCached(
+  ctx: CanvasRenderingContext2D,
+  model: SceneModel,
+  opts: DrawSceneOptions,
+  P: Palette,
+): number {
+  const m = opts.minimap;
+  if (!m) return 0;
+  const now = opts.time;
+  let st = minimapCacheState;
+  if (
+    !st ||
+    st.model !== model ||
+    st.theme !== opts.theme ||
+    st.dpr !== opts.dpr ||
+    now - st.t > MINIMAP_REFRESH_MS
+  ) {
+    if (!st) {
+      st = minimapCacheState = {
+        canvas: document.createElement('canvas'),
+        layout: { ...m },
+        model,
+        theme: opts.theme,
+        dpr: opts.dpr,
+        t: now,
+      };
+    }
+    st.layout = { ...m };
+    st.model = model;
+    st.theme = opts.theme;
+    st.dpr = opts.dpr;
+    st.t = now;
+    const c = st.canvas;
+    c.width = Math.max(1, Math.round(m.w * opts.dpr));
+    c.height = Math.max(1, Math.round(m.h * opts.dpr));
+    const cctx = c.getContext('2d');
+    if (!cctx) return drawMinimap(ctx, model, opts, P);
+    renderMinimapBase(cctx, model, m, opts);
+  }
+  const L = st.layout;
+  ctx.setTransform(opts.dpr, 0, 0, opts.dpr, 0, 0);
+  ctx.drawImage(st.canvas, L.x, L.y, L.w, L.h);
+  const mx = (wx: number) => L.x + 6 + (wx - L.worldX) * L.scale;
+  const my = (wy: number) => L.y + 6 + (wy - L.worldY) * L.scale;
+  const vx = mx(opts.cam.x);
+  const vy = my(opts.cam.y);
+  const vw2 = (opts.vw / opts.cam.zoom) * L.scale;
+  const vh2 = (opts.vh / opts.cam.zoom) * L.scale;
+  ctx.fillStyle = 'rgba(56,189,248,0.10)';
+  ctx.fillRect(vx, vy, vw2, vh2);
+  ctx.strokeStyle = SELECT_COLOR;
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(vx, vy, vw2, vh2);
+  return 4;
+}
+
+/** 旧版逐帧小地图（离屏不可用时的回退） */
 function drawMinimap(ctx: CanvasRenderingContext2D, model: SceneModel, opts: DrawSceneOptions, P: Palette): number {
   const m = opts.minimap;
   if (!m) return 0;
@@ -773,8 +882,8 @@ export function drawScene(opts: DrawSceneOptions): DrawStats {
   calls.n += drawGuides(ctx, opts, view);
   calls.n += drawResizeGhost(ctx, model, opts);
 
-  // 小地图（屏幕空间）
-  calls.n += drawMinimap(ctx, model, opts, P);
+  // 小地图（离屏缓存 blit + 实时视口框）
+  calls.n += drawMinimapCached(ctx, model, opts, P);
 
   return { visible, edgesDrawn, calls: calls.n };
 }

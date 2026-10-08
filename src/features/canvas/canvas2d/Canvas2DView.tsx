@@ -106,6 +106,8 @@ export function Canvas2DView() {
   const lastCommittedViewportRef = useRef<ViewportLike | null>(null);
   const lastPointerLocalRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const schedulePersistRef = useRef<(delayMs?: number) => void>(() => {});
+  const prevSlowFramesRef = useRef(0);
+  const diagAutoOpenedRef = useRef(false);
   const clipboardRef = useRef<ClipboardSnapshot | null>(null);
   const [stats, setStats] = useState<EngineStats | null>(null);
   const [diagOpen, setDiagOpen] = useState(false);
@@ -577,7 +579,14 @@ export function Canvas2DView() {
     useViewportSnapshotStore.getState().set(engine.getViewport());
 
     const statsTimer = setInterval(() => {
-      setStats({ ...engine.getStats(), slowFrames: engine.slowFrameCount } as EngineStats);
+      const slow = engine.slowFrameCount;
+      if (!diagAutoOpenedRef.current && slow - prevSlowFramesRef.current > 25) {
+        diagAutoOpenedRef.current = true;
+        setDiagOpen(true);
+        console.warn('[canvas2d] 检测到持续慢帧，已自动打开诊断面板，请截图面板反馈以定位瓶颈');
+      }
+      prevSlowFramesRef.current = slow;
+      setStats({ ...engine.getStats(), slowFrames: slow } as EngineStats);
       // 低频喂给 useViewport() 垫片（检视面板里的原图/预览图切换等场景足够）
       useViewportSnapshotStore.getState().set(engine.getViewport());
     }, 500);
