@@ -222,6 +222,8 @@ export class Canvas2DEngine {
   private cursor = 'grab';
   private viewportCommitTimer: ReturnType<typeof setTimeout> | null = null;
   private validator: ConnectionValidator | null = null;
+  /** 当前以 DOM 岛形式渲染的节点（画布跳过其卡片/手柄绘制） */
+  private domIslands: ReadonlySet<string> = new Set<string>();
   private snapEnabled = false;
   private guides: SnapGuideLine[] = [];
   private wasd = { enabled: false, sensitivity: 60 };
@@ -308,6 +310,52 @@ export class Canvas2DEngine {
 
   setConnectionValidator(fn: ConnectionValidator | null): void {
     this.validator = fn;
+  }
+
+  /** 标记以 DOM 岛渲染的节点集合（渲染层跳过这些节点的卡片与手柄） */
+  setDomIslands(ids: ReadonlySet<string>): void {
+    this.domIslands = ids;
+  }
+
+  getDomIslands(): ReadonlySet<string> {
+    return this.domIslands;
+  }
+
+  /** 视口像素尺寸（DOM 岛覆盖判定用） */
+  getViewSize(): { w: number; h: number } {
+    return { w: this.vw, h: this.vh };
+  }
+
+  /** 拖拽手势实时偏移（DOM 岛跟随用）；非拖拽返回 null */
+  getDragOffset(): { ids: ReadonlySet<string>; dx: number; dy: number } | null {
+    const g = this.gesture;
+    if (g.kind !== 'drag' || !g.moved) return null;
+    return { ids: g.renderIds, dx: g.dx, dy: g.dy };
+  }
+
+  /** 从 DOM 连接桩发起连线手势（screen 局部坐标） */
+  beginConnect(nodeId: string, handleType: ConnectHandleType, sx: number, sy: number): void {
+    if (!this.model) return;
+    const n = this.model.byId.get(nodeId);
+    if (!n) return;
+    const w = this.toWorld(sx, sy);
+    const anchor =
+      handleType === 'source'
+        ? { x: n.x + n.w, y: n.y + n.h / 2 }
+        : { x: n.x, y: n.y + n.h / 2 };
+    this.gesture = {
+      kind: 'connect',
+      nodeId,
+      handleType,
+      anchorX: anchor.x,
+      anchorY: anchor.y,
+      cursorX: w.x,
+      cursorY: w.y,
+      targetId: null,
+      targetValid: false,
+      moved: true,
+    };
+    this.setCursor('crosshair');
   }
 
   setSnapEnabled(enabled: boolean): void {
@@ -1001,6 +1049,7 @@ export class Canvas2DEngine {
         guides: this.guides,
         marqueeRect: marquee,
         selectionBounds: this.selectedIds.size > 1 ? this.getSelectionWorldRect() : null,
+        domIslands: this.domIslands,
         connectPreview: connect,
         resizeOverride: this.resizeOverride,
         minimap: this.minimapLayout,

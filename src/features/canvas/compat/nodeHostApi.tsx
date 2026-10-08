@@ -8,6 +8,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
 
 import { useCanvasStore } from '@/stores/canvasStore';
@@ -24,6 +25,7 @@ import {
   clientToWorldPosition,
   worldToClientPosition,
   getCanvas2DEngine,
+  getCanvasElement,
   liveViewport,
   useViewportSnapshotStore,
 } from './engineBridge';
@@ -85,6 +87,13 @@ export const NodeHostIdContext = createContext<string | null>(null);
  */
 export const HiddenHostContext = createContext<boolean>(false);
 
+/**
+ * DOM 岛模式：节点组件以真实 DOM 覆盖渲染在画布上（混合渲染）。
+ * 此模式下 Handle 渲染可见连接桩、NodeToolbar 经 portal 挂到 body
+ * （脱离缩放容器坐标系）、NodeResizeControl 按 zoom 换算尺寸增量。
+ */
+export const IslandHostContext = createContext<boolean>(false);
+
 /* ---------------- Handle ---------------- */
 
 export interface HandleProps {
@@ -101,9 +110,65 @@ export interface HandleProps {
   children?: ReactNode;
 }
 
-/** 连接桩视觉与交互由 Canvas2D 渲染层承担，这里保留 API 兼容 */
-export function Handle(_props: HandleProps): null {
-  return null;
+/**
+ * 连接桩：画布卡片模式下由渲染层绘制（此处空渲染）；
+ * DOM 岛模式下渲染可见桩并接管连线手势（转发给引擎 connect 手势）。
+ */
+export function Handle(props: HandleProps): React.JSX.Element | null {
+  const inIsland = useContext(IslandHostContext);
+  const nodeId = useContext(NodeHostIdContext);
+  if (!inIsland) return null;
+
+  const type: HandleType = props.type ?? 'source';
+  const onPointerDown = (event: React.PointerEvent) => {
+    if (!nodeId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const engine = getCanvas2DEngine();
+    const canvas = getCanvasElement();
+    if (!engine || !canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const toLocal = (ev: PointerEvent | React.PointerEvent) => ({
+      x: ev.clientX - rect.left,
+      y: ev.clientY - rect.top,
+    });
+    const start = toLocal(event);
+    engine.beginConnect(nodeId, type, start.x, start.y);
+    const move = (ev: PointerEvent) => {
+      const p = toLocal(ev);
+      engine.pointerMove(p.x, p.y, { altKey: ev.altKey });
+    };
+    const up = (ev: PointerEvent) => {
+      const p = toLocal(ev);
+      engine.pointerUp(p.x, p.y);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  const isSource = type === 'source';
+  return (
+    <div
+      className={props.className}
+      style={{
+        position: 'absolute',
+        top: '50%',
+        marginTop: -5,
+        width: 10,
+        height: 10,
+        borderRadius: 9999,
+        cursor: 'crosshair',
+        background: isSource ? '#38bdf8' : '#ffffff',
+        border: '1.5px solid #38bdf8',
+        zIndex: 5,
+        ...(isSource ? { right: -6 } : { left: -6 }),
+        ...props.style,
+      }}
+      onPointerDown={onPointerDown}
+    />
+  );
 }
 
 /* ---------------- NodeToolbar ---------------- */
@@ -152,6 +217,7 @@ export function NodeToolbar({
 }: NodeToolbarProps) {
   const contextId = useContext(NodeHostIdContext);
   const inHiddenHost = useContext(HiddenHostContext);
+  const inIsland = useContext(IslandHostContext);
   const effectiveVisible = isVisible && !inHiddenHost;
   const ids = useMemo(
     () => (Array.isArray(nodeId) ? nodeId : nodeId ? [nodeId] : contextId ? [contextId] : []),
@@ -211,7 +277,7 @@ export function NodeToolbar({
 
   if (inHiddenHost) return null;
 
-  return (
+  const toolbar = (
     <div
       ref={containerRef}
       className={`nodrag nopan absolute z-50 ${className ?? ''}`}
@@ -220,6 +286,9 @@ export function NodeToolbar({
       {children}
     </div>
   );
+  // DOM 岛内：portal 到 body，避免被缩放容器的 transform 坐标系影响定位
+  if (inIsland) return createPortal(toolbar, document.body);
+  return toolbar;
 }
 
 /* ---------------- NodeResizeControl ---------------- */
@@ -253,6 +322,7 @@ export function NodeResizeControl({
 }: NodeResizeControlProps) {
   const contextId = useContext(NodeHostIdContext);
   const inHiddenHost = useContext(HiddenHostContext);
+  const inIsland = useContext(IslandHostContext);
   const targetId = nodeId ?? contextId;
   const stateRef = useRef<{ startX: number; startY: number; startW: number; startH: number; started: boolean } | null>(null);
 
@@ -304,14 +374,18 @@ export function NodeResizeControl({
         state.started = true;
         dispatchDims(state.startW, state.startH, true); // 触发历史快照
       }
+      // DOM 岛位于缩放容器内：屏幕像素增量需换算为世界尺寸增量
+      const scale = inIsland ? Math.max(0.05, liveViewport().zoom) : 1;
+      const wdx = dx / scale;
+      const wdy = dy / scale;
       let nextW = state.startW;
       let nextH = state.startH;
-      if (position.includes('right')) nextW = Math.min(maxWidth, Math.max(minWidth, state.startW + dx));
-      if (position.includes('bottom')) nextH = Math.min(maxHeight, Math.max(minHeight, state.startH + dy));
+      if (position.includes('right')) nextW = Math.min(maxWidth, Math.max(minWidth, state.startW + wdx));
+      if (position.includes('bottom')) nextH = Math.min(maxHeight, Math.max(minHeight, state.startH + wdy));
       dispatchDims(nextW, nextH, true);
       onResize?.(event, { width: nextW, height: nextH });
     },
-    [position, minWidth, minHeight, maxWidth, maxHeight, dispatchDims, onResize],
+    [position, minWidth, minHeight, maxWidth, maxHeight, dispatchDims, onResize, inIsland],
   );
 
   const handlePointerUp = useCallback(

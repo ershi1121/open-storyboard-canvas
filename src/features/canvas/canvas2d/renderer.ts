@@ -63,6 +63,8 @@ export interface DrawSceneOptions {
   marqueeRect: { x: number; y: number; w: number; h: number } | null;
   /** 多选联合包围盒（世界坐标），选中 ≥2 个节点时绘制浅色虚线框 */
   selectionBounds: { x: number; y: number; w: number; h: number } | null;
+  /** 以 DOM 岛渲染的节点（画布不绘制其卡片与手柄） */
+  domIslands: ReadonlySet<string>;
   connectPreview: { fromX: number; fromY: number; toX: number; toY: number; valid: boolean; hasTarget: boolean } | null;
   resizeOverride: { id: string; w: number; h: number } | null;
   minimap: MinimapLayout | null;
@@ -731,6 +733,7 @@ export function drawScene(opts: DrawSceneOptions): DrawStats {
     prev = idx;
     let n = model.nodes[idx];
     if (!n) continue;
+    if (opts.domIslands.has(n.id)) continue;
     const dx = opts.dragIds.has(n.id) ? opts.dragDx : 0;
     const dy = opts.dragIds.has(n.id) ? opts.dragDy : 0;
     if (n.x + dx + n.w + pad < view.x || n.x + dx - pad > view.x + view.w ||

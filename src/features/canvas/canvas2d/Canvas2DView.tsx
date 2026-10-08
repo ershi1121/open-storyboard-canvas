@@ -41,6 +41,7 @@ import { extractCanvasAssets } from '@/features/canvas/shared/utils/assets';
 import { HiddenHostContext, NodeHostIdContext } from '@/features/canvas/compat/nodeHostApi';
 import { registerCanvas2DEngine, useViewportSnapshotStore } from '@/features/canvas/compat/engineBridge';
 import { buildSceneModel, type SceneModel } from './sceneModel';
+import { DomIslands } from './DomIslands';
 import { filterDragDescendants } from './spatialGrid';
 import { Canvas2DEngine, type ConnectHandleType, type EngineStats, type ViewportLike } from './engine';
 
@@ -112,6 +113,8 @@ export function Canvas2DView() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   /** 批量触发时隐藏挂载的节点编辑组件 id（订阅 generation-node/trigger 用） */
   const [triggerHostIds, setTriggerHostIds] = useState<string[]>([]);
+  /** 当前以 DOM 岛渲染的节点集合（选中节点在岛内时隐藏检视面板） */
+  const [islandIds, setIslandIds] = useState<ReadonlySet<string>>(() => new Set<string>());
 
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
@@ -177,6 +180,22 @@ export function Canvas2DView() {
     createMaterialNodeFromFileAtWorldPosition: materialImport.createMaterialNodeFromFileAtWorldPosition,
     scheduleCanvasPersist,
   });
+
+  const handleIslandsChange = useCallback((next: ReadonlySet<string>) => {
+    setIslandIds((prev) => {
+      if (prev.size === next.size) {
+        let same = true;
+        for (const id of next) {
+          if (!prev.has(id)) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return prev;
+      }
+      return next;
+    });
+  }, []);
 
   /* ---------- 渲染模型 ---------- */
   const model = useMemo(
@@ -940,6 +959,14 @@ export function Canvas2DView() {
         onContextMenu={handleContextMenuEvent}
       />
 
+      {/* DOM 岛层（混合渲染）：放大时视口内节点内嵌原版编辑组件 */}
+      <DomIslands
+        engineRef={engineRef}
+        model={model}
+        selectedIds={selectedIds}
+        onIslandsChange={handleIslandsChange}
+      />
+
       {/* 状态 HUD */}
       <div className="pointer-events-none absolute right-3 top-3 min-w-[190px] rounded-lg border border-border-dark bg-[rgba(11,15,24,0.85)] p-3 font-mono text-[11px] leading-5 text-text-muted backdrop-blur-sm">
         <div className={`text-xl font-bold ${fpsClass}`}>{stats ? stats.fps : '--'} FPS</div>
@@ -1026,7 +1053,7 @@ export function Canvas2DView() {
       {/* 选中节点的浮动工具栏与生成面板（全套面板生态） */}
       <SelectedNodeOverlay />
       <NodeToolDialog />
-      <NodeInspector />
+      <NodeInspector hidden={selectedNodeId ? islandIds.has(selectedNodeId) : false} />
 
       {nodes.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6">
@@ -1072,7 +1099,7 @@ export function Canvas2DView() {
  * Handle 渲染为空（连接桩由 canvas 绘制）、NodeToolbar 浮动定位到画布节点上方、
  * useCanvasApi/useViewport 桥接到 Canvas2D 引擎。编辑能力零重写、全保留。
  */
-function NodeInspector() {
+function NodeInspector({ hidden = false }: { hidden?: boolean }) {
   const { t } = useTranslation();
   const selectedNodeId = useCanvasStore((state) => state.selectedNodeId);
   const imageViewerOpen = useCanvasStore((state) => state.imageViewer.isOpen);
@@ -1095,7 +1122,7 @@ function NodeInspector() {
     [selectedNodeId],
   );
 
-  if (!node || !node.type || imageViewerOpen) return null;
+  if (hidden || !node || !node.type || imageViewerOpen) return null;
   const Comp = nodeTypes[node.type];
   if (!Comp) return null;
 
