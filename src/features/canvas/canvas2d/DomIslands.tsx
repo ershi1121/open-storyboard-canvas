@@ -6,6 +6,7 @@ import { IslandHostContext, NodeHostIdContext } from '@/features/canvas/compat/n
 import {
   emitIslandVisibilityChange,
   getCanvasElement,
+  registerIslandMountedChecker,
   registerIslandVisibilityChecker,
 } from '@/features/canvas/compat/engineBridge';
 import { nodeTypes } from '@/features/canvas/nodes';
@@ -185,7 +186,11 @@ const DomIslandsInner = memo(function DomIslandsInner({
 
   useEffect(() => {
     registerIslandVisibilityChecker((id) => shownSetRef.current.has(id));
-    return () => registerIslandVisibilityChecker(null);
+    registerIslandMountedChecker((id) => mountedSetRef.current.has(id));
+    return () => {
+      registerIslandVisibilityChecker(null);
+      registerIslandMountedChecker(null);
+    };
   }, []);
 
   useEffect(() => {

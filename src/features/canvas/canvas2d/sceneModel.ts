@@ -422,18 +422,11 @@ export function buildSceneModel(
     const source = byId.get(edge.source);
     const target = byId.get(edge.target);
     if (!source || !target) continue;
-    // 旧版业务规则：仅 故事板生成/AI图片 → 结果图 的边参与生成态流光
-    const pairMatched =
-      (source.type === CANVAS_NODE_TYPES.storyboardGen ||
-        source.type === CANVAS_NODE_TYPES.imageEdit) &&
-      target.type === CANVAS_NODE_TYPES.exportImage;
-    const state: RenderEdge['state'] = !pairMatched
-      ? 'idle'
-      : target.status === 'gen'
-        ? 'gen'
-        : target.status === 'fail'
-          ? 'fail'
-          : 'idle';
+    // 流光触发：目标节点生成中/失败即点亮其入边（覆盖全部生成链路，
+    // 含 上传→AI图片、AI图片→派生图 等用户实际工作流）
+    const state: RenderEdge['state'] =
+      target.status === 'gen' ? 'gen' : target.status === 'fail' ? 'fail' : 'idle';
+    void source;
     renderEdges.push({ id: edge.id, sourceId: edge.source, targetId: edge.target, state });
   }
 

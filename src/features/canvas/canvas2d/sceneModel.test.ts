@@ -294,11 +294,11 @@ describe('buildSceneModel 边生成态业务规则（旧版对齐）', () => {
     );
     expect(model.edges[0]?.state).toBe('gen');
   });
-  it('AI图片→普通图片节点：边恒为 idle（旧版规则）', () => {
+  it('上传→AI图片（生成中）：入边点亮流光（宽规则，覆盖用户工作流）', () => {
     const model = buildSceneModel(
-      [node('a', CANVAS_NODE_TYPES.imageEdit), node('b', CANVAS_NODE_TYPES.upload, true)],
+      [node('a', CANVAS_NODE_TYPES.upload), node('b', CANVAS_NODE_TYPES.imageEdit, true)],
       [{ id: 'e', source: 'a', target: 'b' } as CanvasEdge],
     );
-    expect(model.edges[0]?.state).toBe('idle');
+    expect(model.edges[0]?.state).toBe('gen');
   });
 });

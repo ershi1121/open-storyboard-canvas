@@ -82,6 +82,16 @@ export const useViewportSnapshotStore = create<ViewportSnapshotState>()((set) =>
 /* ---------------- DOM 岛可见性查询 ---------------- */
 
 let islandVisibilityChecker: ((id: string) => boolean) | null = null;
+let islandMountedChecker: ((id: string) => boolean) | null = null;
+
+/** DomIslands 注册：查询节点是否已作为岛挂载（触发宿主去重用） */
+export function registerIslandMountedChecker(fn: ((id: string) => boolean) | null): void {
+  islandMountedChecker = fn;
+}
+
+export function isIslandMounted(id: string): boolean {
+  return islandMountedChecker ? islandMountedChecker(id) : false;
+}
 
 /** DomIslands 注册：已挂载但隐藏（display:none）的岛不显示浮动工具栏 */
 export function registerIslandVisibilityChecker(fn: ((id: string) => boolean) | null): void {

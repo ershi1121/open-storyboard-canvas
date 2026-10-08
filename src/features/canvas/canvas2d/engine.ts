@@ -1183,12 +1183,15 @@ export class Canvas2DEngine {
     const now = performance.now();
     const hit = this.grid.hitTest(w.x, w.y);
     const hitId = hit ? hit.id : null;
+    const movedGesture =
+      (g.kind === 'drag' || g.kind === 'pan' || g.kind === 'marquee' || g.kind === 'edgePan') &&
+      (g as { moved?: boolean }).moved === true;
     if (
       g.kind !== 'connect' &&
+      !movedGesture &&
       now - this.lastUpTime < DBLCLICK_MS &&
       Math.hypot(sx - this.lastUpSx, sy - this.lastUpSy) < DBLCLICK_PX &&
-      hitId === this.lastUpHit &&
-      !(this.gesture.kind === 'drag' && (this.gesture as { moved?: boolean }).moved)
+      hitId === this.lastUpHit
     ) {
       if (hitId) this.host.onNodeDoubleClick(hitId);
       else this.host.onCanvasDoubleClick({ sx, sy, world: { x: w.x, y: w.y } });

@@ -40,6 +40,7 @@ import { nodeTypes } from '@/features/canvas/nodes';
 import { withNodeRenderErrorBoundary } from '@/features/canvas/nodes/NodeRenderErrorBoundary';
 import { extractCanvasAssets } from '@/features/canvas/shared/utils/assets';
 import { HiddenHostContext, NodeHostIdContext } from '@/features/canvas/compat/nodeHostApi';
+import { isIslandMounted } from '@/features/canvas/compat/engineBridge';
 import { registerCanvas2DEngine, useViewportSnapshotStore } from '@/features/canvas/compat/engineBridge';
 import { buildSceneModel, type SceneModel } from './sceneModel';
 import { DomIslands } from './DomIslands';
@@ -899,11 +900,15 @@ export function Canvas2DView() {
   const handleBatchTrigger = useCallback(() => {
     const ids = batchState.triggerIds;
     if (ids.length === 0) return;
-    const mountedId = useCanvasStore.getState().selectedNodeId;
-    if (mountedId && ids.includes(mountedId)) {
-      canvasEventBus.publish('generation-node/trigger', { nodeId: mountedId });
+    // 已挂载（检视面板/ DOM 岛）的节点直接发事件；其余经隐藏宿主补订阅。
+    // 必须排除已挂载 id，否则双挂载导致重复触发生成
+    const alreadyMounted = ids.filter(
+      (id) => isIslandMounted(id) || id === useCanvasStore.getState().selectedNodeId,
+    );
+    for (const id of alreadyMounted) {
+      canvasEventBus.publish('generation-node/trigger', { nodeId: id });
     }
-    const unmounted = ids.filter((id) => id !== mountedId);
+    const unmounted = ids.filter((id) => !alreadyMounted.includes(id));
     if (unmounted.length > 0) setTriggerHostIds(unmounted);
   }, [batchState.triggerIds]);
 
