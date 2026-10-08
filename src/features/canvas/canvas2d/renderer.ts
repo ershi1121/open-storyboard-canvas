@@ -1,4 +1,5 @@
 import { getImage, getImageState } from './imageCache';
+import { CANVAS_NODE_TYPES } from '@/features/canvas/domain/canvasNodes';
 import type { RenderNode, SceneModel } from './sceneModel';
 import type { SpatialGrid } from './spatialGrid';
 
@@ -197,9 +198,15 @@ function wrapLines(text: string, fs: number, maxWidth: number, maxLines: number)
 
 /* ---------- 换行结果缓存（key: 文本+每行字符数+行数上限） ---------- */
 const wrapCache = new Map<string, string[]>();
-function wrapLinesCached(text: string, fs: number, maxWidth: number, maxLines: number): string[] {
+function wrapLinesCached(
+  text: string,
+  fs: number,
+  maxWidth: number,
+  maxLines: number,
+  zoomBucket = 0,
+): string[] {
   const charsPerLine = Math.max(1, Math.floor(maxWidth / (fs * 0.86)));
-  const key = `${charsPerLine}|${maxLines}|${text.length}|${text.slice(0, 48)}`;
+  const key = `${zoomBucket}|${charsPerLine}|${maxLines}|${text.length}|${text.slice(0, 48)}`;
   const hit = wrapCache.get(key);
   if (hit) return hit;
   const lines = wrapLines(text, fs, maxWidth, maxLines);
@@ -417,6 +424,8 @@ function drawCard(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, 
   const hovered = opts.hoverId === n.id;
   const screenW = n.w * zoom;
   const micro = screenW < 60;
+  /** 换行缓存分桶：避免 zoom 连续变化导致每帧全量重算换行 */
+  const zoomBucket = Math.round(zoom * 4);
   /** 比例缩放 + 可读下限（与 DOM 编辑器整体缩放行为一致，极缩时保底可读） */
   const px = (base: number, floor: number): number => Math.max(floor, base * zoom) / zoom;
 
@@ -455,7 +464,7 @@ function drawCard(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, 
   if (showText && hasImage) {
     const textH = Math.max(14, areaH * 0.42);
     const maxLines = Math.max(1, Math.min(12, Math.floor((textH * zoom) / (textFsScreen * 1.45))));
-    const lines = wrapLinesCached(n.textPreview as string, textFs, areaW - 12, maxLines);
+    const lines = wrapLinesCached(n.textPreview as string, textFs, areaW - 12, maxLines, zoomBucket);
     // 文本区描边（ mimics 编辑器输入框边框）
     ctx.strokeStyle = P.cardBorder;
     ctx.lineWidth = 1 / zoom;
@@ -471,7 +480,7 @@ function drawCard(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, 
     calls += drawMedia(ctx, n, areaX, areaY + textH + 3, areaW, Math.max(0, areaH - textH - 3), micro ? 3 : 8, opts, P);
   } else if (showText) {
     const maxLines = Math.max(1, Math.min(12, Math.floor((areaH * zoom) / (textFsScreen * 1.45))));
-    const lines = wrapLinesCached(n.textPreview as string, textFs, areaW - 12, maxLines);
+    const lines = wrapLinesCached(n.textPreview as string, textFs, areaW - 12, maxLines, zoomBucket);
     ctx.strokeStyle = P.cardBorder;
     ctx.lineWidth = 1 / zoom;
     rr(ctx, areaX, areaY, areaW, areaH, micro ? 3 : 6);
@@ -536,8 +545,13 @@ function drawCard(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, 
     calls += 2;
   }
 
-  // 底部按钮行（编辑器同款：灰chip + 蓝色主按钮）
-  if (lod >= 1 && !micro && screenW >= 90 && (n.kind === 'ai' || n.kind === 'image' || n.kind === 'video')) {
+  // 底部按钮行（编辑器同款：灰chip + 蓝色主按钮）——仅真实拥有生成按钮的类型
+  const hasGenerateButton =
+    n.type === CANVAS_NODE_TYPES.imageEdit ||
+    n.type === CANVAS_NODE_TYPES.aiVideo ||
+    n.type === CANVAS_NODE_TYPES.aiText ||
+    n.type === CANVAS_NODE_TYPES.storyboardGen;
+  if (lod >= 1 && !micro && screenW >= 90 && hasGenerateButton) {
     const bh = Math.max(8, 24 * zoom) / zoom;
     const bw = 34 / zoom;
     const gw = 26 / zoom;

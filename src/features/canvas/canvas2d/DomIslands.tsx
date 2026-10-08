@@ -13,6 +13,8 @@ import { selectDomIslands, type IslandViewport } from './domIslands';
 const RESUME_BATCH_PER_FRAME = 8;
 /** 相机静止多久后降级合成层、强制清晰重栅（毫秒） */
 const RASTER_SETTLE_MS = 180;
+/** 相机静止多久后结算岛成员变化（毫秒） */
+const MEMBER_SETTLE_MS = 250;
 /** 调度器每帧新增挂载上限（相机运动中降为 1，摊薄切换顿挫） */
 const MOUNT_BATCH_PER_FRAME = 2;
 const MOUNT_BATCH_PER_FRAME_MOVING = 1;
@@ -93,6 +95,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
   const lastMemberLogRef = useRef(0);
   const lastCameraMoveRef = useRef(0);
   const rasterSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const memberSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [islandIds, setIslandIds] = useState<string[]>([]);
 
   const selectedSet = useRef(new Set<string>());
@@ -175,6 +178,13 @@ const DomIslandsInner = memo(function DomIslandsInner({
       recompute();
       unsub = engine.addCameraListener(() => {
         lastCameraMoveRef.current = performance.now();
+        // 运动期间冻结成员变化（避免门槛线上每帧挂载/卸载重型组件）；
+        // 静止 MEMBER_SETTLE_MS 后统一结算（分批挂载/卸载）
+        if (memberSettleTimerRef.current) clearTimeout(memberSettleTimerRef.current);
+        memberSettleTimerRef.current = setTimeout(() => {
+          memberSettleTimerRef.current = null;
+          recomputeRef.current();
+        }, MEMBER_SETTLE_MS);
         // 运动中：提升合成层（transform 拉伸顺滑）；静止后降级强制按新缩放
         // 重新光栅化——否则 will-change 常驻会让放大后的 DOM 岛持续模糊
         const world = worldRef.current;
@@ -186,7 +196,6 @@ const DomIslandsInner = memo(function DomIslandsInner({
           if (w) w.style.willChange = 'auto';
         }, RASTER_SETTLE_MS);
         applyWorldTransform();
-        recomputeRef.current(); // 成员变化经调度器分批生效，无集中挂载冻帧
       });
     };
     attach();
@@ -194,6 +203,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
       cancelled = true;
       cancelAnimationFrame(raf);
       if (rasterSettleTimerRef.current) clearTimeout(rasterSettleTimerRef.current);
+      if (memberSettleTimerRef.current) clearTimeout(memberSettleTimerRef.current);
       unsub?.();
     };
   }, [applyWorldTransform, recompute, engineRef]);
