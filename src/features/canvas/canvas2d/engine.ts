@@ -78,6 +78,25 @@ export interface EngineHost {
 
 export type ConnectionValidator = (sourceId: string, targetId: string) => boolean;
 
+/** 鼠标绑定（与设置页 canvasMouseBindings 同构） */
+export type MouseAction = 'none' | 'selectNode' | 'panCanvas' | 'selectionBox' | 'nodeMenu';
+export interface MouseBindings {
+  leftClick: MouseAction;
+  leftDrag: MouseAction;
+  rightClick: MouseAction;
+  rightDrag: MouseAction;
+  middleClick: MouseAction;
+  middleDrag: MouseAction;
+}
+export const DEFAULT_MOUSE_BINDINGS: MouseBindings = {
+  leftClick: 'selectNode',
+  leftDrag: 'panCanvas',
+  rightClick: 'nodeMenu',
+  rightDrag: 'selectionBox',
+  middleClick: 'none',
+  middleDrag: 'none',
+};
+
 interface AxisLock {
   edge: 'left' | 'top' | 'right' | 'bottom';
   line: number;
@@ -137,7 +156,7 @@ type Gesture =
     }
   | { kind: 'minimap'; moved: boolean }
   | { kind: 'edgePan'; edgeId: string; startSx: number; startSy: number; startCamX: number; startCamY: number; moved: boolean }
-  | { kind: 'rightPending'; startSx: number; startSy: number; hitId: string | null; moved: boolean };
+  | { kind: 'pending'; button: 'left' | 'right' | 'middle'; startSx: number; startSy: number; hitId: string | null; moved: boolean };
 
 const MIN_ZOOM = 0.02;
 const MAX_ZOOM = 5;
@@ -243,6 +262,7 @@ export class Canvas2DEngine {
   /** 当前以 DOM 岛形式渲染的节点（画布跳过其卡片/手柄绘制） */
   private domIslands: ReadonlySet<string> = new Set<string>();
   private edgeRoutingMode: EdgeRoutingMode = 'spline';
+  private mouseBindings: MouseBindings = DEFAULT_MOUSE_BINDINGS;
   private selectedEdgeId: string | null = null;
   private hoverEdgeId: string | null = null;
   private snapEnabled = false;
@@ -251,6 +271,8 @@ export class Canvas2DEngine {
   private wasdKeys = new Set<string>();
   private wasdActive = false;
   private lastFrameT = 0;
+  /** rAF 帧间隔 EMA（诊断主线程是否被外部占用） */
+  frameIntervalMs = 16;
   private lastUpTime = 0;
   private lastUpSx = 0;
   private lastUpSy = 0;
@@ -402,6 +424,10 @@ export class Canvas2DEngine {
     this.snapEnabled = enabled;
     if (!enabled) this.guides = [];
     this.dirty = true;
+  }
+
+  setMouseBindings(bindings: MouseBindings): void {
+    this.mouseBindings = bindings;
   }
 
   setEdgeRoutingMode(mode: EdgeRoutingMode): void {
@@ -768,19 +794,38 @@ export class Canvas2DEngine {
       }
     }
 
-    // 右键：菜单或框选（与旧版右键框选行为一致）
-    if (opts.button === 2) {
+    const btn: 'left' | 'right' | 'middle' =
+      opts.button === 2 ? 'right' : opts.button === 1 ? 'middle' : 'left';
+    const dragAction: MouseAction =
+      opts.ctrlKey || opts.metaKey
+        ? btn === 'left'
+          ? 'selectionBox'
+          : this.mouseBindings[`${btn}Drag` as keyof MouseBindings]
+        : this.mouseBindings[`${btn}Drag` as keyof MouseBindings];
+
+    // 右键/中键/左键在节点上：右键默认先选中再进入 pending（旧版语义）
+    if (btn === 'right' || btn === 'middle') {
       const hit = this.grid.hitTest(w.x, w.y);
-      if (hit && !this.selectedIds.has(hit.id)) {
+      if (btn === 'right' && hit && !this.selectedIds.has(hit.id)) {
         this.selectedIds = new Set([hit.id]);
         this.host.onSelect([hit.id], hit.id);
       }
-      this.gesture = { kind: 'rightPending', startSx: sx, startSy: sy, hitId: hit ? hit.id : null, moved: false };
+      if (dragAction === 'selectionBox' && !hit) {
+        this.gesture = { kind: 'marquee', startWorldX: w.x, startWorldY: w.y, curWorldX: w.x, curWorldY: w.y };
+        this.setCursor('crosshair');
+        return;
+      }
+      if (dragAction === 'panCanvas') {
+        this.gesture = { kind: 'pan', startSx: sx, startSy: sy, startCamX: this.cam.x, startCamY: this.cam.y, moved: false };
+        this.setCursor('grabbing');
+        return;
+      }
+      this.gesture = { kind: 'pending', button: btn, startSx: sx, startSy: sy, hitId: hit ? hit.id : null, moved: false };
       return;
     }
 
     // Ctrl/⌘ + 左键拖空白：框选（与旧版自定义选框行为一致）
-    const wantMarquee = opts.ctrlKey || opts.metaKey;
+    const wantMarquee = dragAction === 'selectionBox';
 
     const handle = this.findHandleAt(w.x, w.y);
     if (handle && !wantMarquee) {
@@ -874,12 +919,16 @@ export class Canvas2DEngine {
       return;
     }
 
-    if (!opts.shiftKey && this.selectedIds.size > 0) {
-      this.selectedIds = new Set();
-      this.host.onSelect([], null);
+    if (dragAction === 'panCanvas') {
+      if (!opts.shiftKey && this.selectedIds.size > 0) {
+        this.selectedIds = new Set();
+        this.host.onSelect([], null);
+      }
+      this.gesture = { kind: 'pan', startSx: sx, startSy: sy, startCamX: this.cam.x, startCamY: this.cam.y, moved: false };
+      this.setCursor('grabbing');
+      return;
     }
-    this.gesture = { kind: 'pan', startSx: sx, startSy: sy, startCamX: this.cam.x, startCamY: this.cam.y, moved: false };
-    this.setCursor('grabbing');
+    this.gesture = { kind: 'pending', button: btn, startSx: sx, startSy: sy, hitId: null, moved: false };
   }
 
   pointerMove(sx: number, sy: number, opts: { altKey: boolean }): void {
@@ -890,12 +939,18 @@ export class Canvas2DEngine {
       this.minimapNavigate(sx, sy);
       return;
     }
-    if (g.kind === 'rightPending') {
-      if (Math.hypot(sx - g.startSx, sy - g.startSy) > 4) {
+    if (g.kind === 'pending') {
+      const moveDist = Math.hypot(sx - g.startSx, sy - g.startSy);
+      const pendingDrag: MouseAction = this.mouseBindings[`${g.button}Drag` as keyof MouseBindings];
+      if (moveDist > 4 && pendingDrag === 'selectionBox') {
         const w0 = this.toWorld(g.startSx, g.startSy);
         this.gesture = { kind: 'marquee', startWorldX: w0.x, startWorldY: w0.y, curWorldX: w0.x, curWorldY: w0.y };
         this.setCursor('crosshair');
+      } else if (moveDist > 4 && pendingDrag === 'panCanvas') {
+        this.gesture = { kind: 'pan', startSx: g.startSx, startSy: g.startSy, startCamX: this.cam.x, startCamY: this.cam.y, moved: true };
+        this.setCursor('grabbing');
       } else {
+        if (moveDist > 4) g.moved = true;
         return;
       }
     }
@@ -1104,10 +1159,21 @@ export class Canvas2DEngine {
       if (g.moved) this.host.onResizeCommit(g.id, g.curW, g.curH);
     } else if (g.kind === 'minimap') {
       this.scheduleViewportCommit();
-    } else if (g.kind === 'rightPending') {
+    } else if (g.kind === 'pending') {
       if (!g.moved) {
-        this.host.onContextMenu({ nodeId: g.hitId, sx, sy, world: { x: w.x, y: w.y } });
-      } else {
+        const clickAction = this.mouseBindings[`${g.button}Click` as keyof MouseBindings];
+        if (clickAction === 'nodeMenu') {
+          this.host.onContextMenu({ nodeId: g.hitId, sx, sy, world: { x: w.x, y: w.y } });
+        } else if (clickAction === 'selectNode') {
+          if (g.hitId) {
+            this.selectedIds = new Set([g.hitId]);
+            this.host.onSelect([g.hitId], g.hitId);
+          } else if (this.selectedIds.size > 0) {
+            this.selectedIds = new Set();
+            this.host.onSelect([], null);
+          }
+        }
+      } else if (g.button === 'right') {
         const ids = [...this.selectedIds];
         this.host.onSelect(ids, ids.length > 0 ? ids[ids.length - 1] : null);
       }
@@ -1179,6 +1245,9 @@ export class Canvas2DEngine {
     } else if (this.wasdActive) {
       this.wasdActive = false;
       this.scheduleViewportCommit();
+    }
+    if (this.lastFrameT) {
+      this.frameIntervalMs = this.frameIntervalMs * 0.9 + (t - this.lastFrameT) * 0.1;
     }
     this.lastFrameT = t;
 

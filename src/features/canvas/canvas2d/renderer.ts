@@ -888,8 +888,9 @@ function renderMinimapBase(
   m: MinimapLayout,
   opts: DrawSceneOptions,
 ): void {
-  cctx.setTransform(opts.dpr, 0, 0, opts.dpr, 0, 0);
-  cctx.clearRect(0, 0, m.w, m.h);
+  // 缓存画布使用局部坐标（原点平移到小地图左上角）
+  cctx.setTransform(opts.dpr, 0, 0, opts.dpr, -m.x * opts.dpr, -m.y * opts.dpr);
+  cctx.clearRect(m.x, m.y, m.w, m.h);
   cctx.fillStyle = opts.theme === 'dark' ? 'rgba(11,15,24,0.82)' : 'rgba(255,255,255,0.85)';
   rr(cctx, m.x, m.y, m.w, m.h, 8);
   cctx.fill();

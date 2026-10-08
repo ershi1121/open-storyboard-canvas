@@ -15,6 +15,8 @@ const RESUME_BATCH_PER_FRAME = 8;
 const RASTER_SETTLE_MS = 180;
 /** 相机静止多久后结算岛成员变化（毫秒） */
 const MEMBER_SETTLE_MS = 250;
+/** 相机运动判定窗口（毫秒）：窗口内岛隐藏由卡片接管 */
+const CAMERA_MOVING_MS = 200;
 /** 调度器每帧新增挂载上限（相机运动中降为 1，摊薄切换顿挫） */
 const MOUNT_BATCH_PER_FRAME = 2;
 const MOUNT_BATCH_PER_FRAME_MOVING = 1;
@@ -224,7 +226,13 @@ const DomIslandsInner = memo(function DomIslandsInner({
 
       /* ---- 岛可见性：新挂载分批显示（防瞬时重绘尖峰） ---- */
       if (engine) {
-        const desired = islandSetRef.current;
+        // 相机运动中：仅选中岛保持可见，其余隐藏由等比微缩卡片接管
+        // （卡片已是"缩小的正常节点"，切换观感连续；静止后分批恢复）
+        const moving = performance.now() - lastCameraMoveRef.current < CAMERA_MOVING_MS;
+        const desiredBase = islandSetRef.current;
+        const desired = moving
+          ? new Set([...desiredBase].filter((id) => selectedSet.current.has(id)))
+          : desiredBase;
         const shown = shownSetRef.current;
         let changed = false;
         // 清理已卸载岛残留（否则画布会持续跳过其卡片导致节点不可见）

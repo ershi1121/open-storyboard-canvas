@@ -138,6 +138,7 @@ export function Canvas2DView() {
   const apiKeys = useSettingsStore((state) => state.apiKeys);
   const enableCanvasWasdPan = useSettingsStore((state) => state.enableCanvasWasdPan);
   const canvasEdgeRoutingMode = useSettingsStore((state) => state.canvasEdgeRoutingMode);
+  const canvasMouseBindings = useSettingsStore((state) => state.canvasMouseBindings);
   const canvasWasdPanSensitivity = useSettingsStore((state) => state.canvasWasdPanSensitivity);
 
   /* ---------- 持久化（与旧版共用同一套 hook，传入视口适配器） ---------- */
@@ -630,6 +631,10 @@ export function Canvas2DView() {
   }, [canvasEdgeRoutingMode]);
 
   useEffect(() => {
+    engineRef.current?.setMouseBindings(canvasMouseBindings);
+  }, [canvasMouseBindings]);
+
+  useEffect(() => {
     if (selectedNodeId === lastEmittedSelectionRef.current) return;
     lastEmittedSelectionRef.current = selectedNodeId;
     engineRef.current?.setSelection(selectedNodeId ? [selectedNodeId] : []);
@@ -1105,6 +1110,7 @@ export function Canvas2DView() {
             <div className="text-red-300">{t('canvas2d.diagSoftware')}</div>
           )}
           <div>fps: {stats?.fps ?? '--'} / frame: {stats ? stats.frameMs.toFixed(1) : '--'} ms</div>
+          <div>frameInterval: {engineRef.current ? engineRef.current.frameIntervalMs.toFixed(0) : '--'} ms（&gt;33=主线程被占用）</div>
           <div>slowFrames(&gt;48ms): {((stats as (EngineStats & { slowFrames?: number }) | null)?.slowFrames) ?? 0}</div>
           <div>nodes: {stats?.total ?? 0} / visible: {stats?.visible ?? 0} / edges: {stats?.edgesDrawn ?? 0}</div>
           <div>domIslands: {islandCount} / zoom: {stats ? stats.zoom.toFixed(2) : '--'}</div>
