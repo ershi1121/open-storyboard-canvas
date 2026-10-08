@@ -1,6 +1,5 @@
 import {
   drawScene,
-  RENDER_CONSTANTS,
   type Camera,
   type DrawStats,
   type MinimapLayout,
@@ -172,8 +171,6 @@ const MIN_NODE_H = 40;
 const MINIMAP_W = 190;
 const MINIMAP_H = 120;
 const MINIMAP_MARGIN = 12;
-/** 相机静止多久后才允许切换原图层级（毫秒）：运动期只用 preview，防解码风暴 */
-const CAMERA_SETTLE_MS = 300;
 /** 交互期画布分辨率缩放（像素数降至 36%，光栅成本同比例下降） */
 const INTERACTION_RENDER_SCALE = 0.6;
 const SNAP_ENTER_PX = 14;
@@ -278,7 +275,6 @@ export class Canvas2DEngine {
   private lastUpSy = 0;
   private lastUpHit: string | null = null;
   private minimapLayout: MinimapLayout | null = null;
-  private resizeOverride: { id: string; w: number; h: number } | null = null;
   private cameraListeners = new Set<() => void>();
   private lastCamKey = '';
   private lastCameraMoveT = 0;
@@ -535,7 +531,7 @@ export class Canvas2DEngine {
   }
 
   private findHandleAt(wx: number, wy: number): { nodeId: string; handle: ConnectHandleType } | null {
-    if (!this.model || this.cam.zoom < RENDER_CONSTANTS.LOD0_ZOOM) return null;
+    if (!this.model) return null;
     const r = HANDLE_RADIUS_PX / this.cam.zoom;
     const candidates = this.grid.queryRect({ x: wx - r, y: wy - r, w: r * 2, h: r * 2 });
     let best: { nodeId: string; handle: ConnectHandleType; dist: number } | null = null;
@@ -1060,7 +1056,6 @@ export class Canvas2DEngine {
         g2.moved = true;
         this.host.onResizeStart(g2.id);
       }
-      this.resizeOverride = { id: g2.id, w: g2.curW, h: g2.curH };
       return;
     }
 
@@ -1157,7 +1152,6 @@ export class Canvas2DEngine {
         }
       }
     } else if (g.kind === 'resize') {
-      this.resizeOverride = null;
       if (g.moved) this.host.onResizeCommit(g.id, g.curW, g.curH);
     } else if (g.kind === 'minimap') {
       this.scheduleViewportCommit();
@@ -1304,8 +1298,6 @@ export class Canvas2DEngine {
         dpr: this.dpr * this.renderScale,
         theme: this.theme,
         time: t,
-        hoverId: this.hoverId,
-        hoverHandle: this.hoverHandle,
         selectedIds: this.selectedIds,
         dragIds: dragging ? g.renderIds : EMPTY_SET,
         dragDx: dragging ? g.dx : 0,
@@ -1313,20 +1305,11 @@ export class Canvas2DEngine {
         guides: this.guides,
         marqueeRect: marquee,
         selectionBounds: this.selectedIds.size > 1 ? this.getSelectionWorldRect() : null,
-        domIslands: this.domIslands,
         connectPreview: connect,
-        resizeOverride: this.resizeOverride,
         minimap: this.minimapLayout,
         selectedEdgeId: this.selectedEdgeId,
         hoverEdgeId: this.hoverEdgeId,
         edgeRoutingMode: this.edgeRoutingMode,
-        showHandles: this.cam.zoom >= RENDER_CONSTANTS.LOD0_ZOOM,
-        preferOriginal:
-          this.cam.zoom >= RENDER_CONSTANTS.ORIGINAL_ZOOM &&
-          t - this.lastCameraMoveT > CAMERA_SETTLE_MS,
-        onImageReady: () => {
-          this.dirty = true;
-        },
       });
       this.stats.visible = drawn.visible;
       this.stats.edgesDrawn = drawn.edgesDrawn;

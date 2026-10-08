@@ -1,5 +1,3 @@
-import { getImage, getImageFade, getImageState } from './imageCache';
-import { CANVAS_NODE_TYPES } from '@/features/canvas/domain/canvasNodes';
 import {
   buildAvoidRects,
   polylineMidpoint,
@@ -8,7 +6,7 @@ import {
   type EdgeRoutingMode,
   type Pt,
 } from './edgeGeometry';
-import type { RenderNode, SceneModel } from './sceneModel';
+import type { SceneModel } from './sceneModel';
 import type { SpatialGrid } from './spatialGrid';
 
 /**
@@ -62,8 +60,6 @@ export interface DrawSceneOptions {
   dpr: number;
   theme: 'dark' | 'light';
   time: number;
-  hoverId: string | null;
-  hoverHandle: { nodeId: string; handle: 'source' | 'target' } | null;
   selectedIds: ReadonlySet<string>;
   dragIds: ReadonlySet<string>;
   dragDx: number;
@@ -72,17 +68,11 @@ export interface DrawSceneOptions {
   marqueeRect: { x: number; y: number; w: number; h: number } | null;
   /** 多选联合包围盒（世界坐标），选中 ≥2 个节点时绘制浅色虚线框 */
   selectionBounds: { x: number; y: number; w: number; h: number } | null;
-  /** 以 DOM 岛渲染的节点（画布不绘制其卡片与手柄） */
-  domIslands: ReadonlySet<string>;
   selectedEdgeId: string | null;
   hoverEdgeId: string | null;
   edgeRoutingMode: EdgeRoutingMode;
   connectPreview: { fromX: number; fromY: number; toX: number; toY: number; valid: boolean; hasTarget: boolean } | null;
-  resizeOverride: { id: string; w: number; h: number } | null;
   minimap: MinimapLayout | null;
-  showHandles: boolean;
-  preferOriginal: boolean;
-  onImageReady: () => void;
 }
 
 interface Palette {
@@ -130,41 +120,7 @@ const LIGHT: Palette = {
 const GEN_COLOR = '#34d399';
 const FAIL_COLOR = '#f87171';
 const SELECT_COLOR = '#38bdf8';
-const LOD0_ZOOM = 0.28;
-const LOD1_ZOOM = 0.75;
-const ORIGINAL_ZOOM = 1.2; // 与 imageData.shouldUseOriginalImageByZoom 保持一致
 
-const KIND_LABEL: Record<string, string> = {
-  image: '图片',
-  video: '视频',
-  audio: '音频',
-  text: '文本',
-  json: 'JSON',
-  ai: 'AI 文本',
-  storyboardSplit: '故事板',
-  storyboardGen: '故事板生成',
-  panorama: '全景',
-  blueprint: '导演台',
-  tag: '标签',
-  tagGroup: '标签组',
-  group: '分组',
-};
-
-const GLYPH: Record<string, string> = {
-  image: '▣',
-  video: '▶',
-  audio: '♪',
-  text: '¶',
-  json: '{}',
-  ai: '✦',
-  storyboardSplit: '▦',
-  storyboardGen: '▦',
-  panorama: '◎',
-  blueprint: '⌂',
-  tag: '',
-  tagGroup: '',
-  group: '',
-};
 
 function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
   const radius = Math.max(0, Math.min(r, w / 2, h / 2));
@@ -178,69 +134,10 @@ function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: n
 }
 
 /** 屏幕恒定字号：zoom<=1 补偿，zoom>1 世界固定 */
-function fontSize(px: number, zoom: number): number {
-  return px / Math.min(zoom, 1);
-}
 
-function charWidth(ch: string, fs: number): number {
-  return ch.charCodeAt(0) >= 0x2e80 ? fs : fs * 0.56;
-}
 
-function truncate(text: string, fs: number, maxWidth: number): string {
-  let w = 0;
-  for (let i = 0; i < text.length; i++) {
-    w += charWidth(text[i], fs);
-    if (w > maxWidth) return text.slice(0, Math.max(1, i - 1)) + '…';
-  }
-  return text;
-}
 
 /** CJK 感知换行，返回最多 maxLines 行 */
-function wrapLines(text: string, fs: number, maxWidth: number, maxLines: number): string[] {
-  const lines: string[] = [];
-  let line = '';
-  let w = 0;
-  for (const ch of text) {
-    if (ch === '\n') {
-      lines.push(line);
-      line = '';
-      w = 0;
-      if (lines.length >= maxLines) return lines;
-      continue;
-    }
-    const cw = charWidth(ch, fs);
-    if (w + cw > maxWidth && line) {
-      lines.push(line);
-      line = ch;
-      w = cw;
-      if (lines.length >= maxLines) return lines;
-    } else {
-      line += ch;
-      w += cw;
-    }
-  }
-  if (line && lines.length < maxLines) lines.push(line);
-  return lines;
-}
-
-/* ---------- 换行结果缓存（key: 文本+每行字符数+行数上限） ---------- */
-const wrapCache = new Map<string, string[]>();
-function wrapLinesCached(
-  text: string,
-  fs: number,
-  maxWidth: number,
-  maxLines: number,
-  zoomBucket = 0,
-): string[] {
-  const charsPerLine = Math.max(1, Math.floor(maxWidth / (fs * 0.86)));
-  const key = `${zoomBucket}|${charsPerLine}|${maxLines}|${text.length}|${text.slice(0, 48)}`;
-  const hit = wrapCache.get(key);
-  if (hit) return hit;
-  const lines = wrapLines(text, fs, maxWidth, maxLines);
-  if (wrapCache.size > 800) wrapCache.clear();
-  wrapCache.set(key, lines);
-  return lines;
-}
 
 function hexToRgba(hex: string, alpha: number): string {
   if (!hex.startsWith('#') || hex.length < 7) return hex;
@@ -454,365 +351,13 @@ function drawEdges(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions, P: Pal
   return drawn;
 }
 
-function drawMedia(
-  ctx: CanvasRenderingContext2D,
-  n: RenderNode,
-  areaX: number,
-  areaY: number,
-  areaW: number,
-  areaH: number,
-  radius: number,
-  opts: DrawSceneOptions,
-  P: Palette,
-): number {
-  let calls = 0;
-  // 双源回退（与旧版节点组件 imageFallbackSources 语义一致）：
-  // 首选源已知加载失败时自动尝试另一源，避免单次失败永久灰块
-  const candidates = opts.preferOriginal
-    ? [n.imageUrl, n.previewUrl]
-    : [n.previewUrl, n.imageUrl];
-  let url: string | null = null;
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    if (getImageState(candidate) === 'error') continue;
-    url = candidate;
-    break;
-  }
-  if (!url) url = candidates.find((candidate): candidate is string => Boolean(candidate)) ?? null;
-  const isOriginalTier =
-    opts.preferOriginal && Boolean(n.imageUrl) && url === n.imageUrl &&
-    Boolean(n.previewUrl) && n.previewUrl !== n.imageUrl;
-  const img = url ? getImage(url, opts.onImageReady, isOriginalTier ? 'original' : 'preview') : null;
-  if (img && areaW > 0 && areaH > 0) {
-    const fade = url ? getImageFade(url, opts.time) : 1;
-    const scale = Math.min(areaW / img.naturalWidth, areaH / img.naturalHeight);
-    const dw = img.naturalWidth * scale;
-    const dh = img.naturalHeight * scale;
-    ctx.save();
-    rr(ctx, areaX, areaY, areaW, areaH, radius);
-    ctx.clip();
-    if (fade < 1) {
-      ctx.globalAlpha = fade;
-      // 淡入期间请求续帧
-      opts.onImageReady();
-    }
-    ctx.drawImage(img, areaX + (areaW - dw) / 2, areaY + (areaH - dh) / 2, dw, dh);
-    ctx.globalAlpha = 1;
-    ctx.restore();
-    calls += 2;
-  } else {
-    // 统一空态：与卡片同底色（不加任何淡染），弱化字形 + 类型名，
-    // 保证全画布只有一种卡片底色（用户要求：不要灰色第二种观感）
-    ctx.save();
-    rr(ctx, areaX, areaY, areaW, areaH, radius);
-    ctx.clip();
-    const glyph = GLYPH[n.kind] || '▣';
-    const fs = Math.min(areaW, areaH) * 0.3;
-    if (fs > 6 / opts.cam.zoom) {
-      ctx.fillStyle = P.placeholderText;
-      ctx.font = `${fs}px system-ui, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(glyph, areaX + areaW / 2, areaY + areaH / 2 - fs * 0.35);
-      calls++;
-    }
-    const labelFs = Math.max(5, 10 * opts.cam.zoom) / opts.cam.zoom;
-    ctx.fillStyle = P.mutedText;
-    ctx.font = `${labelFs}px system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(
-      KIND_LABEL[n.kind] || '',
-      areaX + areaW / 2,
-      areaY + areaH / 2 + fs * 0.55,
-    );
-    ctx.textAlign = 'left';
-    calls++;
-    ctx.restore();
-    calls++;
-  }
-  return calls;
-}
 
-function drawTagCapsule(ctx: CanvasRenderingContext2D, n: RenderNode, opts: DrawSceneOptions): number {
-  const { cam, selectedIds, hoverId } = opts;
-  let calls = 0;
-  const selected = selectedIds.has(n.id);
-  ctx.fillStyle = n.accent;
-  ctx.globalAlpha = 0.92;
-  rr(ctx, n.x, n.y, n.w, n.h, n.h / 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-  calls++;
-  if (selected || hoverId === n.id) {
-    ctx.strokeStyle = selected ? SELECT_COLOR : 'rgba(255,255,255,0.7)';
-    ctx.lineWidth = (selected ? 2.2 : 1.4) / cam.zoom;
-    rr(ctx, n.x, n.y, n.w, n.h, n.h / 2);
-    ctx.stroke();
-    calls++;
-  }
-  if (n.w * cam.zoom >= 26) {
-    const fs = fontSize(11, cam.zoom);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `600 ${fs}px system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(truncate(n.title, fs, n.w - fs), n.x + n.w / 2, n.y + n.h / 2);
-    calls++;
-  }
-  ctx.textAlign = 'left';
-  return calls;
-}
 
-function drawGroup(ctx: CanvasRenderingContext2D, n: RenderNode, opts: DrawSceneOptions, P: Palette): number {
-  const { cam, selectedIds } = opts;
-  let calls = 0;
-  ctx.fillStyle = P.theme === 'light' ? 'rgba(100,116,139,0.06)' : 'rgba(100,116,139,0.09)';
-  rr(ctx, n.x, n.y, n.w, n.h, 10);
-  ctx.fill();
-  calls++;
-  ctx.strokeStyle = selectedIds.has(n.id) ? SELECT_COLOR : 'rgba(100,116,139,0.4)';
-  ctx.lineWidth = (selectedIds.has(n.id) ? 2 : 1.2) / cam.zoom;
-  ctx.setLineDash([6 / cam.zoom, 4 / cam.zoom]);
-  rr(ctx, n.x, n.y, n.w, n.h, 10);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  calls++;
-  if (n.w * cam.zoom >= 60) {
-    const fs = fontSize(13, cam.zoom);
-    ctx.fillStyle = P.mutedText;
-    ctx.font = `600 ${fs}px system-ui, sans-serif`;
-    ctx.textBaseline = 'middle';
-    ctx.fillText(truncate(n.title, fs, n.w - fs * 2), n.x + fs * 0.6, n.y + fs * 1.1);
-    calls++;
-  }
-  return calls;
-}
 
-function drawCard(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, opts: DrawSceneOptions, P: Palette, zoom: number): number {
-  let calls = 0;
-  const selected = opts.selectedIds.has(n.id);
-  const hovered = opts.hoverId === n.id;
-  const screenW = n.w * zoom;
-  const micro = screenW < 60;
-  /** 换行缓存分桶：避免 zoom 连续变化导致每帧全量重算换行 */
-  const zoomBucket = Math.round(zoom * 4);
-  /** 比例缩放 + 可读下限（与 DOM 编辑器整体缩放行为一致，极缩时保底可读） */
-  const px = (base: number, floor: number): number => Math.max(floor, base * zoom) / zoom;
 
-  // 标题标签行（悬浮小标签，与编辑器布局一致）；屏幕宽 <32px 时省略
-  const headerScreen = screenW >= 32 ? Math.max(10, 26 * zoom) : 0;
-  const headerH = headerScreen / zoom;
-  const titleFs = px(12.5, 6);
-  const titleFsScreen = Math.min(headerScreen - 4, 12.5 * zoom < 6 ? 6 : 12.5 * zoom);
-
-  // 白卡主体（标签行之下）
-  const bodyY = n.y + headerH;
-  const bodyH = n.h - headerH;
-  const radius = micro ? 4 : 10;
-
-  if (lod >= 2 && !micro) {
-    ctx.fillStyle = P.shadow;
-    rr(ctx, n.x + 4 / zoom, bodyY + 5 / zoom, n.w, bodyH, radius);
-    ctx.fill();
-    calls++;
-  }
-  ctx.fillStyle = P.cardBg;
-  rr(ctx, n.x, bodyY, n.w, bodyH, radius);
-  ctx.fill();
-  calls++;
-
-  // 主体内容：文本区（上）+ 图像区（下），与编辑器垂直布局一致
-  const areaX = n.x + 3;
-  const areaY = bodyY + 3;
-  const areaW = n.w - 6;
-  const areaH = bodyH - 6;
-  const hasImage = Boolean(n.imageUrl || n.previewUrl);
-  const showText = Boolean(n.textPreview) && screenW >= 24;
-  const textFs = px(11.5, 5);
-  const textFsScreen = Math.max(5, 11.5 * zoom);
-  const lineH = textFs * 1.45;
-  if (showText && hasImage) {
-    const textH = Math.max(14, areaH * 0.42);
-    const maxLines = Math.max(1, Math.min(12, Math.floor((textH * zoom) / (textFsScreen * 1.45))));
-    const lines = wrapLinesCached(n.textPreview as string, textFs, areaW - 12, maxLines, zoomBucket);
-    // 文本区描边（ mimics 编辑器输入框边框）
-    ctx.strokeStyle = P.cardBorder;
-    ctx.lineWidth = 1 / zoom;
-    rr(ctx, areaX, areaY, areaW, textH, micro ? 3 : 6);
-    ctx.stroke();
-    ctx.fillStyle = P.titleText;
-    ctx.font = `${textFs}px system-ui, sans-serif`;
-    ctx.textBaseline = 'top';
-    for (let i = 0; i < lines.length; i++) {
-      ctx.fillText(lines[i], areaX + 6, areaY + 4 + i * lineH);
-      calls++;
-    }
-    calls += drawMedia(ctx, n, areaX, areaY + textH + 3, areaW, Math.max(0, areaH - textH - 3), micro ? 3 : 8, opts, P);
-  } else if (showText) {
-    const maxLines = Math.max(1, Math.min(12, Math.floor((areaH * zoom) / (textFsScreen * 1.45))));
-    const lines = wrapLinesCached(n.textPreview as string, textFs, areaW - 12, maxLines, zoomBucket);
-    ctx.strokeStyle = P.cardBorder;
-    ctx.lineWidth = 1 / zoom;
-    rr(ctx, areaX, areaY, areaW, areaH, micro ? 3 : 6);
-    ctx.stroke();
-    ctx.fillStyle = P.titleText;
-    ctx.font = `${textFs}px system-ui, sans-serif`;
-    ctx.textBaseline = 'top';
-    for (let i = 0; i < lines.length; i++) {
-      ctx.fillText(lines[i], areaX + 6, areaY + 4 + i * lineH);
-      calls++;
-    }
-  } else {
-    calls += drawMedia(ctx, n, areaX, areaY, areaW, Math.max(0, areaH), micro ? 3 : 8, opts, P);
-  }
-
-  // 悬浮标题小标签（编辑器同款：圆角描边小chip）
-  if (headerH > 0) {
-    const glyph = GLYPH[n.kind];
-    const titleText = truncate(n.title, titleFs, n.w - 16 / zoom);
-    let tw = 0;
-    for (const ch of titleText) tw += charWidth(ch, titleFs);
-    const chipW = Math.min(n.w, tw + (glyph ? titleFs * 1.5 : 0) + 14 / zoom);
-    const chipH = headerH * 0.82;
-    ctx.fillStyle = P.theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.045)';
-    rr(ctx, n.x, n.y + (headerH - chipH) / 2, chipW, chipH, chipH / 2);
-    ctx.fill();
-    ctx.strokeStyle = P.cardBorder;
-    ctx.lineWidth = 1 / zoom;
-    rr(ctx, n.x, n.y + (headerH - chipH) / 2, chipW, chipH, chipH / 2);
-    ctx.stroke();
-    calls += 2;
-    ctx.textBaseline = 'middle';
-    let tx = n.x + 7 / zoom;
-    if (glyph && !micro) {
-      ctx.fillStyle = n.accent.startsWith('#') ? n.accent : SELECT_COLOR;
-      ctx.font = `${titleFs}px system-ui, sans-serif`;
-      ctx.fillText(glyph, tx, n.y + headerH / 2);
-      tx += titleFs * 1.5;
-      calls++;
-    }
-    ctx.fillStyle = P.titleText;
-    ctx.font = `600 ${titleFs}px system-ui, sans-serif`;
-    ctx.fillText(titleText, tx, n.y + headerH / 2);
-    calls++;
-    void titleFsScreen;
-  }
-
-  // 徽标 chip（时长/批次等，编辑器同款右上深色chip）
-  if (lod >= 1 && n.badge && !micro && screenW >= 90) {
-    const fs = px(10, 5);
-    const chipW = Math.min(n.w * 0.45, fs * (n.badge.length + 1.6));
-    const chipH = fs * 1.7;
-    ctx.fillStyle = 'rgba(15,23,42,0.72)';
-    rr(ctx, n.x + n.w - chipW, n.y - chipH * 1.3, chipW, chipH, chipH / 2);
-    ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `600 ${fs}px system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(n.badge, n.x + n.w - chipW / 2, n.y - chipH * 0.8);
-    ctx.textAlign = 'left';
-    calls += 2;
-  }
-
-  // 底部按钮行（编辑器同款：灰chip + 蓝色主按钮）——仅真实拥有生成按钮的类型
-  const hasGenerateButton =
-    n.type === CANVAS_NODE_TYPES.imageEdit ||
-    n.type === CANVAS_NODE_TYPES.aiVideo ||
-    n.type === CANVAS_NODE_TYPES.aiText ||
-    n.type === CANVAS_NODE_TYPES.storyboardGen;
-  if (lod >= 1 && !micro && screenW >= 90 && hasGenerateButton) {
-    const bh = Math.max(8, 24 * zoom) / zoom;
-    const bw = 34 / zoom;
-    const gw = 26 / zoom;
-    const by = n.y + n.h - bh - 6 / zoom;
-    ctx.fillStyle = P.theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.06)';
-    rr(ctx, n.x + n.w - bw - gw - 10 / zoom, by, gw, bh, bh / 2);
-    ctx.fill();
-    ctx.fillStyle = '#6366f1';
-    rr(ctx, n.x + n.w - bw - 6 / zoom, by, bw, bh, bh / 2);
-    ctx.fill();
-    calls += 2;
-  }
-
-  // 状态：生成中脉冲 / 失败红框 / 常规描边（围绕整节点）
-  if (n.status === 'gen') {
-    const pulse = 0.45 + 0.35 * Math.sin(opts.time / 300);
-    ctx.strokeStyle = hexToRgba(GEN_COLOR, pulse);
-    ctx.lineWidth = 2.4 / zoom;
-    rr(ctx, n.x, n.y, n.w, n.h, radius);
-    ctx.stroke();
-    calls++;
-    if (lod >= 1 && !micro) {
-      const p = (Math.sin(opts.time / 500 + n.z) * 0.5 + 0.5);
-      ctx.fillStyle = hexToRgba(GEN_COLOR, 0.9);
-      ctx.fillRect(n.x + 8, n.y + n.h - 6, (n.w - 16) * p, 3);
-      calls++;
-    }
-  } else if (n.status === 'fail') {
-    ctx.strokeStyle = hexToRgba(FAIL_COLOR, 0.75);
-    ctx.lineWidth = 2 / zoom;
-    rr(ctx, n.x, n.y, n.w, n.h, radius);
-    ctx.stroke();
-    calls++;
-  } else {
-    ctx.strokeStyle = selected ? SELECT_COLOR : hovered ? 'rgba(148,197,255,0.75)' : P.cardBorder;
-    ctx.lineWidth = (selected ? 2.2 : micro ? 0.8 : 1.2) / zoom;
-    rr(ctx, n.x, bodyY, n.w, bodyH, radius);
-    ctx.stroke();
-    calls++;
-  }
-
-  // 选中手柄
-  if (selected && lod >= 1 && !micro) {
-    ctx.fillStyle = SELECT_COLOR;
-    const hs = 6 / zoom;
-    const corners: Array<[number, number]> = [
-      [n.x, n.y],
-      [n.x + n.w, n.y],
-      [n.x, n.y + n.h],
-      [n.x + n.w, n.y + n.h],
-    ];
-    for (const [cx, cy] of corners) {
-      ctx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
-      calls++;
-    }
-  }
-  return calls;
-}
-
-function drawNode(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, opts: DrawSceneOptions, P: Palette): number {
-  if (n.kind === 'group') return drawGroup(ctx, n, opts, P);
-  if (n.kind === 'tag' || n.kind === 'tagGroup') return drawTagCapsule(ctx, n, opts);
-  return drawCard(ctx, n, lod, opts, P, opts.cam.zoom);
-}
 
 /* ---------- v1 叠加层 ---------- */
 
-function drawHandles(ctx: CanvasRenderingContext2D, n: RenderNode, opts: DrawSceneOptions, dx: number, dy: number): number {
-  if (!opts.showHandles || n.isGroup || n.kind === 'tag' || n.kind === 'tagGroup') return 0;
-  const zoom = opts.cam.zoom;
-  const isHot = (h: 'source' | 'target') => opts.hoverHandle?.nodeId === n.id && opts.hoverHandle?.handle === h;
-  let calls = 0;
-  const dots: Array<{ handle: 'source' | 'target'; x: number; y: number; ok: boolean }> = [
-    { handle: 'source', x: n.x + n.w + dx, y: n.y + n.h / 2 + dy, ok: n.canSource },
-    { handle: 'target', x: n.x + dx, y: n.y + n.h / 2 + dy, ok: n.canTarget },
-  ];
-  for (const dot of dots) {
-    if (!dot.ok) continue;
-    const r = (isHot(dot.handle) ? 7 : 5) / zoom;
-    ctx.beginPath();
-    ctx.arc(dot.x, dot.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = dot.handle === 'source' ? SELECT_COLOR : opts.theme === 'dark' ? '#1c2333' : '#ffffff';
-    ctx.fill();
-    ctx.lineWidth = 1.6 / zoom;
-    ctx.strokeStyle = dot.handle === 'source' ? '#e0f2fe' : SELECT_COLOR;
-    ctx.stroke();
-    calls += 2;
-  }
-  return calls;
-}
 
 function drawConnectPreview(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions): number {
   const c = opts.connectPreview;
@@ -884,24 +429,6 @@ function drawGuides(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions, view:
   return calls;
 }
 
-function drawResizeGhost(ctx: CanvasRenderingContext2D, model: SceneModel, opts: DrawSceneOptions): number {
-  const r = opts.resizeOverride;
-  if (!r) return 0;
-  const n = model.byId.get(r.id);
-  if (!n) return 0;
-  const zoom = opts.cam.zoom;
-  ctx.strokeStyle = SELECT_COLOR;
-  ctx.lineWidth = 1.5 / zoom;
-  ctx.setLineDash([6 / zoom, 4 / zoom]);
-  ctx.strokeRect(n.x, n.y, r.w, r.h);
-  ctx.setLineDash([]);
-  const fs = 11 / Math.min(zoom, 1);
-  ctx.fillStyle = SELECT_COLOR;
-  ctx.font = `${fs}px system-ui, sans-serif`;
-  ctx.textBaseline = 'bottom';
-  ctx.fillText(`${Math.round(r.w)} × ${Math.round(r.h)}`, n.x, n.y - 4 / zoom);
-  return 2;
-}
 
 function drawMinimap(ctx: CanvasRenderingContext2D, model: SceneModel, opts: DrawSceneOptions, P: Palette): number {
   const m = opts.minimap;
@@ -978,57 +505,26 @@ export function drawScene(opts: DrawSceneOptions): DrawStats {
   const edgesDrawn = drawEdges(ctx, opts, P, view);
   calls.n += edgesDrawn;
 
-  // 节点：裁剪 + LOD
-  const lod: 0 | 1 | 2 = zoom < LOD0_ZOOM ? 0 : zoom < LOD1_ZOOM ? 1 : 2;
+  // 节点视觉 100% 由 DOM 岛承担：画布仅统计可见数供 HUD/诊断
   const pad = 8 / zoom;
   const padded = { x: view.x - pad, y: view.y - pad, w: view.w + pad * 2, h: view.h + pad * 2 };
   const candidates = grid.queryRect(padded);
+  const seen = new Set<number>();
   let visible = 0;
-  // 网格候选按绘制顺序排序（候选数通常远小于总量；全览极端情况下为 O(V log V)）
-  candidates.sort((a, b) => a - b);
-  let prev = -1;
-  const handleNodes: Array<{ node: RenderNode; dx: number; dy: number }> = [];
   for (const idx of candidates) {
-    if (idx === prev) continue;
-    prev = idx;
-    let n = model.nodes[idx];
+    if (seen.has(idx)) continue;
+    seen.add(idx);
+    const n = model.nodes[idx];
     if (!n) continue;
-    if (opts.domIslands.has(n.id)) continue;
-    const dx = opts.dragIds.has(n.id) ? opts.dragDx : 0;
-    const dy = opts.dragIds.has(n.id) ? opts.dragDy : 0;
-    if (n.x + dx + n.w + pad < view.x || n.x + dx - pad > view.x + view.w ||
-        n.y + dy + n.h + pad < view.y || n.y + dy - pad > view.y + view.h) {
-      continue;
-    }
+    if (n.x + n.w < view.x || n.x > view.x + view.w || n.y + n.h < view.y || n.y > view.y + view.h) continue;
     visible++;
-    // 缩放中的实时尺寸覆盖
-    if (opts.resizeOverride && opts.resizeOverride.id === n.id) {
-      n = { ...n, w: opts.resizeOverride.w, h: opts.resizeOverride.h };
-    }
-    if (dx !== 0 || dy !== 0) {
-      ctx.save();
-      ctx.translate(dx, dy);
-      calls.n += drawNode(ctx, n, lod, opts, P);
-      ctx.restore();
-    } else {
-      calls.n += drawNode(ctx, n, lod, opts, P);
-    }
-    if (opts.selectedIds.has(n.id) || opts.hoverId === n.id) {
-      handleNodes.push({ node: n, dx, dy });
-    }
   }
 
-  // 连接桩（悬停/选中的节点）
-  for (const item of handleNodes) {
-    calls.n += drawHandles(ctx, item.node, opts, item.dx, item.dy);
-  }
-
-  // 叠加层：连线预览 / 框选 / 磁吸参考线 / 缩放幽灵框
+  // 叠加层：连线预览 / 框选 / 磁吸参考线 / 选区包围盒
   calls.n += drawSelectionBounds(ctx, opts);
   calls.n += drawConnectPreview(ctx, opts);
   calls.n += drawMarquee(ctx, opts);
   calls.n += drawGuides(ctx, opts, view);
-  calls.n += drawResizeGhost(ctx, model, opts);
 
   // 小地图（直绘：O(N) 点阵 <1ms，无需缓存）
   calls.n += drawMinimap(ctx, model, opts, P);
@@ -1036,4 +532,4 @@ export function drawScene(opts: DrawSceneOptions): DrawStats {
   return { visible, edgesDrawn, calls: calls.n };
 }
 
-export const RENDER_CONSTANTS = { LOD0_ZOOM, LOD1_ZOOM, ORIGINAL_ZOOM };
+export const RENDER_CONSTANTS = {};

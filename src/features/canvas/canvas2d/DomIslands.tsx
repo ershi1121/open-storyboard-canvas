@@ -12,8 +12,7 @@ import {
 import { nodeTypes } from '@/features/canvas/nodes';
 import { withNodeRenderErrorBoundary } from '@/features/canvas/nodes/NodeRenderErrorBoundary';
 import type { Canvas2DEngine } from './engine';
-import { prefetchImage } from './imageCache';
-import { selectDomIslands, type IslandViewport } from './domIslands';
+import type { IslandViewport } from './domIslands';
 
 /** 每帧放行的新挂载岛显示数量（摊薄重绘成本） */
 const RESUME_BATCH_PER_FRAME = 8;
@@ -23,16 +22,10 @@ const RASTER_SETTLE_MS = 180;
 const MEMBER_SETTLE_MS = 250;
 /** 相机运动判定窗口（毫秒）：窗口内岛隐藏由卡片接管 */
 const CAMERA_MOVING_MS = 200;
-/** 显示门槛基准（屏幕像素）：64px ≈ 旧版（无 LOD）在 zoom≥0.18 的观感；
- *  机器吃不住时由 FPS 滞回自适应上调（回退卡片），诊断面板可见当前值 */
-const SHOW_GATE_BASE_W = 64;
-const SHOW_GATE_BASE_H = 20;
-const SHOW_GATE_MAX_W = 200;
-const SHOW_GATE_MAX_H = 60;
 /** 拖拽快速路径阈值：同时移动的岛达到该数量时运动期降级为画布卡片 */
 const DRAG_SIMPLIFY_MIN = 4;
-/** 预挂载上限（含隐藏岛）：隐藏岛零绘制成本，仅占内存 */
-const MOUNT_CAP = 120;
+/** 挂载上限（单一表示原则下即"全量挂载"的保护阀，与旧版全量 DOM 同级） */
+const MOUNT_CAP = 600;
 import type { RenderNode, SceneModel } from './sceneModel';
 
 /**
@@ -91,8 +84,6 @@ interface DomIslandsProps {
   onIslandsChange: (ids: ReadonlySet<string>) => void;
   /** 岛层整体异常回退时通知宿主（启用检视面板兜底） */
   onFallback?: () => void;
-  /** 自适应显示门槛变化（诊断面板显示） */
-  onGateChange?: (gateW: number) => void;
 }
 
 const DomIslandsInner = memo(function DomIslandsInner({
@@ -100,7 +91,6 @@ const DomIslandsInner = memo(function DomIslandsInner({
   model,
   selectedIds,
   onIslandsChange,
-  onGateChange,
 }: DomIslandsProps) {
   const layerRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
@@ -125,12 +115,6 @@ const DomIslandsInner = memo(function DomIslandsInner({
   /** 待空闲卸载队列 */
   const pendingRemoveRef = useRef<string[]>([]);
   const pendingRemoveSetRef = useRef<Set<string>>(new Set<string>());
-  /* 自适应门槛状态 */
-  const gateRef = useRef({ w: SHOW_GATE_BASE_W, h: SHOW_GATE_BASE_H });
-  const lastGateEvalRef = useRef(0);
-  const lowFpsStreakRef = useRef(0);
-  const highFpsStreakRef = useRef(0);
-  const gateCooldownUntilRef = useRef(0);
   /** 已挂载（React 状态）镜像 */
   const mountedSetRef = useRef<Set<string>>(new Set<string>());
 
@@ -162,17 +146,18 @@ const DomIslandsInner = memo(function DomIslandsInner({
       viewW: size.w,
       viewH: size.h,
     };
-    const ids = selectDomIslands(model.nodes, selectedSet.current, viewport, {
-      minScreenW: 0,
-      minScreenH: 0,
-      cap: MOUNT_CAP,
-    });
+    // 单一表示原则（旧版 parity）：全部节点最终都挂载为 DOM 岛，
+    // 任何缩放下都是"缩小的原版编辑器"，不存在第二种表示
+    void viewport;
+    const ordered = [...model.nodes]
+      .map((n) => n.id)
+      .sort((a, b) => {
+        const sa = selectedSet.current.has(a) ? 0 : 1;
+        const sb = selectedSet.current.has(b) ? 0 : 1;
+        return sa - sb;
+      });
+    const ids = ordered.slice(0, MOUNT_CAP);
     targetOrderRef.current = ids;
-    // 视口内节点图片预热（卡片与岛共用画布缓存，杜绝"灰块→加载"观感）
-    for (const id of ids) {
-      const rn = model.byId.get(id);
-      if (rn) prefetchImage(rn.previewUrl ?? rn.imageUrl);
-    }
     const key = ids.join('|');
     if (key === lastKeyRef.current) return;
     const prevSet = islandSetRef.current;
@@ -271,23 +256,12 @@ const DomIslandsInner = memo(function DomIslandsInner({
 
       /* ---- 岛可见性：新挂载分批显示（防瞬时重绘尖峰） ---- */
       if (engine) {
-        // 单一样式原则：整个缩放手势中每个节点保持同一样式
-        // （编辑器保持编辑器、卡片保持卡片，随容器 transform 平滑缩放）；
-        // 表示形式的升级/降级只发生在静止 250ms 后跨过可读门槛时，
-        // 且卡片已是等比微缩复刻，观感连续
-        const mountSet = islandSetRef.current;
-        const zoom = engine.getViewport().zoom;
-        const gate = gateRef.current;
-        const passesGate = (id: string): boolean => {
-          const rn = modelRef.current?.byId.get(id);
-          if (!rn) return false;
-          return rn.w * zoom >= gate.w && rn.h * zoom >= gate.h;
-        };
+        // 单一表示：已挂载即显示（无门槛、无运动期隐藏）
         const desired = new Set<string>();
-        for (const id of mountSet) {
+        for (const id of islandSetRef.current) {
           if (!wrapperRefs.current.has(id)) continue;
           if (pendingRemoveSetRef.current.has(id)) continue;
-          if (passesGate(id) || selectedSet.current.has(id)) desired.add(id);
+          desired.add(id);
         }
         const shown = shownSetRef.current;
         let changed = false;
@@ -318,45 +292,6 @@ const DomIslandsInner = memo(function DomIslandsInner({
           emitIslandVisibilityChange();
         }
 
-        /* ---- FPS 滞回自适应门槛：吃不住就升门槛回退卡片，吃得消就降回基准 ---- */
-        const nowMs = performance.now();
-        if (nowMs - lastGateEvalRef.current > 1000) {
-          lastGateEvalRef.current = nowMs;
-          const movingNow = nowMs - lastCameraMoveRef.current < CAMERA_MOVING_MS;
-          const fps = engine.getStats?.()?.fps ?? 0;
-          const shownCount = shown.size;
-          if (!movingNow && nowMs > gateCooldownUntilRef.current && fps > 0) {
-            if (fps < 25 && shownCount > 12) {
-              lowFpsStreakRef.current += 1;
-              highFpsStreakRef.current = 0;
-            } else if (fps >= 50 && gateRef.current.w > SHOW_GATE_BASE_W) {
-              highFpsStreakRef.current += 1;
-              lowFpsStreakRef.current = 0;
-            } else {
-              lowFpsStreakRef.current = 0;
-              highFpsStreakRef.current = 0;
-            }
-            if (lowFpsStreakRef.current >= 3) {
-              gateRef.current = {
-                w: Math.min(SHOW_GATE_MAX_W, gateRef.current.w * 1.5),
-                h: Math.min(SHOW_GATE_MAX_H, gateRef.current.h * 1.5),
-              };
-              gateCooldownUntilRef.current = nowMs + 5000;
-              lowFpsStreakRef.current = 0;
-              onGateChange?.(Math.round(gateRef.current.w));
-            } else if (highFpsStreakRef.current >= 5) {
-              gateRef.current = {
-                w: Math.max(SHOW_GATE_BASE_W, gateRef.current.w / 1.25),
-                h: Math.max(SHOW_GATE_BASE_H, gateRef.current.h / 1.25),
-              };
-              gateCooldownUntilRef.current = nowMs + 5000;
-              highFpsStreakRef.current = 0;
-              onGateChange?.(Math.round(gateRef.current.w));
-            }
-          }
-        }
-
-        /* 挂载/卸载均由空闲回调调度（见 idle 循环），rAF 只管可见性 */
       }
 
       for (const [id, el] of wrapperRefs.current) {
@@ -414,16 +349,17 @@ const DomIslandsInner = memo(function DomIslandsInner({
     const step = () => {
       if (cancelled) return;
       const moving = performance.now() - lastCameraMoveRef.current < CAMERA_MOVING_MS;
-      if (!moving) {
-        if (pendingAddRef.current.length > 0) {
+      if (pendingAddRef.current.length > 0) {
+        const batch = moving ? 2 : 8;
+        for (let k = 0; k < batch && pendingAddRef.current.length > 0; k++) {
           const id = pendingAddRef.current.shift() as string;
           if (!mountedSetRef.current.has(id) && islandSetRef.current.has(id)) {
-            // 预热画布图片缓存：平移/缩放切回卡片时立即有图，不再灰占位
-            const rn = modelRef.current?.byId.get(id);
-            prefetchImage(rn?.previewUrl ?? rn?.imageUrl);
             setIslandIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
           }
-        } else if (pendingRemoveRef.current.length > 0) {
+        }
+      }
+      if (!moving && pendingAddRef.current.length === 0 && pendingRemoveRef.current.length > 0) {
+        if (true) {
           const id = pendingRemoveRef.current.shift() as string;
           pendingRemoveSetRef.current.delete(id);
           if (mountedSetRef.current.has(id) && !islandSetRef.current.has(id)) {
@@ -605,6 +541,7 @@ const IslandNode = memo(function IslandNode({
         top: rendered.y,
         width: rendered.w,
         minHeight: rendered.h,
+        cursor: 'move',
         display: 'none',
         // 布局/样式隔离：岛内变化不向外传播失效，降低主线程布局成本
         contain: 'layout style',

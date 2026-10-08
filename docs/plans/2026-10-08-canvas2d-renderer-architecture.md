@@ -36,12 +36,14 @@ domain/
 
 - **文档模型与渲染模型分离**：`canvasStore`（zustand）持有 nodes/edges；
   `buildSceneModel` 仅在引用变化时重建扁平渲染结构；拖拽等每帧手势不触碰 store。
-- **节点编辑零重写 + 画布内联（DOM 岛混合渲染）**：原节点编辑组件（nodes/、
-  SelectedNodeOverlay、NodeActionToolbar 等约 1.5 万行业务逻辑）通过 `nodeHostApi`
-  宿主 API 运行。视口内节点以 DOM 岛形式内嵌原版组件（与旧版画布内编辑一致，
-  无右侧检视面板）：单层 world 容器跟随相机 transform，岛内指针按 nodrag 约定
-  路由，尺寸经 ResizeObserver 回写 store；缩小到极端全览或超出上限（60）时
-  回退画布卡片，选中节点始终入岛。NodeInspector 仅作为岛层整体异常的兜底。
+- **节点编辑零重写 + 单一表示原则（DOM 岛全量挂载）**：原节点编辑组件
+  （nodes/、SelectedNodeOverlay、NodeActionToolbar 等约 1.5 万行业务逻辑）
+  通过 `nodeHostApi` 宿主 API 运行。**任何缩放下节点都是原版编辑器组件的
+  等比缩放**（与旧版 React Flow 行为完全一致，无第二种表示、无灰色占位）：
+  单层 world 容器跟随相机 transform；岛内指针按 nodrag 约定路由；尺寸经
+  ResizeObserver 回写 store；项目打开后经 requestIdleCallback 分批全量挂载
+  （上限 600，与旧版全量 DOM 同级）。画布层只负责边/流光/小地图/选区框/
+  参考线等"线"元素。NodeInspector 仅作为岛层整体异常的兜底。
 - **数据语义内部化**：`graphMutations` 逐行对齐历史数据层语义（含 `xy-edge__` 边 id
   约定——该前缀已随项目文件持久化，属数据格式兼容约定，不可变更）。
 
@@ -97,7 +99,8 @@ rightPending），经 `EngineHost` 回调在手势边界一次性提交：
 
 ## 5. 已知差异与约束
 
-- DOM 岛同屏上限 60 个（选中豁免）；极端全览（zoom < 0.2）仅挂载选中节点；
+- DOM 岛全量挂载（上限 600）：性能包络与旧版 React Flow 同级
+  （百节点级流畅；千节点级同旧版一样吃力，属已知边界）；
 - **DOM 岛常开**（用户决策：视觉一致性优先，与旧版 RF 体验对齐）：任意缩放
   下视口内节点保持真实组件形态，不做"运动期变卡片"的切换；minZoom=0.05
   仅极端全览保护，cap=200 仅极端规模保护；
