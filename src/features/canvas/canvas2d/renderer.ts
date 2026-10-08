@@ -134,6 +134,22 @@ const LOD0_ZOOM = 0.28;
 const LOD1_ZOOM = 0.75;
 const ORIGINAL_ZOOM = 1.2; // 与 imageData.shouldUseOriginalImageByZoom 保持一致
 
+const KIND_LABEL: Record<string, string> = {
+  image: '图片',
+  video: '视频',
+  audio: '音频',
+  text: '文本',
+  json: 'JSON',
+  ai: 'AI 文本',
+  storyboardSplit: '故事板',
+  storyboardGen: '故事板生成',
+  panorama: '全景',
+  blueprint: '导演台',
+  tag: '标签',
+  tagGroup: '标签组',
+  group: '分组',
+};
+
 const GLYPH: Record<string, string> = {
   image: '▣',
   video: '▶',
@@ -478,22 +494,33 @@ function drawMedia(
     ctx.restore();
     calls += 2;
   } else {
-    // 占位：类型色淡染 + 居中字形
+    // 统一空态：与卡片同底色（不加任何淡染），弱化字形 + 类型名，
+    // 保证全画布只有一种卡片底色（用户要求：不要灰色第二种观感）
     ctx.save();
     rr(ctx, areaX, areaY, areaW, areaH, radius);
     ctx.clip();
-    ctx.fillStyle = hexToRgba(n.accent.startsWith('#') ? n.accent : '#38bdf8', 0.1);
-    ctx.fillRect(areaX, areaY, areaW, areaH);
     const glyph = GLYPH[n.kind] || '▣';
-    const fs = Math.min(areaW, areaH) * 0.34;
+    const fs = Math.min(areaW, areaH) * 0.3;
     if (fs > 6 / opts.cam.zoom) {
       ctx.fillStyle = P.placeholderText;
       ctx.font = `${fs}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(url ? glyph : glyph, areaX + areaW / 2, areaY + areaH / 2);
+      ctx.fillText(glyph, areaX + areaW / 2, areaY + areaH / 2 - fs * 0.35);
       calls++;
     }
+    const labelFs = Math.max(5, 10 * opts.cam.zoom) / opts.cam.zoom;
+    ctx.fillStyle = P.mutedText;
+    ctx.font = `${labelFs}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(
+      KIND_LABEL[n.kind] || '',
+      areaX + areaW / 2,
+      areaY + areaH / 2 + fs * 0.55,
+    );
+    ctx.textAlign = 'left';
+    calls++;
     ctx.restore();
     calls++;
   }

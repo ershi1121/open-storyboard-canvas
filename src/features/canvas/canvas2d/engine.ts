@@ -1193,8 +1193,19 @@ export class Canvas2DEngine {
       Math.hypot(sx - this.lastUpSx, sy - this.lastUpSy) < DBLCLICK_PX &&
       hitId === this.lastUpHit
     ) {
-      if (hitId) this.host.onNodeDoubleClick(hitId);
-      else this.host.onCanvasDoubleClick({ sx, sy, world: { x: w.x, y: w.y } });
+      if (hitId) {
+        this.host.onNodeDoubleClick(hitId);
+      } else {
+        const edgeId = this.findEdgeAt(w.x, w.y);
+        if (edgeId) {
+          // 旧版语义：双击连线 = 删除该连线
+          this.selectedEdgeId = null;
+          this.dirty = true;
+          this.host.onEdgeDelete(edgeId);
+        } else {
+          this.host.onCanvasDoubleClick({ sx, sy, world: { x: w.x, y: w.y } });
+        }
+      }
       this.lastUpTime = 0;
     } else {
       this.lastUpTime = now;

@@ -63,6 +63,7 @@ function makeStubEngine() {
         getViewSize: () => ({ w: 1200, h: 800 }),
         addCameraListener: () => () => {},
         getDragOffset: () => null,
+        getStats: () => ({ fps: 60, frameMs: 1, visible: 0, edgesDrawn: 0, calls: 0, zoom: 1, total: 0 }),
         setDomIslands: (ids: ReadonlySet<string>) => {
           islands.current = ids;
         },

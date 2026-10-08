@@ -113,6 +113,7 @@ export function Canvas2DView() {
   const [stats, setStats] = useState<EngineStats | null>(null);
   const [diagOpen, setDiagOpen] = useState(false);
   const [islandCount, setIslandCount] = useState(0);
+  const [islandGateW, setIslandGateW] = useState(64);
   const [rasterBackend] = useState(() => probeRasterBackend());
   const [nodeMenu, setNodeMenu] = useState<NodeMenuState | null>(null);
   const [contextMenu, setContextMenu] = useState<NodeContextMenuState | null>(null);
@@ -1053,6 +1054,7 @@ export function Canvas2DView() {
         selectedIds={selectedIds}
         onIslandsChange={handleIslandsChange}
         onFallback={handleIslandsFallback}
+        onGateChange={setIslandGateW}
       />
 
       {/* 状态 HUD */}
@@ -1119,6 +1121,7 @@ export function Canvas2DView() {
           <div>slowFrames(&gt;48ms): {((stats as (EngineStats & { slowFrames?: number }) | null)?.slowFrames) ?? 0}</div>
           <div>nodes: {stats?.total ?? 0} / visible: {stats?.visible ?? 0} / edges: {stats?.edgesDrawn ?? 0}</div>
           <div>domIslands: {islandCount} / zoom: {stats ? stats.zoom.toFixed(2) : '--'}</div>
+          <div>islandGate: {islandGateW}px{islandGateW > 64 ? '（已自适应上调）' : '（基准）'}</div>
         </div>
       )}
 
