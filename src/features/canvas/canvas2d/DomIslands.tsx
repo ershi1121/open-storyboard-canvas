@@ -13,6 +13,10 @@ import { selectDomIslands, type IslandViewport } from './domIslands';
 const SUSPEND_RESUME_MS = 220;
 /** 恢复期每帧放行的岛数量（摊薄重绘成本） */
 const RESUME_BATCH_PER_FRAME = 8;
+/** 调度器每帧新增挂载上限（摊薄"停止缩放瞬间"的集中挂载成本） */
+const MOUNT_BATCH_PER_FRAME = 2;
+/** 调度器每帧卸载上限 */
+const UNMOUNT_BATCH_PER_FRAME = 6;
 import type { RenderNode, SceneModel } from './sceneModel';
 
 /**
@@ -99,6 +103,10 @@ const DomIslandsInner = memo(function DomIslandsInner({
   const islandSetRef = useRef<ReadonlySet<string>>(new Set<string>());
   /** 当前实际可见（display:''）的岛集合，与 engine.domIslands 严格同步 */
   const shownSetRef = useRef<Set<string>>(new Set<string>());
+  /** 目标岛有序列表（选中优先、距离排序）与集合镜像 */
+  const targetOrderRef = useRef<string[]>([]);
+  /** 已挂载（React 状态）镜像 */
+  const mountedSetRef = useRef<Set<string>>(new Set<string>());
 
   /* ---------- world 容器跟随相机 ---------- */
   const applyWorldTransform = useCallback(() => {
@@ -129,6 +137,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
       viewH: size.h,
     };
     const ids = selectDomIslands(model.nodes, selectedSet.current, viewport);
+    targetOrderRef.current = ids;
     const key = ids.join('|');
     if (key === lastKeyRef.current) return;
     const prevSet = islandSetRef.current;
@@ -140,13 +149,8 @@ const DomIslandsInner = memo(function DomIslandsInner({
       console.warn(`[canvas2d] 岛成员变化 +${added}/-${removed}（总计 ${ids.length}）`);
     }
     lastKeyRef.current = key;
-    if (suspendedRef.current) {
-      // 挂起期间冻结 React 成员（避免缩放中挂载/卸载重型组件）
-      islandSetRef.current = new Set(ids);
-      return;
-    }
+    // 成员变化只更新目标；实际挂载/卸载由 rAF 调度器分批执行
     islandSetRef.current = new Set(ids);
-    setIslandIds(ids);
   }, [engineRef, model]);
 
   const recomputeRef = useRef(recompute);
@@ -164,7 +168,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
   }, []);
 
   useEffect(() => {
-    islandSetRef.current = new Set(islandIds);
+    mountedSetRef.current = new Set(islandIds);
     onIslandsChange(new Set(islandIds));
   }, [islandIds, onIslandsChange]);
 
@@ -238,6 +242,35 @@ const DomIslandsInner = memo(function DomIslandsInner({
           }
         }
         if (changed) engine.setDomIslands(new Set(shown));
+
+        /* ---- 分批挂载/卸载：把停止缩放瞬间的集中成本摊到多帧 ---- */
+        if (!suspendedRef.current) {
+          const target = islandSetRef.current;
+          const mounted = mountedSetRef.current;
+          const removeChunk: string[] = [];
+          for (const id of mounted) {
+            if (!target.has(id) && removeChunk.length < UNMOUNT_BATCH_PER_FRAME) {
+              removeChunk.push(id);
+            }
+          }
+          const addChunk: string[] = [];
+          if (removeChunk.length === 0) {
+            for (const id of targetOrderRef.current) {
+              if (addChunk.length >= MOUNT_BATCH_PER_FRAME) break;
+              if (!mounted.has(id)) addChunk.push(id);
+            }
+          }
+          if (removeChunk.length > 0 || addChunk.length > 0) {
+            const removeSet = new Set(removeChunk);
+            const addSet = new Set(addChunk);
+            setIslandIds((prev) => {
+              const next = new Set(prev);
+              for (const id of removeSet) next.delete(id);
+              for (const id of addSet) next.add(id);
+              return [...next];
+            });
+          }
+        }
       }
 
       const off = engineRef.current?.getDragOffset() ?? null;
