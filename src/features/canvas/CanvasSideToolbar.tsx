@@ -15,6 +15,7 @@ import { CANVAS_NODE_TYPES, type CanvasNodeData, type CanvasNodeType } from '@/f
 import { useCanvasStore } from '@/stores/canvasStore';
 import { ExcelImportDialog, type ExcelImportSelection } from '@/features/canvas/ui/ExcelImportDialog';
 import { UiModal, UiInput, UiButton } from '@/components/ui';
+import { TidyMenu, type ArrangeSort } from '@/features/canvas/shared/components/TidyMenu';
 
 type SideToolbarItem = {
   type: CanvasNodeType;
@@ -222,6 +223,27 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
     }
   }, [createType, handleConfirmCreateTag, handleConfirmCreateTagGroup]);
 
+  const arrangeNodesToGrid = useCanvasStore((s) => s.arrangeNodesToGrid);
+
+  // 整理全部图片：把画布上所有图片节点按名称/位置排成整齐网格
+  const handleArrangeAllImages = useCallback(
+    (sortBy: ArrangeSort) => {
+      const ids = nodes
+        .filter(
+          (node) =>
+            (node.type === CANVAS_NODE_TYPES.upload ||
+              node.type === CANVAS_NODE_TYPES.imageEdit ||
+              node.type === CANVAS_NODE_TYPES.exportImage) &&
+            Boolean((node.data as Record<string, unknown>).imageUrl),
+        )
+        .map((node) => node.id);
+      if (ids.length > 0) {
+        arrangeNodesToGrid(ids, { sortBy });
+      }
+    },
+    [nodes, arrangeNodesToGrid],
+  );
+
   const handlePickFile = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) setImportFile(file);
@@ -304,6 +326,13 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
           <FileSpreadsheet className="h-5 w-5" />
           <span>{t('canvasToolbar.importExcel', '导入Excel')}</span>
         </button>
+        <TidyMenu
+          label="整理全部"
+          onPick={handleArrangeAllImages}
+          triggerClassName={RAIL_BUTTON_CLASS}
+          menuClassName="absolute left-full top-0 z-[13000] ml-1 overflow-hidden rounded-lg border border-[var(--canvas-node-border)] bg-[var(--canvas-node-menu-bg)] py-1 text-xs text-text-dark shadow-xl"
+          itemClassName="block w-full whitespace-nowrap px-3 py-1.5 text-left transition-colors hover:bg-[var(--canvas-node-menu-hover)]"
+        />
         <input
           ref={excelInputRef}
           type="file"

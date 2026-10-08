@@ -481,8 +481,19 @@ export function UiModal({
 
   return (
     <div
-      className={`fixed ${UI_CONTENT_OVERLAY_INSET_CLASS} z-50 flex items-center justify-center ${containerClassName}`}
-      onWheelCapture={(event) => event.stopPropagation()}
+      // `nowheel` is what actually keeps the wheel away from the canvas:
+      // ReactFlow's zoom filter bails out when `event.target.closest('.nowheel')`
+      // matches, so the class alone is enough to contain scrolling here.
+      //
+      // Do NOT move the wheel guard back into the capture phase. React's
+      // synthetic `stopPropagation()` calls the *native* `event.stopPropagation()`,
+      // and the capture-phase walk happens at React's root container — i.e. above
+      // every child. Any child that listens natively (`addEventListener('wheel')`,
+      // which is the only way to get a non-passive listener for zoom-to-cursor)
+      // would never see the event at all. Stopping it on the bubble phase still
+      // contains the event to this overlay, but lets descendants handle it first.
+      className={`nowheel fixed ${UI_CONTENT_OVERLAY_INSET_CLASS} z-50 flex items-center justify-center ${containerClassName}`}
+      onWheel={(event) => event.stopPropagation()}
       onTouchMoveCapture={(event) => event.stopPropagation()}
     >
       <div

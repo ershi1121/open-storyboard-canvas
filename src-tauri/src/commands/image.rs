@@ -2915,6 +2915,55 @@ pub async fn rename_local_media_files(
     })
 }
 
+/// 下载图片时按用户所选目标格式重新编码，让文件真实内容与后缀一致。
+/// `desired_ext` 为想要的格式（png / jpg / webp / gif），未识别一律 png；
+/// 解码或编码失败则退回原始字节 + 源后缀，保证下载不中断。
+fn normalize_download_bytes_to_format(
+    bytes: Vec<u8>,
+    desired_ext: &str,
+    source_extension: &str,
+) -> (Vec<u8>, String) {
+    let target_ext = canonical_download_ext(desired_ext);
+    let target_format = image_format_from_extension(target_ext);
+    match image::load_from_memory(&bytes)
+        .map_err(|e| format!("decode failed: {e}"))
+        .and_then(|img| encode_dynamic_image_to_format(&img, target_format))
+    {
+        Ok(out_bytes) => (out_bytes, target_ext.to_string()),
+        Err(_) => (bytes, normalize_extension(source_extension)),
+    }
+}
+
+/// 下载允许的目标扩展名 → 归一化后的规范写法（未识别一律 png）。
+fn canonical_download_ext(ext: &str) -> &'static str {
+    match ext.trim().to_ascii_lowercase().as_str() {
+        "jpg" | "jpeg" => "jpg",
+        "webp" => "webp",
+        "gif" => "gif",
+        "png" | _ => "png",
+    }
+}
+
+fn image_format_from_extension(ext: &str) -> image::ImageFormat {
+    match ext {
+        "jpg" => image::ImageFormat::Jpeg,
+        "webp" => image::ImageFormat::WebP,
+        "gif" => image::ImageFormat::Gif,
+        _ => image::ImageFormat::Png,
+    }
+}
+
+fn encode_dynamic_image_to_format(
+    image: &DynamicImage,
+    format: image::ImageFormat,
+) -> Result<Vec<u8>, String> {
+    let mut buffer = Cursor::new(Vec::new());
+    image
+        .write_to(&mut buffer, format)
+        .map_err(|e| format!("Failed to encode image as {:?}: {}", format, e))?;
+    Ok(buffer.into_inner())
+}
+
 #[tauri::command]
 pub async fn save_image_source_to_downloads(
     source: String,
@@ -2926,6 +2975,7 @@ pub async fn save_image_source_to_downloads(
     }
 
     let (bytes, extension) = resolve_source_bytes(trimmed).await?;
+    let (out_bytes, out_ext) = normalize_download_bytes_to_format(bytes, "png", &extension);
     let user_dirs = UserDirs::new().ok_or_else(|| "Failed to resolve user dirs".to_string())?;
     let downloads_dir = user_dirs
         .download_dir()
@@ -2946,12 +2996,8 @@ pub async fn save_image_source_to_downloads(
         stem
     };
 
-    let output_path = ensure_unique_path(downloads_dir.join(format!(
-        "{}.{}",
-        default_stem,
-        normalize_extension(&extension)
-    )));
-    std::fs::write(&output_path, bytes)
+    let output_path = ensure_unique_path(downloads_dir.join(format!("{}.{}", default_stem, out_ext)));
+    std::fs::write(&output_path, out_bytes)
         .map_err(|e| format!("Failed to save image into downloads: {}", e))?;
 
     Ok(output_path.to_string_lossy().to_string())
@@ -2974,14 +3020,18 @@ pub async fn save_image_source_to_path(
 
     let (bytes, extension) = resolve_source_bytes(trimmed_source).await?;
     let raw_path = PathBuf::from(normalize_user_selected_path(trimmed_target));
-    let output_path = ensure_output_path_with_extension(&raw_path, &extension);
+    // 目标格式取自用户在保存框里选的格式过滤器（体现在文件扩展名上），默认 PNG。
+    let desired_ext = raw_path.extension().and_then(|e| e.to_str()).unwrap_or("png");
+    let (out_bytes, out_ext) = normalize_download_bytes_to_format(bytes, desired_ext, &extension);
+    // 后缀强制与真实内容一致，避免名不副实。
+    let output_path = raw_path.with_extension(&out_ext);
 
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create output dir: {}", e))?;
     }
 
-    std::fs::write(&output_path, bytes)
+    std::fs::write(&output_path, out_bytes)
         .map_err(|e| format!("Failed to save image to target path: {}", e))?;
 
     Ok(output_path.to_string_lossy().to_string())
@@ -3004,6 +3054,7 @@ pub async fn save_image_source_to_directory(
     }
 
     let (bytes, extension) = resolve_source_bytes(trimmed_source).await?;
+    let (out_bytes, out_ext) = normalize_download_bytes_to_format(bytes, "png", &extension);
     let dir_path = PathBuf::from(normalize_user_selected_path(trimmed_dir));
     std::fs::create_dir_all(&dir_path)
         .map_err(|e| format!("Failed to create target dir: {}", e))?;
@@ -3019,12 +3070,8 @@ pub async fn save_image_source_to_directory(
         stem
     };
 
-    let output_path = ensure_unique_path(dir_path.join(format!(
-        "{}.{}",
-        default_stem,
-        normalize_extension(&extension)
-    )));
-    std::fs::write(&output_path, bytes)
+    let output_path = ensure_unique_path(dir_path.join(format!("{}.{}", default_stem, out_ext)));
+    std::fs::write(&output_path, out_bytes)
         .map_err(|e| format!("Failed to save image to target directory: {}", e))?;
 
     Ok(output_path.to_string_lossy().to_string())

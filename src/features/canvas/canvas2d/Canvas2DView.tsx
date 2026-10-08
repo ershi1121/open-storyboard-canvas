@@ -822,6 +822,57 @@ export function Canvas2DView() {
     schedulePersistRef.current(0);
   }, [selectedIds]);
 
+  const handleBatchArrange = useCallback(
+    (sortBy: 'name' | 'position') => {
+      useCanvasStore.getState().arrangeNodesToGrid(selectedIds, { sortBy });
+      schedulePersistRef.current(0);
+    },
+    [selectedIds],
+  );
+
+  // 框选整理并打组：把选中的节点（含其所在整组）先释放成顶层，排整齐，再打成一个新组
+  const handleTidyAndGroup = useCallback(
+    (sortBy: 'name' | 'position') => {
+      const state = useCanvasStore.getState();
+      const nodeById = new Map(state.nodes.map((node) => [node.id, node] as const));
+      const groupsToRelease = new Set<string>();
+      const working = new Set<string>();
+      const addGroupChildren = (groupId: string) => {
+        for (const node of state.nodes) {
+          if (node.parentId === groupId) working.add(node.id);
+        }
+      };
+      for (const id of selectedIds) {
+        const node = nodeById.get(id);
+        if (!node) continue;
+        if (node.type === CANVAS_NODE_TYPES.group) {
+          groupsToRelease.add(id);
+          addGroupChildren(id);
+        } else if (node.parentId) {
+          if (!groupsToRelease.has(node.parentId)) {
+            groupsToRelease.add(node.parentId);
+            addGroupChildren(node.parentId);
+          }
+          working.add(id);
+        } else {
+          working.add(id);
+        }
+      }
+      // 先拆组：子节点变顶层绝对坐标，才能被 dagre 重新排布
+      for (const groupId of groupsToRelease) {
+        state.ungroupNode(groupId);
+      }
+      const workingIds = [...working];
+      if (workingIds.length === 0) return;
+      useCanvasStore.getState().arrangeNodesToGrid(workingIds, { sortBy });
+      if (workingIds.length >= 2) {
+        useCanvasStore.getState().groupNodes(workingIds);
+      }
+      schedulePersistRef.current(0);
+    },
+    [selectedIds],
+  );
+
   /**
    * 批量触发：检视面板中已挂载的节点直接发事件；其余可触发节点先经
    * HiddenTriggerHost 隐藏挂载（补齐事件订阅）再统一发布。
@@ -1064,6 +1115,8 @@ export function Canvas2DView() {
         onUngroup={handleBatchUngroup}
         onTrigger={handleBatchTrigger}
         onDelete={handleBatchDelete}
+        onArrange={handleBatchArrange}
+        onTidyAndGroup={handleTidyAndGroup}
       />
 
       {/* 批量触发隐藏宿主：为未挂载的可触发节点补齐事件订阅 */}
@@ -1239,6 +1292,8 @@ function BatchToolbarLayer({
   onUngroup,
   onTrigger,
   onDelete,
+  onArrange,
+  onTidyAndGroup,
 }: {
   engineRef: { current: Canvas2DEngine | null };
   containerRef: { current: HTMLDivElement | null };
@@ -1248,6 +1303,8 @@ function BatchToolbarLayer({
   onUngroup: () => void;
   onTrigger: () => void;
   onDelete: () => void;
+  onArrange: (sortBy: 'name' | 'position') => void;
+  onTidyAndGroup: (sortBy: 'name' | 'position') => void;
 }) {
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
 
@@ -1294,6 +1351,8 @@ function BatchToolbarLayer({
       onUngroup={onUngroup}
       onTrigger={onTrigger}
       onDelete={onDelete}
+      onArrange={onArrange}
+      onTidyAndGroup={onTidyAndGroup}
     />
   );
 }

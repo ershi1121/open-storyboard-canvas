@@ -47,8 +47,22 @@ export interface ToolExecutionContext {
   ) => Promise<ToolProcessorResult>;
 }
 
-export type ToolIconKey = 'crop' | 'annotate' | 'split' | 'hd' | 'outpaint' | 'inpaint' | 'erase' | 'matting';
-export type ToolEditorKind = 'form' | 'crop' | 'annotate' | 'split' | 'confirm' | 'mask';
+export type ToolIconKey =
+  | 'crop'
+  | 'annotate'
+  | 'split'
+  | 'hd'
+  | 'outpaint'
+  | 'inpaint'
+  | 'erase'
+  | 'matting';
+export type ToolEditorKind =
+  | 'form'
+  | 'crop'
+  | 'annotate'
+  | 'split'
+  | 'confirm'
+  | 'mask';
 
 export interface CanvasToolPlugin {
   type: NodeToolType;

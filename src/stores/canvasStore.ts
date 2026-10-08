@@ -5,6 +5,7 @@ import {
   applyEdgeChangesInternal as applyEdgeChanges,
   applyNodeChangesInternal as applyNodeChanges,
 } from '@/features/canvas/domain/graphMutations';
+import { layoutGraphWithDagre } from '@/features/canvas/shared/utils/arrangeOrder';
 import {
   CANVAS_NODE_TYPES,
   DEFAULT_ASPECT_RATIO,
@@ -186,6 +187,11 @@ interface CanvasState {
     sourcePatch?: Partial<BlueprintNodeData>
   ) => void;
   updateNodePosition: (nodeId: string, position: { x: number; y: number }) => void;
+  /** 把给定节点排成整齐网格；sortBy: 'name'＝按文件名自然序，'position'＝按现有位置。 */
+  arrangeNodesToGrid: (
+    nodeIds: string[],
+    opts?: { sortBy?: 'name' | 'position'; cols?: number }
+  ) => void;
   updateStoryboardFrame: (
     nodeId: string,
     frameId: string,
@@ -754,6 +760,52 @@ function getNodeSize(node: CanvasNode): { width: number; height: number } {
           ? node.height
           : 200,
   };
+}
+
+/**
+ * 落点避让：新节点本想放在 preferred，但如果和已有节点重叠，就按步长往外找最近的空位。
+ * 用于把图片拖进画布时避免「新的盖住旧的」。拖入前还不知道最终大小，用默认节点尺寸估算。
+ */
+export function resolveFreeNodePosition(
+  nodes: CanvasNode[],
+  preferred: { x: number; y: number },
+  width = DEFAULT_NODE_WIDTH,
+  height = DEFAULT_NODE_WIDTH
+): { x: number; y: number } {
+  const margin = 8;
+  const collides = (x: number, y: number) =>
+    nodes.some((node) => {
+      const size = getNodeSize(node);
+      return (
+        x < node.position.x + size.width + margin &&
+        x + width + margin > node.position.x &&
+        y < node.position.y + size.height + margin &&
+        y + height + margin > node.position.y
+      );
+    });
+
+  if (!collides(preferred.x, preferred.y)) {
+    return preferred;
+  }
+
+  const stepX = Math.max(width + 12, 110);
+  const stepY = Math.max(Math.round(height * 0.35), 54);
+  for (let ring = 1; ring <= 40; ring += 1) {
+    const candidates = [
+      { x: preferred.x, y: preferred.y + stepY * ring },
+      { x: preferred.x + stepX * ring, y: preferred.y },
+      { x: preferred.x + stepX * ring, y: preferred.y + stepY * ring },
+      { x: preferred.x - stepX * ring, y: preferred.y + stepY * ring },
+      { x: preferred.x + stepX * ring, y: preferred.y - stepY * ring },
+      { x: preferred.x - stepX * ring, y: preferred.y - stepY * ring },
+    ];
+    for (const candidate of candidates) {
+      if (!collides(candidate.x, candidate.y)) {
+        return candidate;
+      }
+    }
+  }
+  return { x: preferred.x + stepX, y: preferred.y + stepY };
 }
 
 function isImageAutoResizableType(type: CanvasNodeType): boolean {
@@ -1670,6 +1722,205 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       dragHistorySnapshot: null,
     });
     return node.id;
+  },
+  arrangeNodesToGrid: (nodeIds, opts) => {
+    const state = get();
+    const nodeMap = new Map(state.nodes.map((node) => [node.id, node] as const));
+    const childrenByParent = new Map<string, CanvasNode[]>();
+    for (const node of state.nodes) {
+      if (node.parentId) {
+        const arr = childrenByParent.get(node.parentId);
+        if (arr) {
+          arr.push(node);
+        } else {
+          childrenByParent.set(node.parentId, [node]);
+        }
+      }
+    }
+
+    // 要排布的"叶子"集合：组容器本身不排（它只是框），只排顶层节点和组内子节点。
+    const leafIds = new Set<string>();
+    const addLeafOf = (id: string) => {
+      const node = nodeMap.get(id);
+      if (!node) {
+        return;
+      }
+      if (node.type === CANVAS_NODE_TYPES.group) {
+        for (const child of childrenByParent.get(id) ?? []) {
+          leafIds.add(child.id);
+        }
+      } else if (node.parentId) {
+        // 子节点：把它整组的兄弟都纳入，保证组完整、一起被整理
+        leafIds.add(id);
+        for (const sibling of childrenByParent.get(node.parentId) ?? []) {
+          leafIds.add(sibling.id);
+        }
+      } else {
+        leafIds.add(id);
+      }
+    };
+
+    // 沿连线扩成整连通簇（关联节点一起整理），并顺带把选中组/子节点的整组拉进来。
+    const adjacency = new Map<string, Set<string>>();
+    for (const node of state.nodes) {
+      adjacency.set(node.id, new Set());
+    }
+    for (const edge of state.edges) {
+      if (edge.source === edge.target) {
+        continue;
+      }
+      adjacency.get(edge.source)?.add(edge.target);
+      adjacency.get(edge.target)?.add(edge.source);
+    }
+    const visited = new Set<string>();
+    const stack = [...nodeIds];
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (visited.has(id) || !adjacency.has(id)) {
+        continue;
+      }
+      visited.add(id);
+      addLeafOf(id);
+      const node = nodeMap.get(id);
+      if (node?.type === CANVAS_NODE_TYPES.group) {
+        for (const child of childrenByParent.get(id) ?? []) {
+          if (!visited.has(child.id)) {
+            stack.push(child.id);
+          }
+        }
+      } else if (node?.parentId && !visited.has(node.parentId)) {
+        stack.push(node.parentId);
+      }
+      for (const neighbor of adjacency.get(id)!) {
+        if (!visited.has(neighbor)) {
+          stack.push(neighbor);
+        }
+      }
+    }
+
+    const leafNodes = [...leafIds]
+      .map((id) => nodeMap.get(id))
+      .filter((node): node is CanvasNode => Boolean(node));
+    if (leafNodes.length === 0) {
+      return;
+    }
+
+    const sortBy = opts?.sortBy ?? 'name';
+    const sortName = (node: CanvasNode): string => {
+      const data = node.data as Record<string, unknown>;
+      const sourceFileName =
+        typeof data.sourceFileName === 'string' ? data.sourceFileName.trim() : '';
+      const displayName = typeof data.displayName === 'string' ? data.displayName.trim() : '';
+      return sourceFileName || displayName || '';
+    };
+    const nameById = new Map(leafNodes.map((node) => [node.id, sortName(node)] as const));
+    const sizeById = new Map(leafNodes.map((node) => [node.id, getNodeSize(node)] as const));
+
+    // 用绝对坐标参与布局（组内子节点的相对坐标 → 绝对），锚定在最小绝对位置。
+    const layoutInput = leafNodes.map((node) => ({
+      id: node.id,
+      position: resolveAbsolutePosition(node, nodeMap),
+    }));
+    let anchorX = Number.POSITIVE_INFINITY;
+    let anchorY = Number.POSITIVE_INFINITY;
+    for (const item of layoutInput) {
+      anchorX = Math.min(anchorX, item.position.x);
+      anchorY = Math.min(anchorY, item.position.y);
+    }
+    if (!Number.isFinite(anchorX)) {
+      anchorX = 0;
+      anchorY = 0;
+    }
+    const newAbs = layoutGraphWithDagre(layoutInput, state.edges, {
+      sortBy,
+      nameOf: (id) => nameById.get(id) ?? '',
+      sizeOf: (id) => sizeById.get(id) ?? { width: DEFAULT_NODE_WIDTH, height: 200 },
+      nodeGap: 40,
+      rankGap: 100,
+      originX: anchorX,
+      originY: anchorY,
+    });
+
+    const updates = new Map<string, Partial<CanvasNode>>();
+    // 顶层叶子：直接写绝对新坐标。
+    for (const node of leafNodes) {
+      if (!node.parentId) {
+        const point = newAbs.get(node.id);
+        if (point) {
+          updates.set(node.id, { position: { x: Math.round(point.x), y: Math.round(point.y) } });
+        }
+      }
+    }
+    // 组内子节点：按新坐标重画组框（style 尺寸 + position），子节点写相对坐标。
+    const groupsInvolved = new Map<string, CanvasNode[]>();
+    for (const node of leafNodes) {
+      if (node.parentId) {
+        const arr = groupsInvolved.get(node.parentId);
+        if (arr) {
+          arr.push(node);
+        } else {
+          groupsInvolved.set(node.parentId, [node]);
+        }
+      }
+    }
+    const SIDE = 20;
+    const TOP = 34;
+    const BOTTOM = 20;
+    for (const [groupId, kids] of groupsInvolved) {
+      const groupNode = nodeMap.get(groupId);
+      if (!groupNode) {
+        continue;
+      }
+      let minX = Number.POSITIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      for (const kid of kids) {
+        const point = newAbs.get(kid.id);
+        if (!point) {
+          continue;
+        }
+        const size = sizeById.get(kid.id) ?? { width: DEFAULT_NODE_WIDTH, height: 200 };
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x + size.width);
+        maxY = Math.max(maxY, point.y + size.height);
+      }
+      if (!Number.isFinite(minX)) {
+        continue;
+      }
+      const gx = Math.round(minX - SIDE);
+      const gy = Math.round(minY - TOP);
+      const gw = Math.max(220, Math.round(maxX - minX + SIDE * 2));
+      const gh = Math.max(140, Math.round(maxY - minY + TOP + BOTTOM));
+      updates.set(groupId, {
+        position: { x: gx, y: gy },
+        style: { ...(groupNode.style ?? {}), width: gw, height: gh },
+      });
+      for (const kid of kids) {
+        const point = newAbs.get(kid.id);
+        if (!point) {
+          continue;
+        }
+        updates.set(kid.id, {
+          position: { x: Math.round(point.x - gx), y: Math.round(point.y - gy) },
+        });
+      }
+    }
+
+    const nextNodes = state.nodes.map((node) => {
+      const patch = updates.get(node.id);
+      return patch ? { ...node, ...patch } : node;
+    });
+
+    set({
+      nodes: nextNodes,
+      history: {
+        past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+        future: [],
+      },
+      dragHistorySnapshot: null,
+    });
   },
   updateNodeData: (nodeId, data) => {
     set((state) => {

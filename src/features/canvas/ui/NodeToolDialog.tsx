@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState, useEffect, useCallback } from 'react';
+import { lazy, Suspense, useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -9,16 +9,35 @@ import {
   isExportImageNode,
   isImageEditNode,
   isUploadNode,
+  type CanvasNode,
   type NodeToolType,
 } from '@/features/canvas/domain/canvasNodes';
-import { EXPORT_RESULT_DISPLAY_NAME } from '@/features/canvas/domain/nodeDisplay';
+import {
+  EXPORT_RESULT_DISPLAY_NAME,
+  isNodeUsingDefaultDisplayName,
+  resolveNodeDisplayName,
+} from '@/features/canvas/domain/nodeDisplay';
+import { applyStripReorder } from './tool-editors/imageOrder';
+import type { BatchApplyScope } from './tool-editors/types';
 import {
   canvasEventBus,
   canvasToolProcessor,
 } from '@/features/canvas/application/canvasServices';
-import { prepareNodeImage, resolveImageDisplayUrl } from '@/features/canvas/application/imageData';
-import { readStoryboardImageMetadata } from '@/commands/image';
+import { loadImageElement, prepareNodeImage, resolveImageDisplayUrl } from '@/features/canvas/application/imageData';
+import { measureAutoCrop } from '@/features/canvas/tools/autoCrop/detect';
+import { readStoryboardImageMetadata, saveImageSourceToDirectory } from '@/commands/image';
+import { open } from '@tauri-apps/plugin-dialog';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { getToolPlugin, type ToolOptions } from '@/features/canvas/tools';
+import {
+  readBorderOptions,
+  toBorderToolOptions,
+} from '@/features/canvas/tools/border';
+import {
+  readAutoCropOptions,
+  toAutoCropToolOptions,
+} from '@/features/canvas/tools/autoCrop';
+import { stripFileExtension } from '@/features/canvas/application/generatedMediaNaming';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { UiButton, UiModal } from '@/components/ui';
 import { UI_DIALOG_TRANSITION_MS } from '@/components/ui/motion';
@@ -32,6 +51,57 @@ const AnnotateToolEditor = lazy(() =>
 );
 import { SplitStoryboardToolEditor } from './tool-editors/SplitStoryboardToolEditor';
 import { MaskToolEditor } from './tool-editors/MaskToolEditor';
+import {
+  CROP_TOOL_STATE_KEY,
+  buildCropToolStatePatch,
+  mergeToolOptions,
+  readCropToolState,
+} from '@/features/canvas/tools/border/cropToolState';
+import {
+  TEXT_LAYERS_KEY,
+  buildTextLayersPatch,
+  readTextLayers,
+} from '@/features/canvas/tools/text';
+
+/**
+ * 裁剪面板「批量套用选择条」给每张图取的名字。
+ *
+ * ⭐ 目标：从文件夹拖进来的图，就显示它**原本的文件名**（sourceFileName，如 "1.jpg"）。
+ *
+ * ⚠️ 不能直接用资产面板的 `getNodeDisplayTitle`：拖进来的上传节点会带一个**默认占位**
+ * displayName（"上传素材"），它非空 → getNodeDisplayTitle 会优先返回这个占位，把真正的
+ * 文件名挡掉（用户看到的就是一堆"上传素材"）。所以这里先判断 displayName 是不是只是
+ * 默认占位：是占位就让位给 sourceFileName；用户真改过名才尊重改名。
+ */
+function resolveStripImageName(node: CanvasNode): string {
+  const data = node.data as Record<string, unknown>;
+  const displayName = typeof data.displayName === 'string' ? data.displayName.trim() : '';
+  const sourceFileName = typeof data.sourceFileName === 'string' ? data.sourceFileName.trim() : '';
+
+  if (displayName && !isNodeUsingDefaultDisplayName(node.type, data)) {
+    return displayName;
+  }
+  if (sourceFileName) {
+    return sourceFileName;
+  }
+  return resolveNodeDisplayName(node.type, data);
+}
+
+/**
+ * 取一张「源图」自己的编号标签 —— 用它的原始文件名主干（"1.jpg" → "1"）。
+ *
+ * ⭐ 裁剪结果的序号要**跟原图一致**（原图是 1 → 结果就是 1），所以这里读 sourceFileName，
+ * 而不是选择条位置（textOrderIndex）。没有 sourceFileName 时返回 null，调用方再兜底。
+ */
+function resolveSourceNameLabel(node: CanvasNode): string | null {
+  const data = node.data as Record<string, unknown>;
+  const sourceFileName = typeof data.sourceFileName === 'string' ? data.sourceFileName.trim() : '';
+  if (!sourceFileName) {
+    return null;
+  }
+  const stem = stripFileExtension(sourceFileName);
+  return stem || null;
+}
 
 export function NodeToolDialog() {
   const { t } = useTranslation();
@@ -43,12 +113,51 @@ export function NodeToolDialog() {
   const addEdge = useCanvasStore((state) => state.addEdge);
   const findNodePosition = useCanvasStore((state) => state.findNodePosition);
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
+  const edges = useCanvasStore((state) => state.edges);
+  const downloadPresetPaths = useSettingsStore((state) => state.downloadPresetPaths);
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [options, setOptions] = useState<ToolOptions>({});
   const [isSplitImageReady, setIsSplitImageReady] = useState(true);
   const [displayToolDialog, setDisplayToolDialog] = useState(activeToolDialog);
+  // 批量套用进行中：缩略图条上的按钮要禁用。
+  const [isBatchApplying, setIsBatchApplying] = useState(false);
+  // 一键导出全部裁剪结果：进行中禁用按钮 + 结果提示。
+  const [isExportingCropResults, setIsExportingCropResults] = useState(false);
+  const [cropExportMessage, setCropExportMessage] = useState<string | null>(null);
+  /**
+   * 批量套用刚完成时的短暂反馈（套用了几张）。
+   *
+   * ⚠️ 批量套用现在**只写参数、不落图**，界面上不会有任何可见变化 ——
+   * 没有这个反馈，用户点完会以为「点了没反应」。
+   */
+  const [batchAppliedCount, setBatchAppliedCount] = useState<number | null>(null);
+  const batchAppliedTimerRef = useRef<number | null>(null);
+  // 上次写到 sourceNode 的 cropToolState 序列化结果 —— 用来防 options → cropToolState → sourceNode → options 的回环。
+  // 用 ref 而非 state：写到 sourceNode 这件事不应该触发 React 重渲染。
+  const lastWrittenCropStateRef = useRef<string | null>(null);
+  // 文字图层同理：每张图存一份自己的图层参数（写在共享字段 textLayers 上，
+  // 和 cropToolState 是两回事，不能混）。
+  const lastWrittenTextLayersRef = useRef<string | null>(null);
+
+  /**
+   * 裁剪面板「批量套用选择条」的实时快照 —— 队列里的其它图 id + 条内编号表 +
+   * 这份快照**属于哪张当前图**（`sourceNodeId`）。
+   *
+   * ⭐ 有了它，右下角「应用」才能把「当前图 + 队列里所有图」一起烘成结果节点。
+   * 之前拿不到队列（那是 CropToolEditor 的内部状态），所以只会烘当前这一张。
+   *
+   * 唯一写入方是 CropToolEditor 的 `onStripSnapshot`（子组件），`null` = 无队列。
+   * ⚠️ 这里**不做父层 init-effect 重置** —— 子 effect 在同一个 commit 里比父 effect 先跑，
+   * 若父层再置 null 会把刚上报的快照抹掉，切图后就误退成单图。改为**带 sourceNodeId 打戳**：
+   * 「应用」只认 `sourceNodeId` 与当前节点一致的快照，天然挡住旧批次串台，无需重置。
+   */
+  const [cropStripSnapshot, setCropStripSnapshot] = useState<{
+    sourceNodeId: string;
+    otherIds: string[];
+    textOrderIndexById: Record<string, number>;
+  } | null>(null);
 
   useEffect(() => {
     if (activeToolDialog) {
@@ -159,7 +268,10 @@ export function NodeToolDialog() {
     return () => {
       cancelled = true;
     };
-  }, [dialogKey, sourceNode, activePlugin, sourceImageUrl, displayToolDialog?.initialOptionsOverride]);
+    // 依赖用 sourceNode.id 而不是 sourceNode 引用本身：
+    // 否则下面把 cropToolState 写回 sourceNode 会让 sourceNode 引用变化，
+    // 触发这个 effect 跑 setOptions，把正在拖的滑杆重置到上次存档值。
+  }, [dialogKey, sourceNode?.id, activePlugin, sourceImageUrl, displayToolDialog?.initialOptionsOverride]);
 
   useEffect(() => {
     const requiresSplitPreload = activePlugin?.editor === 'split' && Boolean(sourceImageUrl);
@@ -197,6 +309,63 @@ export function NodeToolDialog() {
       cancelled = true;
     };
   }, [activePlugin?.editor, sourceImageUrl]);
+
+  /**
+   * 把当前 CropToolEditor 的 options 写回 sourceNode.data.cropToolState —— 让每张图
+   * 都存档自己的边框/裁剪参数，下次打开裁剪面板能看到自己之前调好的状态。
+   *
+   * 用 ref + JSON.stringify 做内容比较，避免反复写入造成 useEffect 反复触发
+   * （sourceNode 引用变化会触发上面的初始化 effect，把正在拖的滑杆重置到上次存档值）。
+   *
+   * 只对 crop 工具执行 —— 其他工具（标注 / 切割 / 高清等）有自己的存档字段，
+   * 写到这里会污染它们的 data。
+   */
+  useEffect(() => {
+    if (!sourceNode || !sourceImageUrl) {
+      return;
+    }
+    if (activePlugin?.type !== NODE_TOOL_TYPES.crop) {
+      return;
+    }
+
+    const patch = buildCropToolStatePatch(options);
+    const serialized = JSON.stringify(patch[CROP_TOOL_STATE_KEY]);
+    if (serialized === lastWrittenCropStateRef.current) {
+      return;
+    }
+    lastWrittenCropStateRef.current = serialized;
+    updateNodeData(sourceNode.id, patch);
+  }, [options, sourceNode?.id, sourceImageUrl, activePlugin?.type, updateNodeData]);
+
+  /**
+   * 文字参数写回 sourceNode.data.textLayers —— 这是裁剪面板里「文字」区块的唯一存档。
+   *
+   * ⚠️ 它**必须**和 cropToolState 分开写：createInitialOptions 里 `textLayers`
+   * 是刻意以这个共享字段为准的（防止 cropToolState 里的旧副本复活），
+   * 只写 cropToolState 的话，下次打开面板文字会整段消失。
+   *
+   * 存的只是图层参数（文字 / 位置 / 字体 / 颜色…），不含该图的编号 ——
+   * 编号由这张图在画布里的位置决定，写死了反而会在换图 / 调顺序后错位。
+   */
+  useEffect(() => {
+    if (!sourceNode || !sourceImageUrl) {
+      return;
+    }
+    const toolType = activePlugin?.type;
+    if (toolType !== NODE_TOOL_TYPES.crop) {
+      return;
+    }
+
+    const raw = options[TEXT_LAYERS_KEY];
+    if (typeof raw !== 'string') {
+      return;
+    }
+    if (raw === lastWrittenTextLayersRef.current) {
+      return;
+    }
+    lastWrittenTextLayersRef.current = raw;
+    updateNodeData(sourceNode.id, buildTextLayersPatch(readTextLayers(raw)));
+  }, [options, sourceNode?.id, sourceImageUrl, activePlugin?.type, updateNodeData]);
 
   const closeDialog = useCallback(() => {
     canvasEventBus.publish('tool-dialog/close', undefined);
@@ -264,6 +433,273 @@ export function NodeToolDialog() {
     }
     return EXPORT_RESULT_DISPLAY_NAME.generic;
   }, [t]);
+
+  /**
+   * 用户拖动缩略图条自定义的图片顺序（图片节点 id）。
+   *
+   * `null` = 还没拖过，按画布顺序（nodes 数组）走。
+   * ⚠️ 它**同时决定文字里的「图像1 / 图像2…」** —— 拖动条就是在改编号分配，
+   * 所以这个顺序必须是全局的（覆盖画布上所有图片节点），不能只当条里的显示顺序。
+   */
+  const [imageOrderOverride, setImageOrderOverride] = useState<string[] | null>(null);
+
+  /** 画布上「有图的图片节点」id，按画布顺序。 */
+  const canvasImageIds = useMemo(
+    () =>
+      nodes
+        .filter(
+          (node) =>
+            (isUploadNode(node) || isImageEditNode(node) || isExportImageNode(node)) &&
+            Boolean(node.data.imageUrl)
+        )
+        .map((node) => node.id),
+    [nodes]
+  );
+
+  /**
+   * 有效图片顺序 = 用户拖过的顺序（滤掉已删除的节点）+ 后来新增的图追加到末尾。
+   *
+   * 新增的图没法猜用户想把它插在哪，追加到末尾最不打扰用户已经拖好的排列
+   * （条里也是按这个顺序排的，插到中间会让已排好的图整体错位）。
+   */
+  const orderedImageIds = useMemo(() => {
+    if (!imageOrderOverride) {
+      return canvasImageIds;
+    }
+    const existing = new Set(canvasImageIds);
+    const kept = imageOrderOverride.filter((id) => existing.has(id));
+    const keptSet = new Set(kept);
+    return [...kept, ...canvasImageIds.filter((id) => !keptSet.has(id))];
+  }, [canvasImageIds, imageOrderOverride]);
+
+  /**
+   * 画布图片节点 → 它在**有效图片顺序**里的 0-based 下标。
+   *
+   * ⚠️ 这个下标**不是文字编号**（编号 = 该图在选择条里排第几，见 CropToolEditor）。
+   * 它只负责两件事：
+   *  1. 决定选择条里谁在前谁在后（条按它排序）；
+   *  2. 拖动条时算出该往全局顺序的哪个槽位写回。
+   * 换句话说它是**排序键**，条一重排它跟着变，编号才跟着变。
+   */
+  const imageOrderIndexById = useMemo(() => {
+    const map = new Map<string, number>();
+    orderedImageIds.forEach((id, index) => map.set(id, index));
+    return map;
+  }, [orderedImageIds]);
+
+  /**
+   * 条里拖动排序 → 写进全局图片顺序。
+   *
+   * ⚠️ 条里只显示「当前图 ∪ 队列」这个**子集**，不能拿它直接当全局顺序 ——
+   * 槽位映射的细节见 `tool-editors/imageOrder.ts`（纯函数，有单测兜着）。
+   *
+   * ⭐ 改完之后条里按新的 orderIndex 重排 → 条内位置变了 → 角标和文字编号
+   * 立刻跟着变（不需要点「应用」，也不会碰画布上的图）。
+   */
+  const handleReorderStripItems = useCallback(
+    (stripOrder: string[]) => {
+      setImageOrderOverride(applyStripReorder(orderedImageIds, stripOrder));
+    },
+    [orderedImageIds]
+  );
+
+  /**
+   * 裁剪面板「添加图片」候选清单的数据源：画布上全部图片节点（含当前节点），
+   * 顺序 = 画布顺序。
+   *
+   * ⚠️ 它**只是候选清单，不会默认渲染**。
+   * 选择条默认只画「当前图 + 用户手动加入的图」，这份清单仅在用户点开
+   * 「添加图片」面板时才铺缩略图 —— 否则几十上百张图一起渲染会明显卡顿。
+   *
+   * 缩略图用 `previewImageUrl`（小图）而不是 `imageUrl`（原图）：
+   * 候选面板一次要渲染整张画布的图，拿原图会白吃一大截内存和解码时间。
+   *
+   * 每项带 orderIndex —— 它只用来给选择条排序（条里谁在前），
+   * 编号徽章和文字编号读的都是「条内位置」，不是它。
+   */
+  const canvasImageCandidates = useMemo(() => {
+    if (!displayToolDialog) {
+      return [] as Array<{
+        id: string;
+        label: string;
+        imageUrl: string;
+        width?: number | null;
+        height?: number | null;
+        orderIndex?: number;
+      }>;
+    }
+    // 顺序取 orderedImageIds —— 用户拖过顺序之后，条里和候选弹窗都跟着新顺序排。
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    return orderedImageIds
+      .map((id) => nodeById.get(id))
+      .filter((node): node is CanvasNode => Boolean(node))
+      .map((node) => ({
+        id: node.id,
+        // 显示图片**原本的文件名**（拖进来叫什么显示什么）；用户真改过名才用改名，
+        // 两者都没有才退回类型默认。见 resolveStripImageName 的注释。
+        label: resolveStripImageName(node),
+        // 缩略图优先用小图；没有 previewImageUrl 的老节点才退回原图。
+        imageUrl: (node.data.previewImageUrl as string | null | undefined) ?? (node.data.imageUrl as string),
+        width: null,
+        height: null,
+        orderIndex: imageOrderIndexById.get(node.id),
+      }));
+  }, [displayToolDialog, imageOrderIndexById, nodes, orderedImageIds]);
+
+  /**
+   * 把当前编辑器里的参数**分发**到指定图片节点（不含当前图 —— 当前图走 footer 的「应用」路径）。
+   *
+   * ⭐ **只落参数，绝不落图**（裁剪 / 边框 / 文字一视同仁）。
+   * 「批量应用」的定位是**让用户逐张切过去预览检查**，
+   * **只有点右下角「应用」才算保存**。
+   *
+   * ⚠️ 早先这里对文字会真的重画一遍 imageUrl（原地烘焙 + 底图备份）——
+   * 用户还没点应用，画布上那张图就已经变了，等于把「预览」当成了「保存」。
+   * 现在文字和边框一样只写参数存档：切过去在裁剪面板预览里就能看到效果，
+   * 点「应用」才真正落图。
+   *
+   * ⭐ 参数分两摞 —— 「批量套用」只推**共享规则**，保留每张图**各自的微调**：
+   *  - 共享（写进目标图）：边框 / 描边 / 圆角 / 按比例补边（含留白）/ 文字图层 /
+   *    自动裁剪规则（开关·识别色·参与边·保留边距）。
+   *  - 各自（绝不覆盖）：每张图自己的目标比例、自定义比例、手动裁剪框 cropX/Y/W/H。
+   *    自动裁剪的「结果」按每张图自己的像素现场重算 —— 所以推了规则，边界仍旧各自匹配。
+   *
+   * ⚠️ 文字编号（`textOrderIndex`）**必须一起套**：它来自 `textOrderIndexById`
+   * （条内 0-based 位置），是「预览」的一部分 —— 用户切过去要看到自己排第几。
+   * 而且面板一关条就没了，目标图只能靠这份存下来的编号记住自己的位置，
+   * 否则逐张点「应用」时全都会退回 1。
+   */
+  const handleApplyBatch = useCallback(
+    async (
+      otherTargetIds: string[],
+      textOrderIndexById?: Map<string, number>,
+      scope: BatchApplyScope = 'all'
+    ) => {
+      setIsBatchApplying(true);
+      try {
+        // 只推共享规则；裁剪框与目标比例留给每张图自己。scope 决定推哪一类：
+        // border=边框族(含描边/圆角/补边)、autoCrop=自动裁剪规则、text=文字图层、all=全推。
+        const border = readBorderOptions(options);
+        const autoCrop = readAutoCropOptions(options);
+        const textLayersRaw = options[TEXT_LAYERS_KEY];
+        const sharedOptions: ToolOptions = {};
+        if (scope === 'all' || scope === 'border') {
+          Object.assign(sharedOptions, toBorderToolOptions(border));
+        }
+        if (scope === 'all' || scope === 'autoCrop') {
+          Object.assign(sharedOptions, toAutoCropToolOptions(autoCrop));
+        }
+        const pushText =
+          (scope === 'all' || scope === 'text') && typeof textLayersRaw === 'string';
+        if (pushText) {
+          sharedOptions[TEXT_LAYERS_KEY] = textLayersRaw as string;
+        }
+
+        for (const targetId of otherTargetIds) {
+          const target = nodes.find((node) => node.id === targetId);
+          if (!target) {
+            continue;
+          }
+          // 编号和共享规则合成一份「要覆盖的键」，再**盖到目标图已有的 cropToolState 上**：
+          // existing 打底 → 目标图自己的裁剪框 / 目标比例这些没被 shared 提到的键原样保留。
+          // 一次写进 cropToolState（整块替换该字段），避免分两次写互相抹掉。
+          const orderIndex = textOrderIndexById?.get(targetId);
+          const shared: ToolOptions =
+            typeof orderIndex === 'number'
+              ? { ...sharedOptions, textOrderIndex: orderIndex }
+              : sharedOptions;
+          const merged = mergeToolOptions(readCropToolState(target), shared);
+          updateNodeData(targetId, buildCropToolStatePatch(merged));
+          // ⚠️ 文字参数必须**另外**写一份到共享字段（createInitialOptions 以共享字段为准）。
+          // 但只有本次真的推了文字（scope=all/text）才写 —— 只套边框/自动裁剪时，
+          // 不能把目标图自己的文字抹掉。
+          if (pushText) {
+            updateNodeData(
+              targetId,
+              buildTextLayersPatch(readTextLayers(merged[TEXT_LAYERS_KEY]))
+            );
+          }
+        }
+
+        // 只写参数不落图，界面上不会有别的变化 —— 给个短暂反馈，
+        // 否则用户点完会以为「点了没反应」。
+        setBatchAppliedCount(otherTargetIds.length);
+        if (batchAppliedTimerRef.current !== null) {
+          window.clearTimeout(batchAppliedTimerRef.current);
+        }
+        batchAppliedTimerRef.current = window.setTimeout(() => {
+          setBatchAppliedCount(null);
+        }, 2200);
+      } catch (applyError) {
+        const message =
+          applyError instanceof Error ? applyError.message : t('toolDialog.processFailed');
+        // 不开模态对话框：错误先写日志，UI 留给后续补"行内错误条"。
+        // 当前最关键的是套用逻辑打通；视觉提示缺失不会破坏主流程。
+        console.error('[NodeToolDialog] batch apply failed', message);
+      } finally {
+        setIsBatchApplying(false);
+      }
+    },
+    [nodes, options, updateNodeData, t]
+  );
+
+  /**
+   * 「批量把裁剪框收到内容边界」：对队列里每张图各自加载像素、按当前自动裁剪规则现场识别
+   * 内容边界，把它的裁剪框对齐过去（比例切回 free）。逐图独立、边界各按各的像素算。
+   * 只写参数（cropToolState），不落图 —— 和「批量套用」一致，点右下角「应用」才真正出图。
+   */
+  const handleBatchTrimToContent = useCallback(
+    async (targetIds: string[]) => {
+      const rules = readAutoCropOptions(options);
+      let failed = 0;
+      for (const targetId of targetIds) {
+        const target = nodes.find((node) => node.id === targetId);
+        const url =
+          target &&
+          (isUploadNode(target) || isImageEditNode(target) || isExportImageNode(target))
+            ? (target.data.imageUrl as string | null | undefined)
+            : null;
+        if (!target || !url) {
+          failed += 1;
+          continue;
+        }
+        try {
+          const image = await loadImageElement(url);
+          const detection = measureAutoCrop(image, rules);
+          if (!detection) {
+            failed += 1;
+            continue;
+          }
+          const rect = detection.contentRect;
+          const merged = mergeToolOptions(readCropToolState(target), {
+            aspectRatio: 'free',
+            cropX: rect.x,
+            cropY: rect.y,
+            cropWidth: rect.width,
+            cropHeight: rect.height,
+          });
+          updateNodeData(targetId, buildCropToolStatePatch(merged));
+        } catch (trimError) {
+          failed += 1;
+          console.error('[NodeToolDialog] batch trim to content failed', targetId, trimError);
+        }
+      }
+      if (failed > 0) {
+        setError(`有 ${failed} 张图收边失败（可能读不到像素），其余已收到内容边界`);
+      }
+    },
+    [nodes, options, updateNodeData]
+  );
+
+  // 卸载时清掉批量套用的反馈定时器。
+  useEffect(
+    () => () => {
+      if (batchAppliedTimerRef.current !== null) {
+        window.clearTimeout(batchAppliedTimerRef.current);
+      }
+    },
+    []
+  );
 
   const handleApply = useCallback(async () => {
     if (!activeToolDialog || !sourceNode || !sourceImageUrl || !activePlugin) {
@@ -334,7 +770,168 @@ export function NodeToolDialog() {
     }
 
     try {
-      const result = await activePlugin.execute(sourceImageUrl, options, {
+      // 下载文件名前缀 = 结果节点标题（裁剪=「裁剪结果」），后面接**原图自己的序号**。
+      const cropResultPrefix = resolveResultNodeTitle(activeToolDialog.toolType) || '裁剪结果';
+      const buildCropResultFileName = (label: string): string => {
+        const safeLabel = label.trim() || '1';
+        return `${cropResultPrefix}-${safeLabel}.png`;
+      };
+
+      // ===== 裁剪 + 批量队列 → 整批落图（当前图 + 队列里每张各出一个派生结果节点）=====
+      //
+      // ⭐ 这是「应用只对一张图生效」的正解：过去这一层拿不到选择条的队列，
+      // 只 execute 了 sourceNode。现在队列由 CropToolEditor 通过 onStripSnapshot
+      // 实时上报，这里据此把整批一起烘。队列为空 → 跳过、走下面的单图路径。
+      if (
+        activeToolDialog.toolType === NODE_TOOL_TYPES.crop &&
+        cropStripSnapshot &&
+        cropStripSnapshot.sourceNodeId === sourceNode.id &&
+        cropStripSnapshot.otherIds.length > 0
+      ) {
+        // 共享规则 = 当前编辑器里的边框 / 描边 / 圆角 / 按比例补边 / 自动裁剪 / 文字图层。
+        // 注意「各自裁剪框 + 目标比例」不在这里，留给每张图自己的 cropToolState。
+        const border = readBorderOptions(options);
+        const autoCrop = readAutoCropOptions(options);
+        const textLayersRaw = options[TEXT_LAYERS_KEY];
+        const sharedOptions: ToolOptions = {
+          ...toBorderToolOptions(border),
+          ...toAutoCropToolOptions(autoCrop),
+          ...(typeof textLayersRaw === 'string' ? { [TEXT_LAYERS_KEY]: textLayersRaw } : {}),
+        };
+
+        // 待烘清单：当前图（实时 options，裁剪框/编号都已在面板里就位）+ 队列里每张
+        // （共享规则盖到它自己的 cropToolState 上 → 保留各自裁剪框 / 目标比例，并带编号）。
+        type BakeTask = {
+          nodeId: string;
+          url: string;
+          opts: ToolOptions;
+          isCurrent: boolean;
+          /** 结果序号标签 = **原图自己的编号**（源文件名主干，如 "1"）；缺失才退回图像位置。 */
+          orderLabel: string;
+        };
+        const currentOrderIndex =
+          cropStripSnapshot.textOrderIndexById[sourceNode.id] ?? Number(options.textOrderIndex);
+        const tasks: BakeTask[] = [
+          {
+            nodeId: sourceNode.id,
+            url: sourceImageUrl,
+            opts: options,
+            isCurrent: true,
+            orderLabel:
+              resolveSourceNameLabel(sourceNode) ??
+              String((Number.isFinite(currentOrderIndex) ? currentOrderIndex : 0) + 1),
+          },
+        ];
+        let failed = 0;
+        for (const targetId of cropStripSnapshot.otherIds) {
+          const target = nodes.find((node) => node.id === targetId);
+          const targetUrl =
+            target &&
+            (isUploadNode(target) || isImageEditNode(target) || isExportImageNode(target))
+              ? (target.data.imageUrl as string | null | undefined)
+              : null;
+          if (!target || !targetUrl) {
+            failed += 1;
+            continue;
+          }
+          const orderIndex = cropStripSnapshot.textOrderIndexById[targetId];
+          const shared: ToolOptions =
+            typeof orderIndex === 'number'
+              ? { ...sharedOptions, textOrderIndex: orderIndex }
+              : sharedOptions;
+          // 以**目标图自己的初始参数**打底（aspectRatio 默认 'free'、它自己的裁剪框与文字），
+          // 再盖当前图的共享规则 —— 与「切过去逐张点应用」完全一致。⚠️ 不能直接从
+          // readCropToolState 起：没存过比例的图 aspectRatio 会是 undefined，
+          // toolProcessor.cropImage 把缺省当 '1:1' 强制裁方（见 toolProcessor.ts:300+），
+          // 用 createInitialOptions 才有面板默认的 'free' 兜底。
+          const merged = mergeToolOptions(activePlugin.createInitialOptions(target), shared);
+          tasks.push({
+            nodeId: targetId,
+            url: targetUrl,
+            opts: merged,
+            isCurrent: false,
+            orderLabel:
+              resolveSourceNameLabel(target) ??
+              String((typeof orderIndex === 'number' ? orderIndex : 0) + 1),
+          });
+        }
+
+        // ⚠️ 分两步，绝不边烘边建：`addDerivedExportNode` 会把 `activeToolDialog` 置 null
+        //（见 canvasStore），第一张就把面板关了，后面几张若失败用户根本看不到。
+        // ① 先全部「execute + prepareNodeImage」——只读图、不写 store，面板保持打开、
+        //    「处理中」持续可见；任一失败先记下来。
+        const baked: Array<{
+          task: BakeTask;
+          prepared: Awaited<ReturnType<typeof prepareNodeImage>>;
+        }> = [];
+        for (const task of tasks) {
+          try {
+            const res = await activePlugin.execute(task.url, task.opts, {
+              processTool: (toolType, imageUrl, toolOptions) =>
+                canvasToolProcessor.process(toolType, imageUrl, toolOptions),
+            });
+            if (!res.outputImageUrl) {
+              failed += 1;
+              continue;
+            }
+            const prepared = await prepareNodeImage(res.outputImageUrl);
+            baked.push({ task, prepared });
+          } catch (bakeError) {
+            failed += 1;
+            console.error('[NodeToolDialog] batch bake failed', task.nodeId, bakeError);
+          }
+        }
+
+        // 有任何一张失败 → 整批不落图（all-or-nothing），保留面板 + 报错让用户改了重试。
+        if (failed > 0) {
+          setError(`有 ${failed} 张图应用失败，本次未生成结果节点，请检查后重试`);
+          return;
+        }
+
+        // ② 全成功后才建节点：先给队列图把合并后的参数存档（重开面板对得上），
+        //    再逐张各出一个派生结果节点并连回源图。addDerivedExportNode 会顺带关面板，
+        //    但这是最后一步、瞬间完成，剩余几张仍会各自建好（它内部按最新 state 追加）。
+        for (const { task, prepared } of baked) {
+          if (!task.isCurrent) {
+            updateNodeData(task.nodeId, buildCropToolStatePatch(task.opts));
+            updateNodeData(
+              task.nodeId,
+              buildTextLayersPatch(readTextLayers(task.opts[TEXT_LAYERS_KEY]))
+            );
+          }
+          const createdNodeId = addDerivedExportNode(
+            task.nodeId,
+            prepared.imageUrl,
+            prepared.aspectRatio,
+            prepared.previewImageUrl,
+            {
+              defaultTitle: resolveResultNodeTitle(activeToolDialog.toolType),
+              resultKind: 'generic',
+              aspectRatioStrategy: 'provided',
+              sizeStrategy: 'autoMinEdge',
+            }
+          );
+          if (createdNodeId) {
+            addEdge(task.nodeId, createdNodeId);
+            // 下载名跟原图序号一致：裁剪结果-<原图编号>.png。
+            updateNodeData(createdNodeId, {
+              generatedFileName: buildCropResultFileName(task.orderLabel),
+            });
+          }
+        }
+        closeDialog();
+        return;
+      }
+      // ===== 单图路径（无队列 / 其它工具）：原逻辑不变 =====
+
+      // 裁剪工具现在也会叠文字（裁剪 → 边框 → 文字）。
+      //
+      // ⚠️ 编号（{n}）**不在这里算** —— 裁剪面板已经把 `options.textOrderIndex` 同步成
+      // 「这张图在选择条里排第几」，这里原样透传。之所以不能在这儿算：队列是裁剪面板的
+      // 内部状态，这一层只能拿到「画布第几张」，算出来就是用户抱怨的 5,6,7,8,17。
+      const executeOptions: ToolOptions = options;
+
+      const result = await activePlugin.execute(sourceImageUrl, executeOptions, {
         processTool: (toolType, imageUrl, toolOptions) =>
           canvasToolProcessor.process(toolType, imageUrl, toolOptions),
       });
@@ -366,6 +963,16 @@ export function NodeToolDialog() {
         );
         if (createdNodeId) {
           addEdge(sourceNode.id, createdNodeId);
+          // 单张「应用」也一起编号：仅裁剪结果，序号跟原图文件名一致（标注/切割等不动）。
+          if (activeToolDialog.toolType === NODE_TOOL_TYPES.crop) {
+            const fallbackIndex = (Number.isFinite(Number(options.textOrderIndex))
+              ? Number(options.textOrderIndex)
+              : 0) + 1;
+            const orderLabel = resolveSourceNameLabel(sourceNode) ?? String(fallbackIndex);
+            updateNodeData(createdNodeId, {
+              generatedFileName: buildCropResultFileName(orderLabel),
+            });
+          }
         }
       }
 
@@ -381,6 +988,8 @@ export function NodeToolDialog() {
     sourceImageUrl,
     activePlugin,
     options,
+    nodes,
+    cropStripSnapshot,
     addNode,
     addStoryboardSplitNode,
     addDerivedExportNode,
@@ -393,12 +1002,124 @@ export function NodeToolDialog() {
     t,
   ]);
 
+  /**
+   * 一键导出「全部裁剪结果」到选定文件夹，每张按对应序号命名 裁剪结果-N.png。
+   *
+   * 序号来源（依次兜底）：① 结果节点 generatedFileName 里已有的编号；② 顺入边找到它的
+   * 源图、读源图存的 textOrderIndex+1（= 选择条里的图像N，和用户在面板里看到的编号一致）；
+   * ③ 都没有就按排序后的位置。识别"裁剪结果"用 displayName===裁剪结果标题，能同时覆盖
+   * 带编号的新节点和没带编号的旧节点。
+   */
+  const handleExportAllCropResults = useCallback(async () => {
+    if (isExportingCropResults) {
+      return;
+    }
+    const cropTitle = resolveResultNodeTitle(NODE_TOOL_TYPES.crop) || '裁剪结果';
+    const cropResults = nodes.filter((node) => {
+      if (!isExportImageNode(node)) {
+        return false;
+      }
+      const dn = typeof node.data.displayName === 'string' ? node.data.displayName.trim() : '';
+      const gfn =
+        typeof node.data.generatedFileName === 'string' ? node.data.generatedFileName.trim() : '';
+      return dn === cropTitle || gfn.startsWith(cropTitle);
+    });
+    if (cropResults.length === 0) {
+      setCropExportMessage(null);
+      setError('画布上还没有可导出的裁剪结果，先点「应用」生成再导出');
+      return;
+    }
+
+    const presetDir = (downloadPresetPaths.find((p) => p.trim().length > 0)?.trim() ?? '').replace(
+      /[\\/]+$/,
+      ''
+    );
+    let outputDir = presetDir;
+    if (!outputDir) {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: '选择裁剪结果导出文件夹',
+      });
+      if (!selected || Array.isArray(selected)) {
+        return;
+      }
+      outputDir = selected;
+    }
+
+    // 每张结果的导出主干名（不含扩展名）——序号要跟原图一致：
+    // ① 新节点已有 generatedFileName（含正确序号），直接沿用；
+    // ② 旧节点顺入边找源图，用源图文件名主干（和原图一致），再退回源图图像位置；
+    // ③ 都没有 → 稍后按排序位置补号。
+    const planned: Array<{ node: CanvasNode; stem: string | null }> = cropResults.map((node) => {
+      const gfn =
+        typeof node.data.generatedFileName === 'string' ? node.data.generatedFileName.trim() : '';
+      if (gfn) {
+        return { node, stem: stripFileExtension(gfn) };
+      }
+      const inEdge = edges.find((edge) => edge.target === node.id);
+      const srcNode = inEdge ? nodes.find((n) => n.id === inEdge.source) : undefined;
+      if (srcNode) {
+        const state = readCropToolState(srcNode);
+        const label =
+          resolveSourceNameLabel(srcNode) ??
+          (typeof state?.textOrderIndex === 'number' ? String(state.textOrderIndex + 1) : null);
+        if (label) {
+          return { node, stem: `${cropTitle}-${label}` };
+        }
+      }
+      return { node, stem: null };
+    });
+    const trailingNumber = (stem: string | null): number => {
+      const m = stem?.match(/(\d+)\s*$/);
+      return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
+    };
+    planned.sort((a, b) => {
+      const ao = trailingNumber(a.stem);
+      const bo = trailingNumber(b.stem);
+      if (ao !== bo) {
+        return ao - bo;
+      }
+      return a.node.position.y - b.node.position.y || a.node.position.x - b.node.position.x;
+    });
+
+    setError(null);
+    setCropExportMessage(null);
+    setIsExportingCropResults(true);
+    let saved = 0;
+    let failed = 0;
+    try {
+      for (let i = 0; i < planned.length; i += 1) {
+        const { node, stem } = planned[i];
+        const finalStem = stem ?? `${cropTitle}-${i + 1}`;
+        const source = typeof node.data.imageUrl === 'string' ? node.data.imageUrl : '';
+        if (!source) {
+          failed += 1;
+          continue;
+        }
+        try {
+          await saveImageSourceToDirectory(source, outputDir, finalStem);
+          saved += 1;
+        } catch (saveError) {
+          failed += 1;
+          console.error('[NodeToolDialog] crop result export failed', node.id, saveError);
+        }
+      }
+      setCropExportMessage(
+        `已导出 ${saved} 张裁剪结果到 ${outputDir}${failed > 0 ? `（${failed} 张失败）` : ''}`
+      );
+    } finally {
+      setIsExportingCropResults(false);
+    }
+  }, [downloadPresetPaths, edges, isExportingCropResults, nodes, resolveResultNodeTitle]);
+
   const widthClassName = useMemo(() => {
     if (!activePlugin) {
       return 'w-[min(460px,calc(100vw-40px))]';
     }
     if (activePlugin.editor === 'crop') {
-      return 'w-[min(980px,calc(100vw-40px))]';
+      // 裁剪面板是左右分栏（左侧输出预览 / 右侧裁剪+边框参数），比其它工具宽不少。
+      return 'w-[min(1440px,calc(100vw-40px))]';
     }
     if (activePlugin.editor === 'annotate') {
       return 'w-[min(1120px,calc(100vw-40px))]';
@@ -415,12 +1136,37 @@ export function NodeToolDialog() {
     }
 
     if (activePlugin.editor === 'crop' && sourceImageUrl) {
+      // 切换当前节点：复用 tool-dialog/open 事件 + 同一个 toolType —— 等价于
+      // "关掉当前对话框、打开另一张图的同名工具"。CreateInitialOptions 会从
+      // 目标节点的 cropToolState 读出该图自己的边框参数，互不污染。
+      const handleSwitchTarget = (targetId: string) => {
+        if (!displayToolDialog) {
+          return;
+        }
+        canvasEventBus.publish('tool-dialog/open', {
+          nodeId: targetId,
+          toolType: displayToolDialog.toolType,
+        });
+      };
+
       return (
         <CropToolEditor
           plugin={activePlugin}
           sourceImageUrl={sourceImageUrl}
           options={options}
           onOptionsChange={setOptions}
+          onSwitchTarget={handleSwitchTarget}
+          onApplyBatch={handleApplyBatch}
+          onStripSnapshot={setCropStripSnapshot}
+          onBatchTrimToContent={handleBatchTrimToContent}
+          onReorderImages={handleReorderStripItems}
+          batchAppliedCount={batchAppliedCount}
+          canvasImages={canvasImageCandidates}
+          currentNodeId={displayToolDialog?.nodeId}
+          currentOrderIndex={
+            displayToolDialog ? imageOrderIndexById.get(displayToolDialog.nodeId) : undefined
+          }
+          isBatchApplying={isBatchApplying}
         />
       );
     }
@@ -468,11 +1214,22 @@ export function NodeToolDialog() {
         onOptionsChange={setOptions}
       />
     );
-  }, [activePlugin, options, sourceImageUrl]);
+  }, [
+    activePlugin,
+    options,
+    sourceImageUrl,
+    displayToolDialog,
+    canvasImageCandidates,
+    handleApplyBatch,
+    handleReorderStripItems,
+    isBatchApplying,
+    imageOrderIndexById,
+  ]);
 
   const isOpen = Boolean(activeToolDialog && isSplitImageReady);
 
   return (
+    <>
     <UiModal
       isOpen={isOpen}
       title={`${resolveToolLabel(activePlugin?.type)}${t('toolDialog.suffix')}`}
@@ -483,6 +1240,16 @@ export function NodeToolDialog() {
           <UiButton variant="ghost" size="sm" onClick={closeDialog}>
             {t('common.cancel')}
           </UiButton>
+          {activeToolDialog?.toolType === NODE_TOOL_TYPES.crop && (
+            <UiButton
+              variant="ghost"
+              size="sm"
+              onClick={handleExportAllCropResults}
+              disabled={isExportingCropResults}
+            >
+              {isExportingCropResults ? '导出中…' : '导出全部裁剪结果'}
+            </UiButton>
+          )}
           <UiButton size="sm" variant="primary" onClick={handleApply} disabled={isProcessing || !sourceImageUrl}>
             {isProcessing ? t('toolDialog.processing') : t('toolDialog.apply')}
           </UiButton>
@@ -491,8 +1258,14 @@ export function NodeToolDialog() {
     >
       <div className="space-y-3 max-h-[82vh] overflow-y-auto pr-1">
         {editorContent}
-        {error && <div className="text-xs text-red-400">{error}</div>}
+        {error && <div className="text-xs text-red-300">{error}</div>}
+        {cropExportMessage && (
+          <div className="text-xs" style={{ color: '#6ee7b7' }}>
+            {cropExportMessage}
+          </div>
+        )}
       </div>
     </UiModal>
+    </>
   );
 }

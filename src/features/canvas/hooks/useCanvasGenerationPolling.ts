@@ -41,14 +41,17 @@ interface GenerationStoryboardMetadata {
 
 const GENERATION_JOB_POLL_INTERVAL_MS = 1000;
 /**
- * Hard ceiling on how long we keep polling a single job. The Tauri
- * backend's image providers all complete (or surface an error) well
- * within ten minutes; a longer poll loop almost certainly indicates the
- * provider hung or the network is broken. Surfacing a timeout instead of
- * polling forever lets the user retry instead of staring at an
- * indefinitely-spinning node.
+ * Hard ceiling on how long we keep polling a single image job. Kept a
+ * couple minutes above the custom-provider image request timeout
+ * (`MODERN_IMAGE_GENERATION_REQUEST_TIMEOUT_MS` = 30 min, which itself is
+ * aligned to the local proxy's `UPSTREAM_TIMEOUT_MS` = 30 min). Otherwise a
+ * job that is legitimately still generating/downloading through the proxy
+ * would be killed by this outer cap first. Built-in providers finish far
+ * sooner, so this rarely binds for them — it exists so we never cut off a
+ * paid-for image. Beyond it we surface a timeout so the user can retry
+ * instead of staring at an indefinitely-spinning node.
  */
-const GENERATION_JOB_TIMEOUT_MS = 10 * 60 * 1000;
+const GENERATION_JOB_TIMEOUT_MS = 32 * 60 * 1000;
 // Custom video providers may spend the full 15 minutes in their own async
 // poll loop after the initial submit request; keep the UI guard slightly
 // longer so it does not fail the node just before the gateway resolves.
@@ -574,7 +577,7 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
       if (Date.now() - startedAt > timeoutMs) {
         markGenerationFailed(
           nodeId,
-          isVideoNode ? 'video generation timed out after 16 minutes' : 'generation timed out after 10 minutes',
+          isVideoNode ? 'video generation timed out after 16 minutes' : 'generation timed out after 32 minutes',
           null,
           updateNodeData,
           { preserveRetryMetadata: true },
