@@ -53,9 +53,12 @@ describe('selectDomIslands（DOM 岛候选选择）', () => {
     expect(ids.indexOf('c')).toBeLessThan(ids.indexOf('b'));
   });
 
-  it('zoom 恰为阈值：启用', () => {
-    const ids = selectDomIslands([rect('a', 0, 0)], NONE, { ...VP, zoom: DOM_ISLAND_DEFAULTS.minZoom });
-    expect(ids).toEqual(['a']);
+  it('zoom 恰为阈值：越过 zoom 门槛后由屏幕尺寸 LOD 接管', () => {
+    const z = DOM_ISLAND_DEFAULTS.minZoom;
+    // 300*0.05=15px 宽：不够读 → 卡片
+    expect(selectDomIslands([rect('a', 0, 0)], NONE, { ...VP, zoom: z })).toEqual([]);
+    // 选中豁免 → 入岛
+    expect(selectDomIslands([rect('a', 0, 0)], new Set(['a']), { ...VP, zoom: z })).toEqual(['a']);
   });
 
   it('超过上限截断，但选中节点始终保留', () => {
@@ -67,6 +70,21 @@ describe('selectDomIslands（DOM 岛候选选择）', () => {
     expect(ids.length).toBe(60);
     expect(ids).toContain('n69');
     expect(ids[0]).toBe('n69'); // 选中排序优先
+  });
+
+  it('屏幕空间 LOD：屏幕上过小的节点不挂岛（全览 174 节点曾挂 161 岛压垮主线程）', () => {
+    const nodes = [rect('big', 0, 0, 360, 420), rect('tag', 500, 0, 120, 36)];
+    // zoom 0.06：360*0.06=21.6px 宽 → 不够读 → 不挂岛
+    expect(selectDomIslands(nodes, NONE, { ...VP, zoom: 0.06 })).toEqual([]);
+    // zoom 0.5：360*0.5=180 ≥90 且 420*0.5=210 ≥24 → 挂；标签 120*0.5=60 <90 → 不挂
+    expect(selectDomIslands(nodes, NONE, { ...VP, zoom: 0.5 })).toEqual(['big']);
+    // zoom 1：标签 120×36 均达标 → 都挂
+    expect(selectDomIslands(nodes, NONE, VP).sort()).toEqual(['big', 'tag']);
+  });
+
+  it('屏幕过小但被选中：豁免入岛（点中即可内联编辑）', () => {
+    const nodes = [rect('big', 0, 0, 360, 420)];
+    expect(selectDomIslands(nodes, new Set(['big']), { ...VP, zoom: 0.06 })).toEqual(['big']);
   });
 
   it('默认上限 200：百节点项目全视口全部入岛（不再出现卡片切换）', () => {
