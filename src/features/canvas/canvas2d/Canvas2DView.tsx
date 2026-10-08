@@ -5,7 +5,7 @@ import { X } from 'lucide-react';
 import type { NodeChange, Viewport } from '@/features/canvas/domain/graphTypes';
 import type { CanvasViewportHost } from '@/features/canvas/hooks/useCanvasPersistence';
 
-import { useCanvasStore, type CanvasNode } from '@/stores/canvasStore';
+import { resolveFreeNodePosition, useCanvasStore, type CanvasNode } from '@/stores/canvasStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useThemeStore } from '@/stores/themeStore';
 import { useSnapStore } from '@/stores/snapStore';
@@ -382,7 +382,10 @@ export function Canvas2DView() {
         minY = Math.min(minY, abs.y);
       }
       if (!Number.isFinite(minX)) return false;
-      const offset = worldPos ? { x: worldPos.x - minX, y: worldPos.y - minY } : { x: 32, y: 32 };
+      // 旧版粘贴语义：落点避让（连续粘贴不原地重叠、不压住已有节点）
+      const anchor = worldPos ?? { x: minX + 32, y: minY + 32 };
+      const free = resolveFreeNodePosition(store.nodes, anchor);
+      const offset = { x: free.x - minX, y: free.y - minY };
       const newIds = duplicateSnapshot(snapshot, offset, false);
       engineRef.current?.setSelection(newIds);
       setSelectedIds(newIds);
