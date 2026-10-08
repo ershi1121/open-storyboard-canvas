@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { useCanvasStore } from '@/stores/canvasStore';
 import type { CanvasNodeData } from '@/features/canvas/domain/canvasNodes';
 import { IslandHostContext, NodeHostIdContext } from '@/features/canvas/compat/nodeHostApi';
 import { getCanvasElement } from '@/features/canvas/compat/engineBridge';
 import { nodeTypes } from '@/features/canvas/nodes';
+import { withNodeRenderErrorBoundary } from '@/features/canvas/nodes/NodeRenderErrorBoundary';
 import type { Canvas2DEngine } from './engine';
 import { selectDomIslands, type IslandViewport } from './domIslands';
 import type { RenderNode, SceneModel } from './sceneModel';
@@ -22,6 +23,41 @@ import type { RenderNode, SceneModel } from './sceneModel';
  * - 滚轮经 nowheel 约定转发引擎缩放。
  */
 
+/* 按组件类型缓存错误边界包装，避免每次渲染生成新组件类型导致重挂载 */
+const safeComponentCache = new WeakMap<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  React.ComponentType<any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  React.ComponentType<any>
+>();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function safeComponent<T extends React.ComponentType<any>>(Comp: T): React.ComponentType<any> {
+  let wrapped = safeComponentCache.get(Comp);
+  if (!wrapped) {
+    wrapped = withNodeRenderErrorBoundary(Comp);
+    safeComponentCache.set(Comp, wrapped);
+  }
+  return wrapped;
+}
+
+/** 岛层整体兜底边界：任何未预料异常回退为纯画布卡片，绝不拖累主界面 */
+class DomIslandsBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error): { error: Error | null } {
+    return { error };
+  }
+  componentDidCatch(error: Error): void {
+    console.error('[DomIslands] 岛层渲染异常，已回退为画布卡片模式', error);
+  }
+  render() {
+    if (this.state.error) return null;
+    return this.props.children;
+  }
+}
+
 interface DomIslandsProps {
   engineRef: { current: Canvas2DEngine | null };
   model: SceneModel | null;
@@ -29,7 +65,7 @@ interface DomIslandsProps {
   onIslandsChange: (ids: ReadonlySet<string>) => void;
 }
 
-export function DomIslands({ engineRef, model, selectedIds, onIslandsChange }: DomIslandsProps) {
+function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: DomIslandsProps) {
   const layerRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const wrapperRefs = useRef(new Map<string, HTMLDivElement>());
@@ -76,15 +112,29 @@ export function DomIslands({ engineRef, model, selectedIds, onIslandsChange }: D
   }, [engineRef, model]);
 
   useEffect(() => {
-    applyWorldTransform();
-    recompute();
-    const engine = engineRef.current;
-    if (!engine) return;
-    const unsubCam = engine.addCameraListener(() => {
+    // 引擎由父组件 effect 创建（晚于子组件 effect），需等待其就绪后再注册监听
+    let unsub: (() => void) | null = null;
+    let cancelled = false;
+    let raf = 0;
+    const attach = () => {
+      const engine = engineRef.current;
+      if (!engine) {
+        if (!cancelled) raf = requestAnimationFrame(attach);
+        return;
+      }
       applyWorldTransform();
       recompute();
-    });
-    return unsubCam;
+      unsub = engine.addCameraListener(() => {
+        applyWorldTransform();
+        recompute();
+      });
+    };
+    attach();
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      unsub?.();
+    };
   }, [applyWorldTransform, recompute, engineRef]);
 
   useEffect(() => {
@@ -271,6 +321,7 @@ function IslandNode({ rendered, selected, engineRef, registerRef }: IslandNodePr
   if (!node || !node.type) return null;
   const Comp = nodeTypes[node.type];
   if (!Comp) return null;
+  const SafeComp = safeComponent(Comp);
 
   const updateNodeData = (update: unknown) => {
     const current = useCanvasStore.getState().nodes.find((n) => n.id === rendered.id);
@@ -300,7 +351,7 @@ function IslandNode({ rendered, selected, engineRef, registerRef }: IslandNodePr
       <IslandHostContext.Provider value={true}>
         <NodeHostIdContext.Provider value={rendered.id}>
           <div ref={innerRef} style={{ width: rendered.w }}>
-            <Comp
+            <SafeComp
               id={node.id}
               data={node.data}
               type={node.type}
@@ -321,5 +372,13 @@ function IslandNode({ rendered, selected, engineRef, registerRef }: IslandNodePr
         </NodeHostIdContext.Provider>
       </IslandHostContext.Provider>
     </div>
+  );
+}
+
+export function DomIslands(props: DomIslandsProps) {
+  return (
+    <DomIslandsBoundary>
+      <DomIslandsInner {...props} />
+    </DomIslandsBoundary>
   );
 }

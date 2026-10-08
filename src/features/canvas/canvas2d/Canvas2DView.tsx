@@ -37,6 +37,7 @@ import { NodeToolDialog } from '@/features/canvas/ui/NodeToolDialog';
 import { AssetPanel, type CanvasAssetItem } from '@/features/canvas/ui/AssetPanel';
 import { CanvasSideToolbar } from '@/features/canvas/CanvasSideToolbar';
 import { nodeTypes } from '@/features/canvas/nodes';
+import { withNodeRenderErrorBoundary } from '@/features/canvas/nodes/NodeRenderErrorBoundary';
 import { extractCanvasAssets } from '@/features/canvas/shared/utils/assets';
 import { HiddenHostContext, NodeHostIdContext } from '@/features/canvas/compat/nodeHostApi';
 import { registerCanvas2DEngine, useViewportSnapshotStore } from '@/features/canvas/compat/engineBridge';
@@ -1093,6 +1094,23 @@ export function Canvas2DView() {
   );
 }
 
+/* 按组件类型缓存错误边界包装（检视面板 / 触发宿主共用） */
+const safeComponentCache = new WeakMap<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  React.ComponentType<any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  React.ComponentType<any>
+>();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function safeComponent<T extends React.ComponentType<any>>(Comp: T): React.ComponentType<any> {
+  let wrapped = safeComponentCache.get(Comp);
+  if (!wrapped) {
+    wrapped = withNodeRenderErrorBoundary(Comp);
+    safeComponentCache.set(Comp, wrapped);
+  }
+  return wrapped;
+}
+
 /**
  * 节点检视面板：选中单个节点时，在右侧停靠渲染其【原版节点编辑组件】。
  * 节点编辑组件通过 compat/nodeHostApi 提供的宿主 API 运行：
@@ -1125,6 +1143,7 @@ function NodeInspector({ hidden = false }: { hidden?: boolean }) {
   if (hidden || !node || !node.type || imageViewerOpen) return null;
   const Comp = nodeTypes[node.type];
   if (!Comp) return null;
+  const SafeComp = safeComponent(Comp);
 
   const rawWidth = node.measured?.width ?? node.width ?? 360;
   const rawHeight = node.measured?.height ?? node.height ?? 240;
@@ -1170,7 +1189,7 @@ function NodeInspector({ hidden = false }: { hidden?: boolean }) {
       <div className="ui-scrollbar flex-1 overflow-x-auto overflow-y-auto p-3">
         <NodeHostIdContext.Provider value={node.id}>
           <div className="relative mx-auto" style={{ width: nodeWidth, minHeight: 120 }}>
-            <Comp {...editorProps} />
+            <SafeComp {...editorProps} />
           </div>
         </NodeHostIdContext.Provider>
       </div>
@@ -1288,6 +1307,7 @@ function HiddenTriggerHost({ ids }: { ids: string[] }) {
           if (!node || !node.type) return null;
           const Comp = nodeTypes[node.type];
           if (!Comp) return null;
+          const SafeComp = safeComponent(Comp);
           const updateNodeData = (update: unknown) => {
             const current = useCanvasStore.getState().nodes.find((n) => n.id === id);
             const next =
@@ -1298,7 +1318,7 @@ function HiddenTriggerHost({ ids }: { ids: string[] }) {
           };
           return (
             <NodeHostIdContext.Provider key={id} value={id}>
-              <Comp
+              <SafeComp
                 id={node.id}
                 data={node.data}
                 type={node.type}
