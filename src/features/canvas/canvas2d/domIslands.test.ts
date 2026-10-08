@@ -66,7 +66,7 @@ describe('selectDomIslands（DOM 岛候选选择）', () => {
     for (let i = 0; i < 70; i++) {
       nodes.push(rect(`n${i}`, (i % 10) * 220, Math.floor(i / 10) * 220, 200, 200));
     }
-    const ids = selectDomIslands(nodes, new Set(['n69']), VP, { cap: 60 });
+    const ids = selectDomIslands(nodes, new Set(['n69']), { ...VP, viewW: 4000, viewH: 3000 }, { cap: 60 });
     expect(ids.length).toBe(60);
     expect(ids).toContain('n69');
     expect(ids[0]).toBe('n69'); // 选中排序优先
