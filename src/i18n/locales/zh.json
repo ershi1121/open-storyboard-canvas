@@ -48,7 +48,10 @@
     "fit": "全览",
     "hudFrame": "帧耗时",
     "hudVisible": "可见节点",
-    "hudEdges": "已绘边"
+    "hudEdges": "已绘边",
+    "diag": "诊断",
+    "diagTitle": "性能诊断（截图反馈用）",
+    "diagSoftware": "⚠ 软件光栅化：当前 WebView 未使用 GPU，任何引擎都会慢。请检查虚拟机/远程桌面/显卡驱动，或以 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=\"--enable-gpu-rasterization --ignore-gpu-blocklist\" 启动。"
   },
   "canvas": {
     "addImage": "添加图片",

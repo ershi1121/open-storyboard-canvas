@@ -48,7 +48,10 @@
     "fit": "Fit",
     "hudFrame": "Frame",
     "hudVisible": "Visible",
-    "hudEdges": "Edges"
+    "hudEdges": "Edges",
+    "diag": "Diag",
+    "diagTitle": "Perf diagnostics (for screenshots)",
+    "diagSoftware": "⚠ Software rasterization: WebView is not using GPU; any engine will be slow here. Check VM/remote-desktop/GPU driver, or launch with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=\"--enable-gpu-rasterization --ignore-gpu-blocklist\"."
   },
   "canvas": {
     "addImage": "Add Image",

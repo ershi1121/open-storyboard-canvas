@@ -43,6 +43,7 @@ import { HiddenHostContext, NodeHostIdContext } from '@/features/canvas/compat/n
 import { registerCanvas2DEngine, useViewportSnapshotStore } from '@/features/canvas/compat/engineBridge';
 import { buildSceneModel, type SceneModel } from './sceneModel';
 import { DomIslands } from './DomIslands';
+import { isSoftwareRaster, probeRasterBackend } from './gpuProbe';
 import { filterDragDescendants } from './spatialGrid';
 import { Canvas2DEngine, type ConnectHandleType, type EngineStats, type ViewportLike } from './engine';
 
@@ -107,6 +108,9 @@ export function Canvas2DView() {
   const schedulePersistRef = useRef<(delayMs?: number) => void>(() => {});
   const clipboardRef = useRef<ClipboardSnapshot | null>(null);
   const [stats, setStats] = useState<EngineStats | null>(null);
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [islandCount, setIslandCount] = useState(0);
+  const [rasterBackend] = useState(() => probeRasterBackend());
   const [nodeMenu, setNodeMenu] = useState<NodeMenuState | null>(null);
   const [contextMenu, setContextMenu] = useState<NodeContextMenuState | null>(null);
   const [assetPanelOpen, setAssetPanelOpen] = useState(false);
@@ -183,8 +187,8 @@ export function Canvas2DView() {
     scheduleCanvasPersist,
   });
 
-  const handleIslandsChange = useCallback((_next: ReadonlySet<string>) => {
-    /* 岛集合由岛层内部管理；宿主无需镜像 */
+  const handleIslandsChange = useCallback((next: ReadonlySet<string>) => {
+    setIslandCount(next.size);
   }, []);
   const handleIslandsFallback = useCallback(() => setIslandsBroken(true), []);
 
@@ -543,15 +547,7 @@ export function Canvas2DView() {
       },
     });
 
-    // 一次性探针：报告 WebView 实际光栅化后端（GPU / 软件），定位环境级性能问题
-    try {
-      const probe = document.createElement('canvas').getContext('webgl');
-      const ext = probe?.getExtension('WEBGL_debug_renderer_info');
-      const renderer = ext ? String(probe?.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'unknown';
-      console.warn(`[canvas2d] 光栅化后端: ${renderer}`);
-    } catch {
-      console.warn('[canvas2d] 光栅化后端: 探测失败');
-    }
+    console.warn(`[canvas2d] 光栅化后端: ${probeRasterBackend()}`);
     engine.attach(canvas);
     const rect = containerRef.current?.getBoundingClientRect();
     engine.resize(rect?.width ?? 800, rect?.height ?? 600, Math.min(window.devicePixelRatio || 1, 2));
@@ -581,7 +577,7 @@ export function Canvas2DView() {
     useViewportSnapshotStore.getState().set(engine.getViewport());
 
     const statsTimer = setInterval(() => {
-      setStats({ ...engine.getStats() });
+      setStats({ ...engine.getStats(), slowFrames: engine.slowFrameCount } as EngineStats);
       // 低频喂给 useViewport() 垫片（检视面板里的原图/预览图切换等场景足够）
       useViewportSnapshotStore.getState().set(engine.getViewport());
     }, 500);
@@ -1009,8 +1005,30 @@ export function Canvas2DView() {
           >
             {t('canvas2d.fit')}
           </button>
+          <button
+            type="button"
+            className="rounded border border-border-dark bg-surface-dark px-2 py-0.5 text-[11px] text-text-dark hover:border-accent"
+            onClick={() => setDiagOpen((open) => !open)}
+          >
+            {t('canvas2d.diag')}
+          </button>
         </div>
       </div>
+
+      {/* 诊断面板：截图即可定位性能瓶颈层级 */}
+      {diagOpen && (
+        <div className="absolute right-3 top-40 z-50 w-[360px] rounded-lg border border-border-dark bg-[rgba(11,15,24,0.92)] p-3 font-mono text-[11px] leading-5 text-text-muted backdrop-blur-sm">
+          <div className="mb-1 text-xs font-semibold text-text-dark">{t('canvas2d.diagTitle')}</div>
+          <div>backend: <b className={isSoftwareRaster(rasterBackend) ? 'text-red-400' : 'text-emerald-400'}>{rasterBackend}</b></div>
+          {isSoftwareRaster(rasterBackend) && (
+            <div className="text-red-300">{t('canvas2d.diagSoftware')}</div>
+          )}
+          <div>fps: {stats?.fps ?? '--'} / frame: {stats ? stats.frameMs.toFixed(1) : '--'} ms</div>
+          <div>slowFrames(&gt;48ms): {((stats as (EngineStats & { slowFrames?: number }) | null)?.slowFrames) ?? 0}</div>
+          <div>nodes: {stats?.total ?? 0} / visible: {stats?.visible ?? 0} / edges: {stats?.edgesDrawn ?? 0}</div>
+          <div>domIslands: {islandCount} / zoom: {stats ? stats.zoom.toFixed(2) : '--'}</div>
+        </div>
+      )}
 
       {/* 操作提示横幅 */}
       <div className="pointer-events-none absolute left-3 top-3 max-w-[460px] rounded-lg border border-sky-500/30 bg-[rgba(12,42,61,0.88)] px-3 py-2 text-[11px] leading-4 text-sky-200 backdrop-blur-sm">

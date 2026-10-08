@@ -242,6 +242,8 @@ export class Canvas2DEngine {
   private lastCamKey = '';
   private lastCameraMoveT = 0;
   private lastSlowFrameLogT = 0;
+  /** 累计慢帧数（诊断面板用） */
+  slowFrameCount = 0;
   /** 按需渲染：画面无变化且无生成态动画时跳过 drawScene（空闲近零开销） */
   private dirty = true;
   private genAnim = false;
@@ -1098,6 +1100,7 @@ export class Canvas2DEngine {
     this.notifyCameraIfMoved();
     const t1 = performance.now();
     const frameCost = shouldDraw ? t1 - t0 : 0;
+    if (frameCost > 48) this.slowFrameCount++;
     if (frameCost > 48 && t - this.lastSlowFrameLogT > 1000) {
       this.lastSlowFrameLogT = t;
       console.warn(
