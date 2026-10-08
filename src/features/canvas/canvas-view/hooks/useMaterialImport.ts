@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
 import { useReactFlow } from '@xyflow/react';
-import { useCanvasStore } from '@/stores/canvasStore';
+import { resolveFreeNodePosition, useCanvasStore } from '@/stores/canvasStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import {
   prepareNodeImage,
@@ -12,6 +12,7 @@ import {
   dataTransferHasMaterialFile,
   isAudioFile,
   isImageFile,
+  isMaterialFile,
   isVideoFile,
   resolveDroppedMaterialFile,
   resolveDroppedMaterialSource,
@@ -27,6 +28,7 @@ import {
 } from '@/features/canvas/application/audioUpload';
 import {
   CANVAS_NODE_TYPES,
+  DEFAULT_NODE_WIDTH,
   type AudioNodeData,
   type CanvasNodeData,
   type CanvasNodeType,
@@ -325,28 +327,49 @@ export function useMaterialImport({ scheduleCanvasPersist }: UseMaterialImportOp
       }
       event.preventDefault();
       event.stopPropagation();
-      const materialFile = resolveDroppedMaterialFile(event.dataTransfer);
+
+      const dropPoint = reactFlowInstance.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
+
+      // 多文件拖入：全部导入，并按文件名自然序（1 < 2 < 10）排成网格 —— 序号顺序 = 摆放顺序。
+      const droppedFiles = Array.from(event.dataTransfer.files ?? []).filter(isMaterialFile);
+      if (droppedFiles.length > 1) {
+        droppedFiles.sort((a, b) =>
+          a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+        );
+        const cols = Math.min(droppedFiles.length, 6);
+        const cell = DEFAULT_NODE_WIDTH + 24;
+        void (async () => {
+          for (let i = 0; i < droppedFiles.length; i += 1) {
+            const base = {
+              x: dropPoint.x + (i % cols) * cell,
+              y: dropPoint.y + Math.floor(i / cols) * cell,
+            };
+            // 每轮读最新 nodes：既避开画布原有节点，也避开这一批刚放下的。
+            const free = resolveFreeNodePosition(useCanvasStore.getState().nodes, base);
+            await createMaterialNodeFromFileAtFlowPosition(droppedFiles[i], free);
+          }
+        })();
+        return;
+      }
+
+      // 单文件 / 路径拖入：落点避让后放一个。
+      const freePoint = resolveFreeNodePosition(useCanvasStore.getState().nodes, dropPoint);
+      const materialFile = droppedFiles[0] ?? resolveDroppedMaterialFile(event.dataTransfer);
       if (!materialFile) {
         const materialSource = resolveDroppedMaterialSource(event.dataTransfer);
         if (!materialSource) {
           return;
         }
-        void createMaterialNodeFromSourceAtFlowPosition(
-          materialSource,
-          reactFlowInstance.screenToFlowPosition({
-            x: event.clientX,
-            y: event.clientY,
-          })
-        );
+        void createMaterialNodeFromSourceAtFlowPosition(materialSource, freePoint);
         return;
       }
-      void createMaterialNodeFromFileAtClientPosition(materialFile, {
-        x: event.clientX,
-        y: event.clientY,
-      });
+      void createMaterialNodeFromFileAtFlowPosition(materialFile, freePoint);
     },
     [
-      createMaterialNodeFromFileAtClientPosition,
+      createMaterialNodeFromFileAtFlowPosition,
       createMaterialNodeFromSourceAtFlowPosition,
       reactFlowInstance,
     ]

@@ -15,6 +15,8 @@ import {
   Type,
 } from 'lucide-react';
 
+import { COLOR_CHIP_CLASS, getLayerAccentColor, readableTextColor } from './layerAccent';
+
 import {
   TEXT_ALIGN_PRESETS,
   TEXT_COLOR_PRESETS,
@@ -137,7 +139,7 @@ function ColorField({ label, value, onChange }: ColorFieldProps) {
           type="color"
           value={value}
           onChange={(event) => onChange(event.target.value.toUpperCase())}
-          className="h-8 w-12 shrink-0 cursor-pointer rounded-lg border border-[rgba(255,255,255,0.15)] bg-bg-dark/80 p-1"
+          className="h-8 w-12 shrink-0 cursor-pointer rounded-lg border border-[rgba(128,128,128,0.7)] bg-bg-dark/80 p-1"
         />
         <input
           type="text"
@@ -165,7 +167,7 @@ function ColorField({ label, value, onChange }: ColorFieldProps) {
               onClick={() => onChange(preset)}
               style={{ backgroundColor: preset }}
               className={`h-5 w-5 rounded-md border transition-transform hover:scale-110 ${
-                active ? 'border-accent ring-2 ring-accent/50' : 'border-white/25'
+                active ? 'border-accent ring-2 ring-accent/50' : 'border-[rgba(128,128,128,0.7)]'
               }`}
             />
           );
@@ -209,9 +211,14 @@ function TextLayerRow({
 
   const lineHeightLabel = layer.direction === 'vertical' ? '字距 / 列距' : '行距';
 
+  const accent = getLayerAccentColor(index);
+  const onColor = readableTextColor(accent);
   return (
-    <div className="overflow-hidden rounded-lg border border-[rgba(255,255,255,0.1)] bg-bg-dark/50">
-      <div className="flex items-center gap-1.5 px-2 py-1.5">
+    <div
+      className="overflow-hidden rounded-lg border border-[rgba(128,128,128,0.7)]"
+      style={{ backgroundColor: accent }}
+    >
+      <div className="flex items-center gap-1.5 px-2 py-1.5" style={{ color: onColor }}>
         <button
           type="button"
           onClick={onToggle}
@@ -219,18 +226,18 @@ function TextLayerRow({
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           <ChevronRight
-            className={`h-3 w-3 shrink-0 text-text-muted transition-transform ${
+            className={`h-3 w-3 shrink-0 text-current transition-transform ${
               open ? 'rotate-90' : ''
             }`}
           />
           <span
-            className="h-4 w-4 shrink-0 rounded border border-white/25"
+            className={`h-4 w-4 shrink-0 ${COLOR_CHIP_CLASS}`}
             style={{ backgroundColor: layer.color }}
           />
-          <span className="shrink-0 text-xs text-text-muted">文字 {index + 1}</span>
-          <span className="min-w-0 flex-1 truncate text-xs text-text-dark">{sample}</span>
+          <span className="shrink-0 text-xs text-current">文字 {index + 1}</span>
+          <span className="min-w-0 flex-1 truncate text-xs text-current opacity-90">{sample}</span>
           {layer.direction === 'vertical' && (
-            <span className="shrink-0 rounded bg-white/[0.08] px-1 py-px text-[10px] text-text-muted">
+            <span className="shrink-0 rounded bg-black/10 px-1 py-px text-[10px] text-current">
               竖排
             </span>
           )}
@@ -239,8 +246,8 @@ function TextLayerRow({
           type="button"
           onClick={() => onChange({ visible: !layer.visible })}
           title={layer.visible ? '隐藏这一层' : '显示这一层'}
-          className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-white/[0.06] ${
-            layer.visible ? 'text-text-muted hover:text-text-dark' : 'text-amber-400'
+          className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-black/10 ${
+            layer.visible ? 'text-current' : 'text-amber-400'
           }`}
         >
           {layer.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
@@ -249,14 +256,21 @@ function TextLayerRow({
           type="button"
           onClick={onRemove}
           title="删除这一层"
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/[0.06] hover:text-red-300"
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-current transition-colors hover:bg-black/10"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
 
       {open && (
-        <div className="space-y-3 border-t border-[rgba(255,255,255,0.08)] px-2 py-2.5">
+        <div className="mx-1.5 mb-1.5 space-y-3 rounded-lg bg-[var(--ui-surface-panel)] px-2 py-2.5">
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`h-4 w-4 shrink-0 ${COLOR_CHIP_CLASS}`}
+              style={{ backgroundColor: layer.color }}
+            />
+            <span className="text-xs font-medium text-text-dark">文字 {index + 1}</span>
+          </div>
           <textarea
             value={layer.text}
             onChange={(event) => onChange({ text: event.target.value })}
@@ -343,8 +357,8 @@ function TextLayerRow({
             value={layer.fontSizePercent}
             min={TEXT_FONT_SIZE_MIN}
             max={TEXT_FONT_SIZE_MAX}
-            step={0.5}
-            nudgeStep={0.5}
+            step={0.1}
+            nudgeStep={0.1}
             suffix="%"
             onChange={(value) => onChange({ fontSizePercent: value })}
             hint="按画幅短边取百分比，不同尺寸的图文字占比一致"
@@ -355,8 +369,8 @@ function TextLayerRow({
             value={layer.lineHeightPercent}
             min={TEXT_LINE_HEIGHT_MIN}
             max={TEXT_LINE_HEIGHT_MAX}
-            step={1}
-            nudgeStep={1}
+            step={0.1}
+            nudgeStep={0.1}
             suffix="%"
             onChange={(value) => onChange({ lineHeightPercent: value })}
             hint={
@@ -414,8 +428,8 @@ function TextLayerRow({
             value={layer.strokePercent}
             min={0}
             max={TEXT_STROKE_MAX}
-            step={0.5}
-            nudgeStep={0.5}
+            step={0.1}
+            nudgeStep={0.1}
             suffix="%"
             onChange={(value) => onChange({ strokePercent: value })}
             hint="给文字描一圈边，放在复杂画面上也能看清"
@@ -432,7 +446,7 @@ function TextLayerRow({
             value={layer.xPercent}
             min={0}
             max={100}
-            step={0.5}
+            step={0.1}
             nudgeStep={TEXT_POSITION_NUDGE_STEP}
             suffix="%"
             onChange={(value) => onChange({ xPercent: value })}
@@ -443,7 +457,7 @@ function TextLayerRow({
             value={layer.yPercent}
             min={0}
             max={100}
-            step={0.5}
+            step={0.1}
             nudgeStep={TEXT_POSITION_NUDGE_STEP}
             suffix="%"
             onChange={(value) => onChange({ yPercent: value })}

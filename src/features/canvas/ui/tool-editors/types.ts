@@ -1,5 +1,14 @@
 import type { CanvasToolPlugin, ToolFieldSchema, ToolOptions } from '@/features/canvas/tools';
 
+/**
+ * 「批量应用到其他图」的作用范围：只把某一类共享规则推给队列里的图。
+ * - all：边框 + 自动裁剪 + 文字（顶部「批量套用」按钮的默认行为）
+ * - border：只套边框（含描边 / 圆角 / 按比例补边）
+ * - autoCrop：只套自动裁剪规则
+ * - text：只套文字图层
+ */
+export type BatchApplyScope = 'all' | 'border' | 'autoCrop' | 'text';
+
 export interface ToolEditorBaseProps {
   plugin: CanvasToolPlugin;
   options: ToolOptions;
@@ -30,7 +39,36 @@ export interface VisualToolEditorProps extends ToolEditorBaseProps {
    * ⚠️ 必须一并落盘：面板一关条就没了，目标图只能靠这份存下来的编号
    * 才知道自己在这批里排第几，否则切过去会看到编号退回 1。
    */
-  onApplyBatch?: (targetIds: string[], textOrderIndexById?: Map<string, number>) => void;
+  onApplyBatch?: (
+    targetIds: string[],
+    textOrderIndexById?: Map<string, number>,
+    scope?: BatchApplyScope
+  ) => void;
+  /**
+   * 仅裁剪面板用到 —— 把「批量套用选择条」的当前内容实时上报给父组件（`NodeToolDialog`）。
+   *
+   * ⭐ 为什么要这条通道：队列（哪些图）和编号表（每张图排第几）都是选择条的**内部状态**，
+   * 而右下角「应用」按钮在 `NodeToolDialog` 那一层、拿不到它们 —— 这正是「应用只对一张图
+   * 生效」的根因。选择条每次变化就回调一次，父层据此决定「应用」时要把哪些图一起烘成结果节点。
+   *
+   * - `otherIds`：队列里的其它图（**不含当前图** —— 当前图走实时 options 那条路径）。
+   *   队列为空时传 `null`，父层就退回「只应用当前图」的单图行为。
+   * - `textOrderIndexById`：条内 0-based 编号表（id → 排第几），烘图时写进每张图的
+   *   `textOrderIndex`，保证「图像1 / 图像2…」的编号和选择条里看到的一致。
+   * - `sourceNodeId`：这份快照对应的**当前图 id**。父层「应用」只认和它要落的节点
+   *   一致的那份，避免旧批次快照串台（无需父层额外重置）。
+   */
+  onStripSnapshot?: (snapshot: {
+    sourceNodeId: string;
+    otherIds: string[];
+    textOrderIndexById: Record<string, number>;
+  } | null) => void;
+  /**
+   * 仅裁剪面板用到 —— 「批量把裁剪框收到内容边界」。
+   * 对队列里的每张图，按当前自动裁剪规则各自识别内容边界、把它的裁剪框对齐过去
+   * （逐图现场检测，边界各按各的像素算；规则由父层从自己的 options 里读）。
+   */
+  onBatchTrimToContent?: (targetIds: string[]) => Promise<void>;
   /**
    * 条里拖动排序 —— 传出**条里这些图**的新顺序（id 数组）。
    *

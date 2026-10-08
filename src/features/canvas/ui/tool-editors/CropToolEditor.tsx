@@ -33,6 +33,7 @@ import {
   AUTO_CROP_COLOR_PRESETS,
   AUTO_CROP_EDGE_ITEMS,
   AUTO_CROP_PADDING_MAX_PERCENT,
+  AUTO_CROP_PADDING_MIN_PERCENT,
   hasAutoCropEdge,
   isSameColor,
   isTrimInsetsEmpty,
@@ -64,9 +65,10 @@ import {
   type BorderLayer,
   type BorderOptions,
 } from '@/features/canvas/tools/border';
-import type { VisualToolEditorProps } from './types';
+import type { BatchApplyScope, VisualToolEditorProps } from './types';
 import { buildStripIndexById, orderStripItems, resolveStripTextIndex } from './imageOrder';
 import { PictureStrip, type PictureStripCandidate } from './PictureStrip';
+import { COLOR_CHIP_CLASS, getLayerAccentColor, readableTextColor } from './layerAccent';
 import {
   TEXT_LAYERS_KEY,
   readTextLayers,
@@ -245,6 +247,8 @@ interface CollapsibleSectionProps {
   icon?: ReactNode;
   /** 收起时也能看到的关键信息，省得为了确认一个值把面板全展开 */
   summary?: string;
+  /** 区块身份色：给标题栏铺一整块色，和里面的图层色块一样一眼分区。不传则跟随主题。 */
+  accent?: string;
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
@@ -259,6 +263,7 @@ function CollapsibleSection({
   title,
   icon,
   summary,
+  accent,
   open,
   onToggle,
   children,
@@ -270,15 +275,28 @@ function CollapsibleSection({
         onClick={onToggle}
         aria-expanded={open}
         className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.04]"
+        style={accent ? { backgroundColor: accent, color: readableTextColor(accent) } : undefined}
       >
         <ChevronRight
-          className={`h-3.5 w-3.5 shrink-0 text-text-muted transition-transform ${
-            open ? 'rotate-90' : ''
-          }`}
+          className={`h-3.5 w-3.5 shrink-0 ${
+            accent ? 'text-current' : 'text-text-muted'
+          } transition-transform ${open ? 'rotate-90' : ''}`}
         />
         {icon}
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-dark">{title}</span>
-        {summary && <span className="shrink-0 text-xs text-text-muted">{summary}</span>}
+        <span
+          className={`min-w-0 flex-1 truncate text-sm font-medium ${
+            accent ? 'text-current' : 'text-text-dark'
+          }`}
+        >
+          {title}
+        </span>
+        {summary && (
+          <span
+            className={`shrink-0 text-xs ${accent ? 'text-current opacity-80' : 'text-text-muted'}`}
+          >
+            {summary}
+          </span>
+        )}
       </button>
       {open && (
         <div className="space-y-3 border-t border-[rgba(255,255,255,0.08)] px-3 py-3">{children}</div>
@@ -292,6 +310,8 @@ interface PercentSliderRowProps {
   hint: string;
   value: number;
   max: number;
+  /** 下限，默认 0；自动裁剪「保留边距」传负值以支持往内容里切。 */
+  min?: number;
   /**
    * 滑杆与箭头的步进，默认 0.1 —— 边框那几个参数要精调（0.1% 的圆角差别看得出来）。
    * 容差、保留边距这类粗调参数传 1 或 0.5 即可。
@@ -306,13 +326,14 @@ function PercentSliderRow({
   hint,
   value,
   max,
+  min = 0,
   step = BORDER_NUDGE_STEP_PERCENT,
   onChange,
 }: PercentSliderRowProps) {
   // 滑杆一格太粗，箭头专门做精调。
   // 结果要四舍五入到 2 位小数，否则 0.1 连加几次会变成 0.30000000000000004 显示在界面上。
   const nudge = (delta: number) => {
-    const next = Math.min(max, Math.max(0, Math.round((value + delta) * 100) / 100));
+    const next = Math.min(max, Math.max(min, Math.round((value + delta) * 100) / 100));
     onChange(next);
   };
 
@@ -335,7 +356,7 @@ function PercentSliderRow({
             <button
               type="button"
               onClick={() => nudge(-step)}
-              disabled={value <= 0}
+              disabled={value <= min}
               title={`减少 ${formatPercent(step)}`}
               className="flex h-3.5 items-center justify-center text-text-muted transition-colors hover:text-accent disabled:opacity-30 disabled:hover:text-text-muted"
             >
@@ -346,7 +367,7 @@ function PercentSliderRow({
       </div>
       <input
         type="range"
-        min={0}
+        min={min}
         max={max}
         step={step}
         value={value}
@@ -382,9 +403,14 @@ function BorderLayerRow({
   onHexDraftCommit,
   onRemove,
 }: BorderLayerRowProps) {
+  const accent = getLayerAccentColor(index);
+  const onColor = readableTextColor(accent);
   return (
-    <div className="overflow-hidden rounded-lg border border-[rgba(255,255,255,0.1)] bg-bg-dark/50">
-      <div className="flex items-center gap-2 px-2 py-1.5">
+    <div
+      className="overflow-hidden rounded-lg border border-[rgba(128,128,128,0.7)]"
+      style={{ backgroundColor: accent }}
+    >
+      <div className="flex items-center gap-2 px-2 py-1.5" style={{ color: onColor }}>
         <button
           type="button"
           onClick={onToggle}
@@ -392,16 +418,16 @@ function BorderLayerRow({
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
           <ChevronRight
-            className={`h-3 w-3 shrink-0 text-text-muted transition-transform ${
+            className={`h-3 w-3 shrink-0 text-current transition-transform ${
               open ? 'rotate-90' : ''
             }`}
           />
           <span
-            className="h-4 w-4 shrink-0 rounded border border-white/25"
+            className={`h-4 w-4 shrink-0 ${COLOR_CHIP_CLASS}`}
             style={{ backgroundColor: layer.color }}
           />
-          <span className="shrink-0 text-xs text-text-dark">边框 {index + 1}</span>
-          <span className="min-w-0 flex-1 truncate text-right tabular-nums text-xs text-text-muted">
+          <span className="shrink-0 text-xs font-medium text-current">边框 {index + 1}</span>
+          <span className="min-w-0 flex-1 truncate text-right tabular-nums text-xs text-current opacity-80">
             {formatPercent(layer.widthPercent)}
           </span>
         </button>
@@ -409,14 +435,21 @@ function BorderLayerRow({
           type="button"
           onClick={onRemove}
           title="删除这一层"
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/[0.06] hover:text-red-300"
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-current transition-colors hover:bg-black/10"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
 
       {open && (
-        <div className="space-y-3 border-t border-[rgba(255,255,255,0.08)] px-2 py-2.5">
+        <div className="mx-1.5 mb-1.5 space-y-3 rounded-lg bg-[var(--ui-surface-panel)] px-2 py-2.5">
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`h-4 w-4 shrink-0 ${COLOR_CHIP_CLASS}`}
+              style={{ backgroundColor: layer.color }}
+            />
+            <span className="text-xs font-medium text-text-dark">边框 {index + 1}</span>
+          </div>
           <div>
             <div className="mb-1 text-xs text-text-dark">颜色</div>
             <div className="flex flex-wrap items-center gap-2">
@@ -424,7 +457,7 @@ function BorderLayerRow({
                 type="color"
                 value={layer.color}
                 onChange={(event) => onChange({ color: event.target.value.toUpperCase() })}
-                className="h-8 w-12 shrink-0 cursor-pointer rounded-lg border border-[rgba(255,255,255,0.15)] bg-bg-dark/80 p-1"
+                className="h-8 w-12 shrink-0 cursor-pointer rounded-lg border border-[rgba(128,128,128,0.7)] bg-bg-dark/80 p-1"
               />
               <input
                 type="text"
@@ -446,7 +479,7 @@ function BorderLayerRow({
                     onClick={() => onChange({ color: preset })}
                     style={{ backgroundColor: preset }}
                     className={`h-5 w-5 rounded-md border transition-transform hover:scale-110 ${
-                      active ? 'border-accent ring-2 ring-accent/50' : 'border-white/25'
+                      active ? 'border-accent ring-2 ring-accent/50' : 'border-[rgba(128,128,128,0.7)]'
                     }`}
                   />
                 );
@@ -474,6 +507,8 @@ export function CropToolEditor({
   onOptionsChange,
   onSwitchTarget,
   onApplyBatch,
+  onStripSnapshot,
+  onBatchTrimToContent,
   onReorderImages,
   canvasImages,
   currentNodeId,
@@ -581,6 +616,96 @@ export function CropToolEditor({
    * 所以拖一下条两边一起变；不点「应用」，画布上的图不会动。
    */
   const stripIndexById = useMemo(() => buildStripIndexById(stripOrderedItems), [stripOrderedItems]);
+
+  /**
+   * 把当前选择条内容实时上报给父层（`NodeToolDialog`），供右下角「应用」整批落图用。
+   *
+   * ⭐ 这是「应用只对一张图生效」的正解：队列（哪些图）+ 编号表都在本组件内部，
+   * 父层过去拿不到，只能烘当前这一张。这里每次条内容/编号一变就同步一次。
+   * 队列为空 → 传 `null`，父层据此退回「只应用当前图」的单图行为。
+   */
+  useEffect(() => {
+    if (!onStripSnapshot || !currentNodeId) {
+      return;
+    }
+    const otherIds = stripOrderedItems
+      .filter((item) => item.id !== currentNodeId)
+      .map((item) => item.id);
+    if (otherIds.length === 0) {
+      onStripSnapshot(null);
+      return;
+    }
+    const record: Record<string, number> = {};
+    stripIndexById.forEach((index, id) => {
+      record[id] = index;
+    });
+    onStripSnapshot({
+      sourceNodeId: currentNodeId,
+      otherIds,
+      textOrderIndexById: record,
+    });
+  }, [onStripSnapshot, stripOrderedItems, stripIndexById, currentNodeId]);
+
+  // ---- 各区块（自动裁剪 / 边框 / 文字）的「批量应用到其他图」+「批量收到内容边界」 ----
+  const [isBatchTrimming, setIsBatchTrimming] = useState(false);
+  // 队列里的其它图（不含当前图）——各区块的批量按钮都作用在这些图上。
+  const batchTargetIds = useMemo(
+    () => stripOrderedItems.filter((item) => item.id !== currentNodeId).map((item) => item.id),
+    [stripOrderedItems, currentNodeId]
+  );
+  const applyBatchScope = useCallback(
+    (scope: BatchApplyScope) => {
+      if (batchTargetIds.length === 0) {
+        return;
+      }
+      onApplyBatch?.(batchTargetIds, stripIndexById, scope);
+    },
+    [batchTargetIds, onApplyBatch, stripIndexById]
+  );
+  const handleBatchTrim = useCallback(async () => {
+    if (batchTargetIds.length === 0 || !onBatchTrimToContent) {
+      return;
+    }
+    setIsBatchTrimming(true);
+    try {
+      await onBatchTrimToContent(batchTargetIds);
+    } finally {
+      setIsBatchTrimming(false);
+    }
+  }, [batchTargetIds, onBatchTrimToContent]);
+
+  const batchButtonClass =
+    'flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/40 bg-accent/15 px-3 py-1.5 text-xs font-medium text-text-dark transition-colors hover:bg-accent/25 disabled:cursor-not-allowed disabled:opacity-50';
+  const renderSectionBatchButton = (scope: BatchApplyScope, label: string) => (
+    <button
+      type="button"
+      onClick={() => applyBatchScope(scope)}
+      disabled={batchTargetIds.length === 0 || isBatchApplying}
+      title={
+        batchTargetIds.length === 0
+          ? '先点顶部「添加图片」把要套用的图加进来'
+          : `只把本区块的设置套用到队列里的 ${batchTargetIds.length} 张图（各图保留自己的裁剪框/比例）`
+      }
+      className={batchButtonClass}
+    >
+      {isBatchApplying ? '套用中…' : `${label}（${batchTargetIds.length}）`}
+    </button>
+  );
+  const renderBatchTrimButton = () => (
+    <button
+      type="button"
+      onClick={handleBatchTrim}
+      disabled={batchTargetIds.length === 0 || isBatchTrimming}
+      title={
+        batchTargetIds.length === 0
+          ? '先点顶部「添加图片」把要处理的图加进来'
+          : `把队列里的 ${batchTargetIds.length} 张图的裁剪框，各自按自己的像素收到内容边界`
+      }
+      className={batchButtonClass}
+    >
+      {isBatchTrimming ? '收边中…' : `批量把裁剪框收到内容边界（${batchTargetIds.length}）`}
+    </button>
+  );
 
   /**
    * 条里是不是真的在编排**一批**图（当前图之外还有人）。
@@ -1711,6 +1836,7 @@ export function CropToolEditor({
       <div style={{ gridArea: 'left' }} className="ui-scrollbar flex max-h-full min-h-0 flex-col gap-2.5 overflow-y-auto pr-1">
         <CollapsibleSection
           title="裁剪比例"
+          accent={getLayerAccentColor(0)}
           summary={activeRatioLabel}
           open={openSections.ratio}
           onToggle={() => toggleSection('ratio')}
@@ -1769,11 +1895,13 @@ export function CropToolEditor({
         */}
         <CollapsibleSection
           title="自动裁剪"
-          icon={<ScanSearch className="h-3.5 w-3.5 shrink-0 text-accent" />}
+          accent={getLayerAccentColor(1)}
+          icon={<ScanSearch className="h-3.5 w-3.5 shrink-0 text-current" />}
           summary={autoCropSummary}
           open={openSections.autoCrop}
           onToggle={() => toggleSection('autoCrop')}
         >
+          {renderSectionBatchButton('autoCrop', '批量应用自动裁剪到其他图')}
           <label className="flex cursor-pointer items-center justify-between gap-2">
             <span className="text-xs text-text-dark">按颜色去边</span>
             <input
@@ -1803,7 +1931,7 @@ export function CropToolEditor({
                       setAutoCropHexDraft(null);
                       updateAutoCrop({ color: event.target.value.toUpperCase() });
                     }}
-                    className="h-8 w-12 shrink-0 cursor-pointer rounded-lg border border-[rgba(255,255,255,0.15)] bg-bg-dark/80 p-1"
+                    className="h-8 w-12 shrink-0 cursor-pointer rounded-lg border border-[rgba(128,128,128,0.7)] bg-bg-dark/80 p-1"
                   />
                   <input
                     type="text"
@@ -1834,7 +1962,7 @@ export function CropToolEditor({
                         }}
                         style={{ backgroundColor: preset }}
                         className={`h-5 w-5 rounded-md border transition-transform hover:scale-110 ${
-                          active ? 'border-accent ring-2 ring-accent/50' : 'border-white/25'
+                          active ? 'border-accent ring-2 ring-accent/50' : 'border-[rgba(128,128,128,0.7)]'
                         }`}
                       />
                     );
@@ -1874,10 +2002,11 @@ export function CropToolEditor({
 
               <PercentSliderRow
                 label="保留边距"
-                hint="往回留一圈背景，避免主体贴边太紧；按图片短边的百分比算"
+                hint="正值＝往回多留一圈背景，避免主体贴边太紧；负值＝往内容里再多切一点，用来去掉自动裁剪后残留的那条细边。按图片短边百分比算。"
                 value={autoCrop.paddingPercent}
+                min={AUTO_CROP_PADDING_MIN_PERCENT}
                 max={AUTO_CROP_PADDING_MAX_PERCENT}
-                step={0.5}
+                step={0.1}
                 onChange={(value) => updateAutoCrop({ paddingPercent: value })}
               />
 
@@ -1925,6 +2054,8 @@ export function CropToolEditor({
                 把裁剪框收到内容边界
               </button>
 
+              {renderBatchTrimButton()}
+
               <div className="text-xs leading-relaxed text-text-muted/80">
                 虚线框就是识别出的内容边界。裁剪框拖到它外面也没关系 ——
                 多出来的部分会被截掉（自动裁剪在底层，边框、文字都在它上面）。
@@ -1936,11 +2067,13 @@ export function CropToolEditor({
 
         <CollapsibleSection
           title="边框"
-          icon={<Frame className="h-3.5 w-3.5 shrink-0 text-accent" />}
+          accent={getLayerAccentColor(2)}
+          icon={<Frame className="h-3.5 w-3.5 shrink-0 text-current" />}
           summary={borderSummary}
           open={openSections.border}
           onToggle={() => toggleSection('border')}
         >
+          {renderSectionBatchButton('border', '批量应用边框到其他图')}
           {border.layers.length === 0 && (
             <div className="rounded-lg border border-dashed border-[rgba(255,255,255,0.18)] px-3 py-2 text-xs text-text-muted">
               还没有边框层。点下面的「添加边框层」，再拖动宽度滑杆即可加边框。
@@ -2010,7 +2143,7 @@ export function CropToolEditor({
                 hint="四边各自至少留出的背景宽度。0 = 不补边，越大四边留白越多；选了目标比例时，次要方向也会保持这一圈，四边平衡、不会一边一大条一边贴边。"
                 value={border.padPercent}
                 max={BORDER_PAD_MAX_PERCENT}
-                step={1}
+                step={0.1}
                 onChange={(value) => updateBorder({ padPercent: value })}
               />
 
@@ -2023,6 +2156,7 @@ export function CropToolEditor({
 
         <CollapsibleSection
           title="描边与圆角"
+          accent={getLayerAccentColor(3)}
           summary={edgeSummary}
           open={openSections.edge}
           onToggle={() => toggleSection('edge')}
@@ -2050,11 +2184,13 @@ export function CropToolEditor({
         */}
         <CollapsibleSection
           title="文字"
-          icon={<Type className="h-3.5 w-3.5 shrink-0 text-accent" />}
+          accent={getLayerAccentColor(4)}
+          icon={<Type className="h-3.5 w-3.5 shrink-0 text-current" />}
           summary={describeTextLayers(textLayers, resolvedTextIndex)}
           open={openSections.text}
           onToggle={() => toggleSection('text')}
         >
+          {renderSectionBatchButton('text', '批量应用文字到其他图')}
           <TextLayersEditor
             layers={textLayers}
             onChange={updateTextLayers}

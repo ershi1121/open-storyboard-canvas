@@ -147,6 +147,7 @@ export function Canvas() {
   const deleteNodes = useCanvasStore((state) => state.deleteNodes);
   const groupNodes = useCanvasStore((state) => state.groupNodes);
   const ungroupNode = useCanvasStore((state) => state.ungroupNode);
+  const arrangeNodesToGrid = useCanvasStore((state) => state.arrangeNodesToGrid);
   const undo = useCanvasStore((state) => state.undo);
   const redo = useCanvasStore((state) => state.redo);
   const openToolDialog = useCanvasStore((state) => state.openToolDialog);
@@ -425,6 +426,69 @@ export function Canvas() {
     scheduleCanvasPersist(0);
   }, [groupNodes, scheduleCanvasPersist, selection.selectedNodeIds]);
 
+  const handleBatchArrange = useCallback(
+    (sortBy: 'name' | 'position') => {
+      arrangeNodesToGrid(selection.selectedNodeIds, { sortBy });
+      scheduleCanvasPersist(0);
+    },
+    [arrangeNodesToGrid, scheduleCanvasPersist, selection.selectedNodeIds]
+  );
+
+  // 框选整理并打组：把选中的节点（含其所在整组）先释放成顶层，排整齐，再打成一个新组。
+  const handleTidyAndGroup = useCallback(
+    (sortBy: 'name' | 'position') => {
+      const state = useCanvasStore.getState();
+      const nodeById = new Map(state.nodes.map((node) => [node.id, node] as const));
+      const groupsToRelease = new Set<string>();
+      const working = new Set<string>();
+      const addGroupChildren = (groupId: string) => {
+        for (const node of state.nodes) {
+          if (node.parentId === groupId) {
+            working.add(node.id);
+          }
+        }
+      };
+      for (const id of selection.selectedNodeIds) {
+        const node = nodeById.get(id);
+        if (!node) {
+          continue;
+        }
+        if (node.type === CANVAS_NODE_TYPES.group) {
+          groupsToRelease.add(id);
+          addGroupChildren(id);
+        } else if (node.parentId) {
+          if (!groupsToRelease.has(node.parentId)) {
+            groupsToRelease.add(node.parentId);
+            addGroupChildren(node.parentId);
+          }
+          working.add(id);
+        } else {
+          working.add(id);
+        }
+      }
+      // 先拆组：子节点变顶层绝对坐标，才能被 dagre 重新排布。
+      for (const groupId of groupsToRelease) {
+        ungroupNode(groupId);
+      }
+      const workingIds = [...working];
+      if (workingIds.length === 0) {
+        return;
+      }
+      arrangeNodesToGrid(workingIds, { sortBy });
+      if (workingIds.length >= 2) {
+        groupNodes(workingIds);
+      }
+      scheduleCanvasPersist(0);
+    },
+    [
+      arrangeNodesToGrid,
+      groupNodes,
+      scheduleCanvasPersist,
+      selection.selectedNodeIds,
+      ungroupNode,
+    ]
+  );
+
   const handleBatchUngroup = useCallback(() => {
     let changed = false;
     for (const groupNodeId of selection.selectedGroupNodeIds) {
@@ -569,6 +633,8 @@ export function Canvas() {
         onGroup={handleBatchGroup}
         onUngroup={handleBatchUngroup}
         onTrigger={handleBatchTrigger}
+        onArrange={handleBatchArrange}
+        onTidyAndGroup={handleTidyAndGroup}
         onDelete={handleBatchDelete}
       />
       <CanvasSideToolbar onOpenAssets={assetPanel.handleOpenAssetPanel} />

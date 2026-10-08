@@ -98,7 +98,7 @@ export function measureAutoCrop(
   );
 
   const paddingPx = Math.round(
-    (Math.min(naturalWidth, naturalHeight) * Math.max(0, options.paddingPercent)) / 100
+    (Math.min(naturalWidth, naturalHeight) * options.paddingPercent) / 100
   );
 
   return {

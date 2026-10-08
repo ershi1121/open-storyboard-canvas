@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { CANVAS_NODE_TYPES, type CanvasNodeData, type CanvasNodeType } from '@/features/canvas/domain/canvasNodes';
 import { useCanvasStore } from '@/stores/canvasStore';
+import { TidyMenu, type ArrangeSort } from './canvas-view/components/TidyMenu';
 import { ExcelImportDialog, type ExcelImportSelection } from '@/features/canvas/ui/ExcelImportDialog';
 import { UiModal, UiInput, UiButton } from '@/components/ui';
 
@@ -108,6 +109,7 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
   const reactFlow = useReactFlow();
   const addNode = useCanvasStore((s) => s.addNode);
   const nodes = useCanvasStore((s) => s.nodes); // ✅ 新增：用于计算递增名称
+  const arrangeNodesToGrid = useCanvasStore((s) => s.arrangeNodesToGrid);
   const excelInputRef = useRef<HTMLInputElement>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
 
@@ -262,6 +264,25 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
     [addNode, reactFlow]
   );
 
+  // 整理全部图片：把画布上所有图片节点按名称/位置排成整齐网格。
+  const handleArrangeAllImages = useCallback(
+    (sortBy: ArrangeSort) => {
+      const ids = nodes
+        .filter(
+          (node) =>
+            (node.type === CANVAS_NODE_TYPES.upload ||
+              node.type === CANVAS_NODE_TYPES.imageEdit ||
+              node.type === CANVAS_NODE_TYPES.exportImage) &&
+            Boolean((node.data as Record<string, unknown>).imageUrl)
+        )
+        .map((node) => node.id);
+      if (ids.length > 0) {
+        arrangeNodesToGrid(ids, { sortBy });
+      }
+    },
+    [nodes, arrangeNodesToGrid]
+  );
+
   return (
     <>
       <div className="absolute left-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-1.5 rounded-xl border border-[var(--canvas-rail-button-border)] bg-[var(--canvas-rail-button-bg)] p-1.5 shadow-lg">
@@ -303,6 +324,13 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
           <FileSpreadsheet className="h-5 w-5" />
           <span>{t('canvasToolbar.importExcel', '导入Excel')}</span>
         </button>
+        <TidyMenu
+          label="整理全部"
+          onPick={handleArrangeAllImages}
+          triggerClassName={RAIL_BUTTON_CLASS}
+          menuClassName="absolute left-full top-0 z-[13000] ml-1 overflow-hidden rounded-lg border border-[var(--canvas-node-border)] bg-[var(--canvas-node-menu-bg)] py-1 text-xs text-text-dark shadow-xl"
+          itemClassName="block w-full whitespace-nowrap px-3 py-1.5 text-left transition-colors hover:bg-[var(--canvas-node-menu-hover)]"
+        />
         <input
           ref={excelInputRef}
           type="file"

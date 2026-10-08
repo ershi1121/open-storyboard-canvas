@@ -40,6 +40,8 @@ export const AUTO_CROP_COLOR_PRESETS = [
 
 /** 保留边距上限（占图片短边百分比）。 */
 export const AUTO_CROP_PADDING_MAX_PERCENT = 20;
+/** 允许负值：往内容里再切一点，用来去掉自动裁剪后残留的那条细边。 */
+export const AUTO_CROP_PADDING_MIN_PERCENT = -10;
 export const AUTO_CROP_PADDING_DEFAULT = 0;
 
 export type AutoCropEdge = 't' | 'r' | 'b' | 'l';
@@ -134,7 +136,7 @@ export function readAutoCropOptions(options: Record<string, unknown>): AutoCropO
     edges: normalizeAutoCropEdges(options.autoCropEdges) || EDGE_ORDER,
     paddingPercent: clampNumber(
       options.autoCropPaddingPercent,
-      0,
+      AUTO_CROP_PADDING_MIN_PERCENT,
       AUTO_CROP_PADDING_MAX_PERCENT,
       AUTO_CROP_PADDING_DEFAULT
     ),

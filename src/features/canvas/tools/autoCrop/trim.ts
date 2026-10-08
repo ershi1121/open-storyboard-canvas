@@ -313,7 +313,8 @@ export function resolveAutoCropContentRect(
 ): CropRect {
   const width = Math.max(1, Math.round(imageWidth));
   const height = Math.max(1, Math.round(imageHeight));
-  const pad = Math.max(0, Math.round(paddingPx));
+  // pad 可为负：负值 = 往内容里多切一点（去掉自动裁剪后残留的细边）。
+  const pad = Math.round(paddingPx);
 
   const left = Math.max(0, Math.round(insets.left) - pad);
   const top = Math.max(0, Math.round(insets.top) - pad);

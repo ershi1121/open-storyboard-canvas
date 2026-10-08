@@ -145,8 +145,8 @@ export const TEXT_DIRECTION_PRESETS: Array<{ value: TextDirection; label: string
   { value: 'vertical', label: '竖排' },
 ];
 
-/** 位置微调步进（百分比）。拖拽给粗调，箭头按钮给 0.5% 的精调。 */
-export const TEXT_POSITION_NUDGE_STEP = 0.5;
+/** 位置微调步进（百分比）。拖拽给粗调，箭头按钮给 0.1% 的精调。 */
+export const TEXT_POSITION_NUDGE_STEP = 0.1;
 export const TEXT_FONT_SIZE_MIN = 1;
 export const TEXT_FONT_SIZE_MAX = 60;
 export const TEXT_STROKE_MAX = 40;

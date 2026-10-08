@@ -2,6 +2,8 @@ import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Boxes, Copy, Group, Play, Trash2, Ungroup } from 'lucide-react';
 
+import { TidyMenu, type ArrangeSort } from './TidyMenu';
+
 interface BatchToolbarProps {
   position: { left: number; top: number } | null;
   selectedCount: number;
@@ -12,6 +14,8 @@ interface BatchToolbarProps {
   onGroup: () => void;
   onUngroup: () => void;
   onTrigger: () => void;
+  onArrange: (sortBy: ArrangeSort) => void;
+  onTidyAndGroup: (sortBy: ArrangeSort) => void;
   onDelete: () => void;
 }
 
@@ -25,6 +29,8 @@ export const BatchToolbar = memo(function BatchToolbar({
   onGroup,
   onUngroup,
   onTrigger,
+  onArrange,
+  onTidyAndGroup,
   onDelete,
 }: BatchToolbarProps) {
   const { t } = useTranslation();
@@ -83,6 +89,14 @@ export const BatchToolbar = memo(function BatchToolbar({
         <Play className="h-3.5 w-3.5" />
         {t('canvas.batchToolbar.trigger')}
       </button>
+      <TidyMenu
+        label="整理"
+        onPick={onArrange}
+        onTidyAndGroup={onTidyAndGroup}
+        triggerClassName="inline-flex h-7 items-center gap-1 rounded-full px-2 transition-colors hover:bg-[var(--canvas-node-menu-hover)]"
+        menuClassName="absolute left-1/2 top-full z-[13000] mt-1 -translate-x-1/2 overflow-hidden rounded-lg border border-[var(--canvas-node-border)] bg-[var(--canvas-node-menu-bg)] py-1 text-xs text-text-dark shadow-xl"
+        itemClassName="block w-full whitespace-nowrap px-3 py-1.5 text-left transition-colors hover:bg-[var(--canvas-node-menu-hover)]"
+      />
       <button
         type="button"
         className="inline-flex h-7 items-center gap-1 rounded-full px-2 text-red-300 transition-colors hover:bg-red-500/15 hover:text-red-200"
