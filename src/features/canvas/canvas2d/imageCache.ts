@@ -10,9 +10,13 @@
  */
 export type EntryState = 'loading' | 'ready' | 'error';
 
+export type ImageTier = 'preview' | 'original';
+
 interface CacheEntry {
   img: HTMLImageElement;
   state: EntryState;
+  /** 分辨率层级：淘汰时优先丢弃 original，保护 preview（防缩放回退重载风暴） */
+  tier: ImageTier;
 }
 
 const MAX_ENTRIES = 240;
@@ -22,7 +26,11 @@ const cache = new Map<string, CacheEntry>();
  * 请求图片。已就绪返回 <img>；加载中/失败返回 null（调用方画占位）。
  * onReady 在图片解码完成时回调一次（用于触发画布重绘）。
  */
-export function getImage(url: string, onReady: () => void): HTMLImageElement | null {
+export function getImage(
+  url: string,
+  onReady: () => void,
+  tier: ImageTier = 'preview',
+): HTMLImageElement | null {
   const existing = cache.get(url);
   if (existing) {
     // LRU touch：移到插入序末尾
@@ -33,11 +41,19 @@ export function getImage(url: string, onReady: () => void): HTMLImageElement | n
 
   const img = new Image();
   img.decoding = 'async';
-  const entry: CacheEntry = { img, state: 'loading' };
+  const entry: CacheEntry = { img, state: 'loading', tier };
   cache.set(url, entry);
   img.onload = () => {
-    entry.state = 'ready';
-    onReady();
+    // 用 decode() 把像素解码移到主线程外：避免首次 drawImage 同步解码大图冻帧
+    const finish = () => {
+      entry.state = 'ready';
+      onReady();
+    };
+    if (typeof img.decode === 'function') {
+      img.decode().then(finish, finish);
+    } else {
+      finish();
+    }
   };
   img.onerror = () => {
     entry.state = 'error';
@@ -47,14 +63,21 @@ export function getImage(url: string, onReady: () => void): HTMLImageElement | n
   };
   img.src = url;
 
-  // 淘汰最久未使用的【已完成】条目（loading 中的不淘汰，
-  // 否则全览几百张图时会互相驱逐造成加载风暴、图片永远显示不出来）
+  // 淘汰策略（loading 中的不淘汰，防加载风暴）：
+  // 第一轮只淘汰 original 层（缩放回退时 preview 仍在缓存，免重载冻帧）；
+  // 仍超限再按 LRU 淘汰任意已完成条目。
   if (cache.size > MAX_ENTRIES) {
     for (const key of cache.keys()) {
-      const candidate = cache.get(key);
-      if (candidate && candidate.state === 'loading') continue;
-      cache.delete(key);
       if (cache.size <= MAX_ENTRIES) break;
+      const candidate = cache.get(key);
+      if (!candidate || candidate.state === 'loading' || candidate.tier !== 'original') continue;
+      cache.delete(key);
+    }
+    for (const key of cache.keys()) {
+      if (cache.size <= MAX_ENTRIES) break;
+      const candidate = cache.get(key);
+      if (!candidate || candidate.state === 'loading') continue;
+      cache.delete(key);
     }
   }
   return null;

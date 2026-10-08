@@ -141,6 +141,8 @@ const MIN_NODE_H = 40;
 const MINIMAP_W = 190;
 const MINIMAP_H = 120;
 const MINIMAP_MARGIN = 12;
+/** 相机静止多久后才允许切换原图层级（毫秒）：运动期只用 preview，防解码风暴 */
+const CAMERA_SETTLE_MS = 300;
 const SNAP_ENTER_PX = 14;
 const SNAP_RELEASE_PX = 40;
 const CROSS_PROXIMITY_PX = 6;
@@ -238,6 +240,7 @@ export class Canvas2DEngine {
   private resizeOverride: { id: string; w: number; h: number } | null = null;
   private cameraListeners = new Set<() => void>();
   private lastCamKey = '';
+  private lastCameraMoveT = 0;
 
   private stats: EngineStats = { fps: 0, frameMs: 0, visible: 0, edgesDrawn: 0, calls: 0, zoom: 1, total: 0 };
   private fpsFrames = 0;
@@ -552,6 +555,7 @@ export class Canvas2DEngine {
     const key = `${this.cam.x.toFixed(1)}|${this.cam.y.toFixed(1)}|${this.cam.zoom.toFixed(4)}`;
     if (key === this.lastCamKey) return;
     this.lastCamKey = key;
+    this.lastCameraMoveT = performance.now();
     for (const cb of this.cameraListeners) cb();
   }
 
@@ -1054,7 +1058,9 @@ export class Canvas2DEngine {
         resizeOverride: this.resizeOverride,
         minimap: this.minimapLayout,
         showHandles: this.cam.zoom >= RENDER_CONSTANTS.LOD0_ZOOM,
-        preferOriginal: this.cam.zoom >= RENDER_CONSTANTS.ORIGINAL_ZOOM,
+        preferOriginal:
+          this.cam.zoom >= RENDER_CONSTANTS.ORIGINAL_ZOOM &&
+          t - this.lastCameraMoveT > CAMERA_SETTLE_MS,
         onImageReady: () => {
           /* 连续 rAF 循环下无需显式 invalidate */
         },

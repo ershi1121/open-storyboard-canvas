@@ -11,6 +11,8 @@ import { selectDomIslands, type IslandViewport } from './domIslands';
 
 /** 相机静止多久后恢复 DOM 岛（毫秒） */
 const SUSPEND_RESUME_MS = 220;
+/** 恢复期每帧放行的岛数量（摊薄重绘成本） */
+const RESUME_BATCH_PER_FRAME = 8;
 import type { RenderNode, SceneModel } from './sceneModel';
 
 /**
@@ -89,6 +91,8 @@ function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: Dom
   const suspendedRef = useRef(false);
   const suspendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const islandSetRef = useRef<ReadonlySet<string>>(new Set<string>());
+  /** 当前实际可见（display:''）的岛集合，与 engine.domIslands 严格同步 */
+  const shownSetRef = useRef<Set<string>>(new Set<string>());
 
   /* ---------- world 容器跟随相机 ---------- */
   const applyWorldTransform = useCallback(() => {
@@ -135,37 +139,20 @@ function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: Dom
   recomputeRef.current = recompute;
 
 
-  /** 按挂起状态刷新：引擎 domIslands + 每个 wrapper 的 display */
-  const applyIslandVisibility = useCallback(() => {
-    const engine = engineRef.current;
-    if (!engine) return;
-    const visibleSet = suspendedRef.current
-      ? new Set([...islandSetRef.current].filter((id) => selectedSet.current.has(id)))
-      : islandSetRef.current;
-    engine.setDomIslands(visibleSet);
-    for (const [id, el] of wrapperRefs.current) {
-      el.style.display = visibleSet.has(id) ? '' : 'none';
-    }
-  }, [engineRef]);
-
   const suspendForCamera = useCallback(() => {
-    const becameSuspended = !suspendedRef.current;
     suspendedRef.current = true;
-    if (becameSuspended) applyIslandVisibility();
     if (suspendTimerRef.current) clearTimeout(suspendTimerRef.current);
     suspendTimerRef.current = setTimeout(() => {
       suspendTimerRef.current = null;
       suspendedRef.current = false;
       recomputeRef.current();
-      applyIslandVisibility();
     }, SUSPEND_RESUME_MS);
-  }, [applyIslandVisibility]);
+  }, []);
 
   useEffect(() => {
     islandSetRef.current = new Set(islandIds);
-    applyIslandVisibility();
     onIslandsChange(new Set(islandIds));
-  }, [islandIds, applyIslandVisibility, onIslandsChange]);
+  }, [islandIds, onIslandsChange]);
 
   useEffect(() => {
     return () => {
@@ -185,7 +172,6 @@ function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: Dom
       }
       applyWorldTransform();
       recompute();
-      applyIslandVisibility();
       unsub = engine.addCameraListener(() => {
         applyWorldTransform();
         suspendForCamera(); // 相机运动：挂起岛并续期恢复计时器
@@ -197,7 +183,7 @@ function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: Dom
       cancelAnimationFrame(raf);
       unsub?.();
     };
-  }, [applyWorldTransform, recompute, applyIslandVisibility, suspendForCamera, engineRef]);
+  }, [applyWorldTransform, recompute, suspendForCamera, engineRef]);
 
 
   /* ---------- 拖拽期间岛跟随（rAF 直写 transform） ---------- */
@@ -207,6 +193,39 @@ function DomIslandsInner({ engineRef, model, selectedIds, onIslandsChange }: Dom
   useEffect(() => {
     let raf = 0;
     const tick = () => {
+      /* ---- 岛可见性：挂起期仅选中可见；恢复期每帧分批显示（防瞬时重绘尖峰） ---- */
+      const engine = engineRef.current;
+      if (engine) {
+        const desired = suspendedRef.current
+          ? new Set([...islandSetRef.current].filter((id) => selectedSet.current.has(id)))
+          : islandSetRef.current;
+        const shown = shownSetRef.current;
+        let changed = false;
+        // 清理已卸载岛残留（否则画布会持续跳过其卡片导致节点不可见）
+        for (const id of [...shown]) {
+          if (!wrapperRefs.current.has(id)) {
+            shown.delete(id);
+            changed = true;
+          }
+        }
+        let budget = RESUME_BATCH_PER_FRAME;
+        for (const [id, el] of wrapperRefs.current) {
+          const want = desired.has(id);
+          const isShown = shown.has(id);
+          if (want && !isShown && budget > 0) {
+            el.style.display = '';
+            shown.add(id);
+            budget--;
+            changed = true;
+          } else if (!want && isShown) {
+            el.style.display = 'none';
+            shown.delete(id);
+            changed = true;
+          }
+        }
+        if (changed) engine.setDomIslands(new Set(shown));
+      }
+
       const off = engineRef.current?.getDragOffset() ?? null;
       for (const [id, el] of wrapperRefs.current) {
         if (off && off.ids.has(id)) {
@@ -396,6 +415,7 @@ function IslandNode({ rendered, selected, engineRef, registerRef }: IslandNodePr
         top: rendered.y,
         width: rendered.w,
         minHeight: rendered.h,
+        display: 'none',
         boxShadow: selected ? '0 0 0 2px #38bdf8' : undefined,
         borderRadius: 10,
       }}

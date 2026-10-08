@@ -306,7 +306,10 @@ function drawMedia(
     break;
   }
   if (!url) url = candidates.find((candidate): candidate is string => Boolean(candidate)) ?? null;
-  const img = url ? getImage(url, opts.onImageReady) : null;
+  const isOriginalTier =
+    opts.preferOriginal && Boolean(n.imageUrl) && url === n.imageUrl &&
+    Boolean(n.previewUrl) && n.previewUrl !== n.imageUrl;
+  const img = url ? getImage(url, opts.onImageReady, isOriginalTier ? 'original' : 'preview') : null;
   if (img && areaW > 0 && areaH > 0) {
     const scale = Math.min(areaW / img.naturalWidth, areaH / img.naturalHeight);
     const dw = img.naturalWidth * scale;
