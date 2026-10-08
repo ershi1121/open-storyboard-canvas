@@ -15,6 +15,8 @@ const RESUME_BATCH_PER_FRAME = 8;
 const MOUNT_BATCH_PER_FRAME = 2;
 /** 调度器每帧卸载上限 */
 const UNMOUNT_BATCH_PER_FRAME = 6;
+/** 拖拽快速路径阈值：同时移动的岛达到该数量时运动期降级为画布卡片 */
+const DRAG_SIMPLIFY_MIN = 4;
 import type { RenderNode, SceneModel } from './sceneModel';
 
 /**
@@ -187,8 +189,13 @@ const DomIslandsInner = memo(function DomIslandsInner({
   useEffect(() => {
     let raf = 0;
     const tick = () => {
-      /* ---- 岛可见性：挂起期仅选中可见；恢复期每帧分批显示（防瞬时重绘尖峰） ---- */
       const engine = engineRef.current;
+      const off = engine?.getDragOffset() ?? null;
+      /* 拖拽快速路径：同时移动 ≥4 个岛时，运动期交给画布卡片渲染
+         （DOM 子树逐帧重绘是拖拽卡顿主源）；松手即恢复完整组件 */
+      const simplify = off && off.ids.size >= DRAG_SIMPLIFY_MIN ? off.ids : null;
+
+      /* ---- 岛可见性：新挂载分批显示（防瞬时重绘尖峰） ---- */
       if (engine) {
         const desired = islandSetRef.current;
         const shown = shownSetRef.current;
@@ -202,7 +209,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
         }
         let budget = RESUME_BATCH_PER_FRAME;
         for (const [id, el] of wrapperRefs.current) {
-          const want = desired.has(id);
+          const want = desired.has(id) && !(simplify !== null && simplify.has(id));
           const isShown = shown.has(id);
           if (want && !isShown && budget > 0) {
             el.style.display = '';
@@ -247,8 +254,11 @@ const DomIslandsInner = memo(function DomIslandsInner({
         }
       }
 
-      const off = engineRef.current?.getDragOffset() ?? null;
       for (const [id, el] of wrapperRefs.current) {
+        if (simplify !== null && simplify.has(id)) {
+          // 画布卡片接管运动渲染：DOM 隐藏且不需要 transform
+          continue;
+        }
         if (off && off.ids.has(id)) {
           const rn = modelRef.current?.byId.get(id);
           if (!appliedBaseRef.current.has(id) && rn) {

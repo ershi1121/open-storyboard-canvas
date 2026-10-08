@@ -242,6 +242,9 @@ export class Canvas2DEngine {
   private lastCamKey = '';
   private lastCameraMoveT = 0;
   private lastSlowFrameLogT = 0;
+  /** 按需渲染：画面无变化且无生成态动画时跳过 drawScene（空闲近零开销） */
+  private dirty = true;
+  private genAnim = false;
 
   private stats: EngineStats = { fps: 0, frameMs: 0, visible: 0, edgesDrawn: 0, calls: 0, zoom: 1, total: 0 };
   private fpsFrames = 0;
@@ -261,6 +264,7 @@ export class Canvas2DEngine {
     this.vw = Math.max(1, w);
     this.vh = Math.max(1, h);
     this.dpr = dpr;
+    this.dirty = true;
     if (this.canvas) {
       this.canvas.width = Math.round(this.vw * dpr);
       this.canvas.height = Math.round(this.vh * dpr);
@@ -298,14 +302,21 @@ export class Canvas2DEngine {
       if (this.hoverId && !model.byId.has(this.hoverId)) this.hoverId = null;
     }
     this.stats.total = model ? model.total : 0;
+    this.genAnim = model
+      ? model.nodes.some((n) => n.status === 'gen') ||
+        model.edges.some((e) => e.state === 'gen')
+      : false;
+    this.dirty = true;
   }
 
   setTheme(theme: 'dark' | 'light'): void {
     this.theme = theme;
+    this.dirty = true;
   }
 
   setSelection(ids: Iterable<string>): void {
     this.selectedIds = new Set(ids);
+    this.dirty = true;
   }
 
   getSelectedIds(): ReadonlySet<string> {
@@ -365,6 +376,7 @@ export class Canvas2DEngine {
   setSnapEnabled(enabled: boolean): void {
     this.snapEnabled = enabled;
     if (!enabled) this.guides = [];
+    this.dirty = true;
   }
 
   setWasdConfig(enabled: boolean, sensitivity: number): void {
@@ -431,6 +443,7 @@ export class Canvas2DEngine {
   }
 
   cancelGesture(): void {
+    this.dirty = true;
     const g = this.gesture;
     if (g.kind === 'connect') {
       this.gesture = { kind: 'none' };
@@ -543,6 +556,11 @@ export class Canvas2DEngine {
     return this.stats;
   }
 
+  /** 请求重绘（任何影响画面的外部变化调用） */
+  invalidate(): void {
+    this.dirty = true;
+  }
+
   /** 相机变化监听（浮动 DOM 工具栏定位用；DOM 直写、不触发 React 渲染） */
   addCameraListener(cb: () => void): () => void {
     this.cameraListeners.add(cb);
@@ -557,6 +575,7 @@ export class Canvas2DEngine {
     if (key === this.lastCamKey) return;
     this.lastCamKey = key;
     this.lastCameraMoveT = performance.now();
+    this.dirty = true;
     for (const cb of this.cameraListeners) cb();
   }
 
@@ -618,6 +637,7 @@ export class Canvas2DEngine {
 
   pointerDown(sx: number, sy: number, opts: { button: number; shiftKey: boolean; altKey: boolean; ctrlKey: boolean; metaKey: boolean }): void {
     if (!this.model) return;
+    this.dirty = true;
 
     if (this.inMinimap(sx, sy)) {
       this.minimapNavigate(sx, sy);
@@ -743,6 +763,7 @@ export class Canvas2DEngine {
 
   pointerMove(sx: number, sy: number, opts: { altKey: boolean }): void {
     const g = this.gesture;
+    this.dirty = true;
 
     if (g.kind === 'minimap') {
       this.minimapNavigate(sx, sy);
@@ -889,6 +910,7 @@ export class Canvas2DEngine {
     const nextHover = hit ? hit.id : null;
     if (nextHover !== this.hoverId) {
       this.hoverId = nextHover;
+      this.dirty = true;
       this.setCursor(nextHover ? 'move' : 'grab');
     }
   }
@@ -912,6 +934,7 @@ export class Canvas2DEngine {
 
   pointerUp(sx: number, sy: number): void {
     const g = this.gesture;
+    this.dirty = true;
     const w = this.toWorld(sx, sy);
 
     if (g.kind === 'drag') {
@@ -1011,7 +1034,8 @@ export class Canvas2DEngine {
     }
     this.lastFrameT = t;
 
-    if (this.ctx && this.model) {
+    const shouldDraw = this.dirty || this.genAnim;
+    if (this.ctx && this.model && shouldDraw) {
       const g = this.gesture;
       const dragging = g.kind === 'drag' && g.moved;
       this.minimapLayout = this.computeMinimapLayout();
@@ -1063,16 +1087,17 @@ export class Canvas2DEngine {
           this.cam.zoom >= RENDER_CONSTANTS.ORIGINAL_ZOOM &&
           t - this.lastCameraMoveT > CAMERA_SETTLE_MS,
         onImageReady: () => {
-          /* 连续 rAF 循环下无需显式 invalidate */
+          this.dirty = true;
         },
       });
       this.stats.visible = drawn.visible;
       this.stats.edgesDrawn = drawn.edgesDrawn;
       this.stats.calls = drawn.calls;
+      this.dirty = false;
     }
     this.notifyCameraIfMoved();
     const t1 = performance.now();
-    const frameCost = t1 - t0;
+    const frameCost = shouldDraw ? t1 - t0 : 0;
     if (frameCost > 48 && t - this.lastSlowFrameLogT > 1000) {
       this.lastSlowFrameLogT = t;
       console.warn(
