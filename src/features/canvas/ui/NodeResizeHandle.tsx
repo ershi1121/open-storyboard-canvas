@@ -1,4 +1,4 @@
-import { NodeResizeControl } from '@xyflow/react';
+import { NodeResizeControl } from '@/features/canvas/compat/flowShim';
 
 type NodeResizeHandleProps = {
   minWidth?: number;

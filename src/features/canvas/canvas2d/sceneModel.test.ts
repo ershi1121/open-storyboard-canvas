@@ -1,6 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import type { Node } from '@xyflow/react';
-
 import {
   CANVAS_NODE_TYPES,
   type CanvasEdge,
@@ -15,7 +13,7 @@ function makeNode(partial: Partial<CanvasNode> & { id: string }): CanvasNode {
     position: { x: 0, y: 0 },
     data: {} as CanvasNodeData,
     ...partial,
-  } as Node<CanvasNodeData, typeof CANVAS_NODE_TYPES[keyof typeof CANVAS_NODE_TYPES]> as CanvasNode;
+  } as CanvasNode;
 }
 
 describe('buildSceneModel', () => {

@@ -8,7 +8,7 @@ import {
   type ChangeEvent,
   type DragEvent,
 } from 'react';
-import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@/features/canvas/compat/flowShim';
 import { AlertTriangle, Film, Loader2, RefreshCw, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 

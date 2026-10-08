@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react';
-import type { ReactFlowInstance, Viewport } from '@xyflow/react';
+import type { Viewport } from '@/features/canvas/domain/graphTypes';
+
+/** 视口宿主接口：ReactFlowInstance 的最小替代（Canvas2D 引擎适配器实现） */
+export interface CanvasViewportHost {
+  getViewport(): Viewport;
+  setViewport(viewport: Viewport, options?: unknown): void;
+}
 
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useProjectStore } from '@/stores/projectStore';
@@ -45,7 +51,7 @@ export interface UseCanvasPersistenceResult {
  * explicit exit, and (b) this hook's persist watcher debouncing edits.
  */
 export function useCanvasPersistence(
-  reactFlowInstance: ReactFlowInstance,
+  reactFlowInstance: CanvasViewportHost,
 ): UseCanvasPersistenceResult {
   const isRestoringCanvasRef = useRef(true);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

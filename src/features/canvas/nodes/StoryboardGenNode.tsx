@@ -9,7 +9,7 @@ import {
   useEffect,
   useRef,
 } from 'react';
-import { Handle, Position, useUpdateNodeInternals, useViewport } from '@xyflow/react';
+import { Handle, Position, useUpdateNodeInternals, useViewport } from '@/features/canvas/compat/flowShim';
 import { Minus, Plus, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 

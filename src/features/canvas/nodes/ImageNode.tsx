@@ -5,7 +5,7 @@ import {
   useUpdateNodeInternals,
   useViewport,
   type NodeProps,
-} from '@xyflow/react';
+} from '@/features/canvas/compat/flowShim';
 import { AlertTriangle, Image as ImageIcon, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 

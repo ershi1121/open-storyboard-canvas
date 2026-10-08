@@ -1,4 +1,4 @@
-import type { XYPosition } from '@xyflow/react';
+import type { XYPosition } from '@/features/canvas/domain/graphTypes';
 
 import type {
   CanvasEdge,

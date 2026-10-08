@@ -9,7 +9,7 @@ import type { BlueprintItem } from '@/features/canvas/domain/canvasNodes';
  * background user reads "Z = height" intuitively), while the underlying
  * Three.js scene uses its native Y-up convention. We keep `pos3d` stored in
  * the Three.js order (`{ x, y: height, z: depth }`) on disk so node data
- * stays compatible with `@xyflow/react` graph state and Three.js rendering;
+ * stays compatible with the canvas graph state and Three.js rendering;
  * the UI translates X <-> Z and labels them per right-hand-rule physics
  * intuition (Z up, Y right, X coming out of the screen toward the viewer).
  *

@@ -1,4 +1,4 @@
-import type { NodeTypes } from '@xyflow/react';
+import type { NodeTypes } from '@/features/canvas/compat/flowShim';
 
 import { AiAudioNode } from './AiAudioNode';
 import { AiTextNode } from './AiTextNode';

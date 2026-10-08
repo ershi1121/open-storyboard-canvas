@@ -35,7 +35,6 @@ export default defineConfig(async () => ({
     //   konva           — ~70 KB  (AnnotateToolEditor only)
     //   pano            — ~50 KB  (PanoramaPanel only)
     //   markdown        — ~40 KB  (settings dialog only)
-    //   reactflow       — ~80 KB  (Canvas main)
     //   react-vendor    — ~50 KB  (always loaded)
     rollupOptions: {
       output: {
@@ -44,7 +43,6 @@ export default defineConfig(async () => ({
           konva: ['konva', 'react-konva'],
           pano: ['@photo-sphere-viewer/core'],
           markdown: ['react-markdown', 'remark-gfm', 'remark-breaks'],
-          reactflow: ['@xyflow/react'],
           'react-vendor': ['react', 'react-dom'],
         },
       },

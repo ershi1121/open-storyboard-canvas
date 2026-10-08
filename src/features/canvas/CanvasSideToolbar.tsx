@@ -1,5 +1,5 @@
 import { memo, useCallback, useRef, useState, type ChangeEvent } from 'react';
-import { useReactFlow } from '@xyflow/react';
+import { useReactFlow } from '@/features/canvas/compat/flowShim';
 import { useTranslation } from 'react-i18next';
 import {
   ImagePlus,

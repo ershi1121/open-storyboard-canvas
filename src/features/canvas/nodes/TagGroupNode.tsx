@@ -6,7 +6,7 @@ import {
   Position,
   useEdges,
   useUpdateNodeInternals,
-} from '@xyflow/react';
+} from '@/features/canvas/compat/flowShim';
 import {
   FileText,
   Image as ImageIcon,

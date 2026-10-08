@@ -1,4 +1,4 @@
-import type { Edge, Node, XYPosition } from '@xyflow/react';
+import type { EdgeBase as Edge, NodeBase as Node, XYPosition } from './graphTypes';
 
 export const CANVAS_NODE_TYPES = {
   upload: 'uploadNode',

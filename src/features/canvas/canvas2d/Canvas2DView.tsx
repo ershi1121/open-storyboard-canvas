@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { v4 as uuidv4 } from 'uuid';
-import type { NodeChange, ReactFlowInstance, Viewport } from '@xyflow/react';
+import { X } from 'lucide-react';
+import type { NodeChange, Viewport } from '@/features/canvas/domain/graphTypes';
+import type { CanvasViewportHost } from '@/features/canvas/hooks/useCanvasPersistence';
 
 import { useCanvasStore, type CanvasNode } from '@/stores/canvasStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useThemeStore } from '@/stores/themeStore';
 import { useSnapStore } from '@/stores/snapStore';
 import { resolveImageDisplayUrl } from '@/features/canvas/application/imageData';
+import { canvasEventBus } from '@/features/canvas/application/canvasServices';
 import { useCanvasPersistence } from '@/features/canvas/hooks/useCanvasPersistence';
 import { useCanvasGenerationPolling } from '@/features/canvas/hooks/useCanvasGenerationPolling';
 import {
@@ -19,12 +22,20 @@ import {
 import {
   getGeneratedTextForConnection,
   resolveAllowedNodeTypes,
-} from '@/features/canvas/canvas-view/utils/node-helpers';
+} from '@/features/canvas/shared/utils/node-helpers';
 import { NodeSelectionMenu } from '@/features/canvas/NodeSelectionMenu';
-import { ContextMenu } from '@/features/canvas/canvas-view/components/ContextMenu';
-import type { NodeContextMenuState } from '@/features/canvas/canvas-view/types';
-import { SnapToggle } from '@/features/canvas/canvas-view/components/SnapToggle';
+import { ContextMenu } from '@/features/canvas/shared/components/ContextMenu';
+import type { NodeContextMenuState } from '@/features/canvas/shared/types';
+import { SnapToggle } from '@/features/canvas/shared/components/SnapToggle';
 import { ImageViewerModal } from '@/features/canvas/ui/ImageViewerModal';
+import { SelectedNodeOverlay } from '@/features/canvas/ui/SelectedNodeOverlay';
+import { NodeToolDialog } from '@/features/canvas/ui/NodeToolDialog';
+import { AssetPanel, type CanvasAssetItem } from '@/features/canvas/ui/AssetPanel';
+import { CanvasSideToolbar } from '@/features/canvas/CanvasSideToolbar';
+import { nodeTypes } from '@/features/canvas/nodes';
+import { extractCanvasAssets } from '@/features/canvas/shared/utils/assets';
+import { ShimNodeIdContext } from '@/features/canvas/compat/flowShim';
+import { registerCanvas2DEngine, useViewportSnapshotStore } from '@/features/canvas/compat/engineBridge';
 import { buildSceneModel, type SceneModel } from './sceneModel';
 import { filterDragDescendants } from './spatialGrid';
 import { Canvas2DEngine, type ConnectHandleType, type EngineStats, type ViewportLike } from './engine';
@@ -87,6 +98,8 @@ export function Canvas2DView() {
   const [stats, setStats] = useState<EngineStats | null>(null);
   const [nodeMenu, setNodeMenu] = useState<NodeMenuState | null>(null);
   const [contextMenu, setContextMenu] = useState<NodeContextMenuState | null>(null);
+  const [assetPanelOpen, setAssetPanelOpen] = useState(false);
+  const [assetButtonRect, setAssetButtonRect] = useState<DOMRect | null>(null);
 
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
@@ -95,6 +108,8 @@ export function Canvas2DView() {
   const imageViewer = useCanvasStore((state) => state.imageViewer);
   const closeImageViewer = useCanvasStore((state) => state.closeImageViewer);
   const navigateImageViewer = useCanvasStore((state) => state.navigateImageViewer);
+  const openToolDialog = useCanvasStore((state) => state.openToolDialog);
+  const closeToolDialog = useCanvasStore((state) => state.closeToolDialog);
   const theme = useThemeStore((state) => state.theme);
   const snapEnabled = useSnapStore((state) => state.snapEnabled);
   const apiKeys = useSettingsStore((state) => state.apiKeys);
@@ -114,7 +129,7 @@ export function Canvas2DView() {
         setViewport: (viewport: Viewport) => {
           useCanvasStore.getState().setViewportState(viewport);
         },
-      }) as unknown as ReactFlowInstance,
+      }) satisfies CanvasViewportHost,
     [],
   );
   const { scheduleCanvasPersist } = useCanvasPersistence(persistenceAdapter);
@@ -128,6 +143,37 @@ export function Canvas2DView() {
     [nodes, edges],
   );
   modelRef.current = model;
+
+  /* ---------- 资产面板（浏览模式） ---------- */
+  const assetItems = useMemo(
+    () => (assetPanelOpen ? extractCanvasAssets(nodes) : []),
+    [assetPanelOpen, nodes],
+  );
+  const handleOpenAssets = useCallback((buttonRect: DOMRect) => {
+    setAssetButtonRect(buttonRect);
+    setAssetPanelOpen((open) => !open);
+  }, []);
+  const handleAssetActivate = useCallback((asset: CanvasAssetItem) => {
+    setAssetPanelOpen(false);
+    const rawUrl = 'imageUrl' in asset ? asset.imageUrl : '';
+    if (!rawUrl) return;
+    const url = resolveImageDisplayUrl(rawUrl);
+    useCanvasStore.getState().openImageViewer(url, [url]);
+  }, []);
+
+  /* ---------- 工具对话框事件总线（与 RF 版一致的订阅） ---------- */
+  useEffect(() => {
+    const unsubscribeOpen = canvasEventBus.subscribe('tool-dialog/open', (payload) => {
+      openToolDialog(payload);
+    });
+    const unsubscribeClose = canvasEventBus.subscribe('tool-dialog/close', () => {
+      closeToolDialog();
+    });
+    return () => {
+      unsubscribeOpen();
+      unsubscribeClose();
+    };
+  }, [openToolDialog, closeToolDialog]);
 
   /* ---------- 复制/粘贴（内部剪贴板） ---------- */
 
@@ -358,6 +404,7 @@ export function Canvas2DView() {
       onViewportCommit: (viewport) => {
         lastCommittedViewportRef.current = viewport;
         useCanvasStore.getState().setViewportState({ x: viewport.x, y: viewport.y, zoom: viewport.zoom });
+        useViewportSnapshotStore.getState().set(viewport);
       },
       onCursor: (cursor) => {
         if (canvasRef.current) canvasRef.current.style.cursor = cursor;
@@ -461,14 +508,19 @@ export function Canvas2DView() {
     }
     engine.start();
     engineRef.current = engine;
+    registerCanvas2DEngine(engine, canvas);
+    useViewportSnapshotStore.getState().set(engine.getViewport());
 
     const statsTimer = setInterval(() => {
       setStats({ ...engine.getStats() });
+      // 低频喂给 useViewport() 垫片（检视面板里的原图/预览图切换等场景足够）
+      useViewportSnapshotStore.getState().set(engine.getViewport());
     }, 500);
 
     return () => {
       clearInterval(statsTimer);
       engine.stop();
+      registerCanvas2DEngine(null, null);
       engineRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -824,6 +876,23 @@ export function Canvas2DView() {
         <SnapToggle />
       </div>
 
+      {/* 左侧节点工具栏（复用组件，经 flowShim 桥接引擎坐标） */}
+      <CanvasSideToolbar onOpenAssets={handleOpenAssets} />
+
+      <AssetPanel
+        isOpen={assetPanelOpen}
+        assets={assetItems}
+        buttonRect={assetButtonRect}
+        mode="browse"
+        onClose={() => setAssetPanelOpen(false)}
+        onActivate={handleAssetActivate}
+      />
+
+      {/* 选中节点的浮动工具栏与生成面板（复用 RF 版全套面板生态） */}
+      <SelectedNodeOverlay />
+      <NodeToolDialog />
+      <NodeInspector />
+
       {nodes.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6">
           <div className="rounded-xl border border-border-dark bg-surface-dark/90 px-6 py-4 text-center text-sm text-text-muted">
@@ -858,6 +927,91 @@ export function Canvas2DView() {
         onClose={closeImageViewer}
         onNavigate={navigateImageViewer}
       />
+    </div>
+  );
+}
+
+/**
+ * 节点检视面板：选中单个节点时，在右侧停靠渲染其【原版节点编辑组件】。
+ * 原 React Flow 节点组件通过 compat/flowShim 提供的同名 API 运行：
+ * Handle 渲染为空（连接桩由 canvas 绘制）、NodeToolbar 浮动定位到画布节点上方、
+ * useReactFlow/useViewport 桥接到 Canvas2D 引擎。编辑能力零重写、全保留。
+ */
+function NodeInspector() {
+  const { t } = useTranslation();
+  const selectedNodeId = useCanvasStore((state) => state.selectedNodeId);
+  const imageViewerOpen = useCanvasStore((state) => state.imageViewer.isOpen);
+  const node = useCanvasStore((state) =>
+    selectedNodeId ? state.nodes.find((n) => n.id === selectedNodeId) : undefined,
+  );
+
+  const close = useCallback(() => {
+    useCanvasStore.getState().setSelectedNode(null);
+  }, []);
+
+  const updateNodeData = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (update: any) => {
+      if (!selectedNodeId) return;
+      const current = useCanvasStore.getState().nodes.find((n) => n.id === selectedNodeId);
+      const next = typeof update === 'function' ? update(current?.data ?? {}) : update;
+      useCanvasStore.getState().updateNodeData(selectedNodeId, next as Partial<CanvasNodeData>);
+    },
+    [selectedNodeId],
+  );
+
+  if (!node || !node.type || imageViewerOpen) return null;
+  const Comp = nodeTypes[node.type];
+  if (!Comp) return null;
+
+  const rawWidth = node.measured?.width ?? node.width ?? 360;
+  const rawHeight = node.measured?.height ?? node.height ?? 240;
+  const nodeWidth = Math.max(220, rawWidth);
+  const panelWidth = Math.min(620, Math.max(360, nodeWidth + 56));
+
+  const editorProps = {
+    id: node.id,
+    data: node.data,
+    type: node.type,
+    selected: true,
+    dragging: false,
+    isConnectable: false,
+    zIndex: node.zIndex ?? 0,
+    width: rawWidth,
+    height: rawHeight,
+    positionAbsoluteX: node.position.x,
+    positionAbsoluteY: node.position.y,
+    parentId: node.parentId,
+    updateNodeData,
+    sourcePosition: 'right' as const,
+    targetPosition: 'left' as const,
+  };
+
+  return (
+    <div
+      className="absolute right-0 top-0 z-40 flex h-full flex-col border-l border-border-dark bg-bg-dark/95 shadow-2xl backdrop-blur"
+      style={{ width: panelWidth }}
+    >
+      <div className="flex shrink-0 items-center justify-between border-b border-border-dark px-3 py-2">
+        <span className="truncate text-xs font-medium text-text-muted">
+          {t('canvas2d.inspector')}
+        </span>
+        <button
+          type="button"
+          onClick={close}
+          className="flex h-6 w-6 items-center justify-center rounded text-text-muted transition-colors hover:bg-surface-dark hover:text-text-dark"
+          aria-label={t('common.close')}
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="ui-scrollbar flex-1 overflow-x-auto overflow-y-auto p-3">
+        <ShimNodeIdContext.Provider value={node.id}>
+          <div className="relative mx-auto" style={{ width: nodeWidth, minHeight: 120 }}>
+            <Comp {...editorProps} />
+          </div>
+        </ShimNodeIdContext.Provider>
+      </div>
     </div>
   );
 }

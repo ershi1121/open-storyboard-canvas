@@ -1,14 +1,7 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { Canvas2DView } from './features/canvas/canvas2d';
-
-// React Flow 画布整体懒加载：Canvas2D 模式（默认）下 @xyflow 代码完全不加载
-const ReactFlowCanvasRoot = lazy(() =>
-  import('./features/canvas/ReactFlowCanvasRoot').then((module) => ({
-    default: module.ReactFlowCanvasRoot,
-  })),
-);
 import { TitleBar } from './components/TitleBar';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -48,7 +41,6 @@ function App() {
   const { t } = useTranslation();
   const { theme } = useThemeStore();
   const uiRadiusPreset = useSettingsStore((state) => state.uiRadiusPreset);
-  const canvasRenderer = useSettingsStore((state) => state.canvasRenderer);
   const themeTonePreset = useSettingsStore((state) => state.themeTonePreset);
   const accentColor = useSettingsStore((state) => state.accentColor);
   const autoCheckAppUpdateOnLaunch = useSettingsStore((state) => state.autoCheckAppUpdateOnLaunch);
@@ -259,17 +251,7 @@ function App() {
           ) : null}
 
           <main className="relative min-h-0 flex-1 overflow-hidden">
-            {currentProjectId ? (
-              canvasRenderer === 'canvas2d' ? (
-                <Canvas2DView />
-              ) : (
-                <Suspense fallback={null}>
-                  <ReactFlowCanvasRoot />
-                </Suspense>
-              )
-            ) : (
-              <ProjectHome />
-            )}
+            {currentProjectId ? <Canvas2DView /> : <ProjectHome />}
           </main>
 
           <SettingsDialog

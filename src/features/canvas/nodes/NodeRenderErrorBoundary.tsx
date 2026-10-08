@@ -1,5 +1,5 @@
 import { Component, type ComponentType, type ErrorInfo, type ReactNode } from 'react';
-import type { NodeProps } from '@xyflow/react';
+import type { NodeProps } from '@/features/canvas/compat/flowShim';
 
 interface NodeRenderErrorBoundaryProps {
   nodeId: string;

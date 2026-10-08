@@ -15,7 +15,7 @@ import {
   useUpdateNodeInternals,
   useViewport,
   type NodeProps,
-} from '@xyflow/react';
+} from '@/features/canvas/compat/flowShim';
 import { AlertTriangle, Loader2, RefreshCw, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 

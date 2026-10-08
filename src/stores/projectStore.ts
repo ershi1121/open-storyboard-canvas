@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import type { Viewport } from '@xyflow/react';
+import type { Viewport } from '@/features/canvas/domain/graphTypes';
 import {
   useCanvasStore,
   type CanvasEdge,

@@ -1,4 +1,4 @@
-import type { XYPosition } from '@xyflow/react';
+import type { XYPosition } from '@/features/canvas/domain/graphTypes';
 
 import type { CanvasNode, CanvasNodeData, CanvasNodeType } from '../domain/canvasNodes';
 import type { IdGenerator, NodeCatalog, NodeFactory } from './ports';

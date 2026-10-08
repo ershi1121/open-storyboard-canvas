@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Connection, EdgeChange, NodeChange, Viewport } from '@xyflow/react';
+import type { Connection, EdgeChange, NodeChange, Viewport } from '@/features/canvas/domain/graphTypes';
 import {
   addEdgeInternal as addEdge,
   applyEdgeChangesInternal as applyEdgeChanges,

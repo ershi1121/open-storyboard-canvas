@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { NodeToolbar as ReactFlowNodeToolbar } from '@xyflow/react';
+import { NodeToolbar as ReactFlowNodeToolbar } from '@/features/canvas/compat/flowShim';
 import { AlertCircle, Camera, Check, ChevronDown, Copy, Download, FolderOpen, Grid3x3, Link2, Maximize2, PenLine, RotateCcw, Scissors, Settings2, Sparkles, Sun, Trash2, X } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { useTranslation } from 'react-i18next';

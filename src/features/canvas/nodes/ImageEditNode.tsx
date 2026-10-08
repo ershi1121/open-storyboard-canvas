@@ -9,7 +9,7 @@ import {
   useEffect,
   useRef,
 } from 'react';
-import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@/features/canvas/compat/flowShim';
 import { Bug, Check, ChevronRight, Copy, Sparkles, Video, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -46,7 +46,7 @@ import {
   prepareNodeImageFromFile,
   resolveImageDisplayUrl,
 } from '@/features/canvas/application/imageData';
-import { resolveClipboardImageFile } from '@/features/canvas/hooks/useCanvasShortcuts';
+import { resolveClipboardImageFile } from '@/features/canvas/application/clipboardImage';
 import { appendGenerationParameterConstraints } from '@/features/canvas/application/generationPromptConstraints';
 import { normalizeImageRequestGeometry } from '@/features/canvas/application/imageRequestGeometry';
 import {

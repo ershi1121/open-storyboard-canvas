@@ -9,7 +9,7 @@ import {
   type DragEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@/features/canvas/compat/flowShim';
 import { AlertTriangle, Check, Loader2, Music2, Pause, Play, RefreshCw, Scissors, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 

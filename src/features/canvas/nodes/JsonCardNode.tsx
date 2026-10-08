@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Handle, Position, type NodeProps } from '@/features/canvas/compat/flowShim';
 import { Braces, Expand, LoaderCircle } from 'lucide-react';
 
 import { CANVAS_NODE_TYPES, type JsonCardNodeData } from '@/features/canvas/domain/canvasNodes';

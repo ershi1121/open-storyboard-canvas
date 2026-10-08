@@ -232,6 +232,8 @@ export class Canvas2DEngine {
   private lastUpHit: string | null = null;
   private minimapLayout: MinimapLayout | null = null;
   private resizeOverride: { id: string; w: number; h: number } | null = null;
+  private cameraListeners = new Set<() => void>();
+  private lastCamKey = '';
 
   private stats: EngineStats = { fps: 0, frameMs: 0, visible: 0, edgesDrawn: 0, calls: 0, zoom: 1, total: 0 };
   private fpsFrames = 0;
@@ -485,6 +487,22 @@ export class Canvas2DEngine {
 
   getStats(): EngineStats {
     return this.stats;
+  }
+
+  /** 相机变化监听（浮动 DOM 工具栏定位用；DOM 直写、不触发 React 渲染） */
+  addCameraListener(cb: () => void): () => void {
+    this.cameraListeners.add(cb);
+    return () => {
+      this.cameraListeners.delete(cb);
+    };
+  }
+
+  private notifyCameraIfMoved(): void {
+    if (this.cameraListeners.size === 0) return;
+    const key = `${this.cam.x.toFixed(1)}|${this.cam.y.toFixed(1)}|${this.cam.zoom.toFixed(4)}`;
+    if (key === this.lastCamKey) return;
+    this.lastCamKey = key;
+    for (const cb of this.cameraListeners) cb();
   }
 
   isGestureActive(): boolean {
@@ -956,6 +974,7 @@ export class Canvas2DEngine {
       this.stats.edgesDrawn = drawn.edgesDrawn;
       this.stats.calls = drawn.calls;
     }
+    this.notifyCameraIfMoved();
     const t1 = performance.now();
     this.ema = this.ema * 0.9 + (t1 - t0) * 0.1;
     this.stats.frameMs = this.ema;

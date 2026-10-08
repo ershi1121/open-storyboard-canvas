@@ -27,7 +27,6 @@ import type { TextAgentConfig } from '@/features/canvas/application/aiText/types
 export type UiRadiusPreset = 'compact' | 'default' | 'large';
 export type ThemeTonePreset = 'neutral' | 'warm' | 'cool';
 export type CanvasEdgeRoutingMode = 'spline' | 'orthogonal' | 'smartOrthogonal';
-export type CanvasRendererBackend = 'reactflow' | 'canvas2d';
 export type PanoramaControlSensitivity = 'low' | 'medium' | 'high';
 export type CanvasMouseBindingPreset = 'default' | 'traditional' | 'custom';
 export type CanvasMouseAction = 'none' | 'selectNode' | 'panCanvas' | 'selectionBox' | 'nodeMenu';
@@ -233,7 +232,6 @@ interface SettingsState {
   themeTonePreset: ThemeTonePreset;
   accentColor: string;
   canvasEdgeRoutingMode: CanvasEdgeRoutingMode;
-  canvasRenderer: CanvasRendererBackend;
   autoCheckAppUpdateOnLaunch: boolean;
   enableUpdateDialog: boolean;
   promptDefaultLanguage: PromptLanguage;
@@ -276,7 +274,6 @@ interface SettingsState {
   setThemeTonePreset: (preset: ThemeTonePreset) => void;
   setAccentColor: (color: string) => void;
   setCanvasEdgeRoutingMode: (mode: CanvasEdgeRoutingMode) => void;
-  setCanvasRenderer: (backend: CanvasRendererBackend) => void;
   setAutoCheckAppUpdateOnLaunch: (enabled: boolean) => void;
   setEnableUpdateDialog: (enabled: boolean) => void;
   setPromptDefaultLanguage: (language: PromptLanguage) => void;
@@ -657,11 +654,6 @@ function normalizeCanvasEdgeRoutingMode(
   return 'spline';
 }
 
-function normalizeCanvasRendererBackend(
-  input: CanvasRendererBackend | string | null | undefined
-): CanvasRendererBackend {
-  return input === 'reactflow' ? 'reactflow' : 'canvas2d';
-}
 
 function normalizePanoramaControlSensitivity(
   input: PanoramaControlSensitivity | string | null | undefined
@@ -972,7 +964,6 @@ export const useSettingsStore = create<SettingsState>()(
       themeTonePreset: 'neutral',
       accentColor: '#3B82F6',
       canvasEdgeRoutingMode: 'spline',
-      canvasRenderer: 'canvas2d',
       autoCheckAppUpdateOnLaunch: false,
       enableUpdateDialog: true,
       promptDefaultLanguage: 'zh',
@@ -1064,8 +1055,6 @@ export const useSettingsStore = create<SettingsState>()(
       setAccentColor: (color) => set({ accentColor: normalizeHexColor(color) }),
       setCanvasEdgeRoutingMode: (canvasEdgeRoutingMode) =>
         set({ canvasEdgeRoutingMode: normalizeCanvasEdgeRoutingMode(canvasEdgeRoutingMode) }),
-      setCanvasRenderer: (canvasRenderer) =>
-        set({ canvasRenderer: normalizeCanvasRendererBackend(canvasRenderer) }),
       setAutoCheckAppUpdateOnLaunch: (enabled) => set({ autoCheckAppUpdateOnLaunch: enabled }),
       setEnableUpdateDialog: (enabled) => set({ enableUpdateDialog: enabled }),
       setPromptDefaultLanguage: (language) =>
@@ -1314,7 +1303,6 @@ export const useSettingsStore = create<SettingsState>()(
           grsaiNanoBananaProModel?: string;
           hideProviderGuidePopover?: boolean;
           canvasEdgeRoutingMode?: CanvasEdgeRoutingMode | string;
-          canvasRenderer?: CanvasRendererBackend | string;
           autoCheckAppUpdateOnLaunch?: boolean;
           enableUpdateDialog?: boolean;
           enableStoryboardGenGridPreviewShortcut?: boolean;
@@ -1393,7 +1381,6 @@ export const useSettingsStore = create<SettingsState>()(
             ),
             hideProviderGuidePopover: state.hideProviderGuidePopover ?? false,
             canvasEdgeRoutingMode: normalizeCanvasEdgeRoutingMode(state.canvasEdgeRoutingMode),
-            canvasRenderer: normalizeCanvasRendererBackend(state.canvasRenderer),
             autoCheckAppUpdateOnLaunch: state.autoCheckAppUpdateOnLaunch ?? false,
             enableUpdateDialog: state.enableUpdateDialog ?? true,
             enableStoryboardGenGridPreviewShortcut:
@@ -1440,7 +1427,6 @@ export const useSettingsStore = create<SettingsState>()(
           hideProviderGuidePopover: state.hideProviderGuidePopover ?? false,
           canvasEdgeRoutingMode: normalizeCanvasEdgeRoutingMode(state.canvasEdgeRoutingMode),
           autoCheckAppUpdateOnLaunch: state.autoCheckAppUpdateOnLaunch ?? false,
-          canvasRenderer: normalizeCanvasRendererBackend(state.canvasRenderer),
           enableUpdateDialog: state.enableUpdateDialog ?? true,
           enableStoryboardGenGridPreviewShortcut:
             state.enableStoryboardGenGridPreviewShortcut ?? false,

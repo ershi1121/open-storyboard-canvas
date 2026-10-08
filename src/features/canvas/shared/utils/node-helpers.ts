@@ -1,4 +1,4 @@
-import type { HandleType } from '@xyflow/react';
+import type { HandleType } from '@/features/canvas/domain/graphTypes';
 import {
   CANVAS_NODE_TYPES,
   DEFAULT_NODE_WIDTH,
