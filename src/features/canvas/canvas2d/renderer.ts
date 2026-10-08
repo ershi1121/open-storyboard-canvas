@@ -1,4 +1,4 @@
-import { getImage } from './imageCache';
+import { getImage, getImageState } from './imageCache';
 import type { RenderNode, SceneModel } from './sceneModel';
 import type { SpatialGrid } from './spatialGrid';
 
@@ -291,7 +291,19 @@ function drawMedia(
   P: Palette,
 ): number {
   let calls = 0;
-  const url = opts.preferOriginal ? n.imageUrl || n.previewUrl : n.previewUrl || n.imageUrl;
+  // 双源回退（与旧版节点组件 imageFallbackSources 语义一致）：
+  // 首选源已知加载失败时自动尝试另一源，避免单次失败永久灰块
+  const candidates = opts.preferOriginal
+    ? [n.imageUrl, n.previewUrl]
+    : [n.previewUrl, n.imageUrl];
+  let url: string | null = null;
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (getImageState(candidate) === 'error') continue;
+    url = candidate;
+    break;
+  }
+  if (!url) url = candidates.find((candidate): candidate is string => Boolean(candidate)) ?? null;
   const img = url ? getImage(url, opts.onImageReady) : null;
   if (img && areaW > 0 && areaH > 0) {
     const scale = Math.min(areaW / img.naturalWidth, areaH / img.naturalHeight);

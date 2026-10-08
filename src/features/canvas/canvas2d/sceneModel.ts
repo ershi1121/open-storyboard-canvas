@@ -325,12 +325,22 @@ export function buildSceneModel(
         break;
       }
       case 'storyboardGen': {
-        const frames = Array.isArray(data.frames) ? data.frames : [];
+        const frames = Array.isArray(data.frames) ? (data.frames as Array<Record<string, unknown>>) : [];
         badge = `${frames.length} 格`;
+        if (!textPreview) {
+          // 卡片正文预览各帧描述
+          const descriptions = frames
+            .map((frame) => str(frame.description))
+            .filter(Boolean);
+          if (descriptions.length > 0) textPreview = truncatePreview(descriptions.join('\n'));
+        }
         break;
       }
       case 'panorama': {
         badge = '◎ 全景';
+        if (!textPreview) {
+          textPreview = truncatePreview(str(data.sourcePrompt) || str(data.prompt));
+        }
         break;
       }
       case 'blueprint': {
@@ -361,6 +371,15 @@ export function buildSceneModel(
         const batchTotal = data.batchTotal;
         if (typeof batchIndex === 'number' && typeof batchTotal === 'number' && batchTotal > 1) {
           badge = `${batchIndex + 1}/${batchTotal}`;
+        }
+        // 未生成的 AI 图片/结果节点：卡片正文显示提示词，避免"空白灰块"
+        if (!textPreview) textPreview = truncatePreview(str(data.prompt));
+        // 参数徽标：模型 · 比例（批次徽标优先）
+        if (!badge) {
+          const modelConfig = data.modelConfig as { ratio?: unknown } | undefined;
+          const ratio = str(modelConfig?.ratio) || str(data.aspectRatio);
+          const chips = [str(data.model), ratio].filter(Boolean);
+          if (chips.length > 0) badge = chips.join(' · ');
         }
         break;
       }

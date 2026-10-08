@@ -8,7 +8,7 @@
  * 正式版路线（见设计文档 P1）：Rust 侧生成缩略图金字塔后，这里按
  * zoom 级别请求不同层级的 URL；当前先复用项目已有的 previewImageUrl。
  */
-type EntryState = 'loading' | 'ready' | 'error';
+export type EntryState = 'loading' | 'ready' | 'error';
 
 interface CacheEntry {
   img: HTMLImageElement;
@@ -41,6 +41,9 @@ export function getImage(url: string, onReady: () => void): HTMLImageElement | n
   };
   img.onerror = () => {
     entry.state = 'error';
+    // 诊断：图片源加载失败（常见原因：浏览器模式无法访问本地文件路径、
+    // 文件被移动/删除、asset 协议范围不含该路径）
+    console.warn('[canvas2d] image load failed:', url);
   };
   img.src = url;
 
@@ -55,6 +58,16 @@ export function getImage(url: string, onReady: () => void): HTMLImageElement | n
     }
   }
   return null;
+}
+
+/** 查询某 URL 的缓存状态；未缓存返回 null（调用方可据此做备源回退） */
+export function getImageState(url: string): EntryState | null {
+  return cache.get(url)?.state ?? null;
+}
+
+/** 使某 URL 的缓存失效（下次请求重新加载） */
+export function invalidateImage(url: string): void {
+  cache.delete(url);
 }
 
 export function clearImageCache(): void {

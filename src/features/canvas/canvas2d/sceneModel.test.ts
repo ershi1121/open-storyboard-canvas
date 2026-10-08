@@ -200,3 +200,81 @@ describe('filterDragDescendants', () => {
     expect(filterDragDescendants(['a', 'b'], parentOf)).toEqual(['a', 'b']);
   });
 });
+
+describe('buildSceneModel 生成类节点卡片内容（防"灰块"回归）', () => {
+  it('未生成的 AI 图片节点：textPreview=提示词，badge=模型·比例', () => {
+    const node = makeNode({
+      id: 'ai1',
+      type: CANVAS_NODE_TYPES.imageEdit,
+      measured: { width: 360, height: 420 },
+      data: {
+        prompt: '雨夜街头，主角撑伞回眸',
+        model: 'seedream-4',
+        modelConfig: { entryId: 'x', ratio: '16:9' },
+        imageUrl: null,
+      } as unknown as CanvasNodeData,
+    });
+    const rendered = buildSceneModel([node], []).byId.get('ai1');
+    expect(rendered?.textPreview).toBe('雨夜街头，主角撑伞回眸');
+    expect(rendered?.badge).toBe('seedream-4 · 16:9');
+  });
+
+  it('批次徽标优先于参数徽标；已有结果图时 textPreview 仍可携带（渲染层按有无图切换）', () => {
+    const node = makeNode({
+      id: 'ai2',
+      type: CANVAS_NODE_TYPES.imageEdit,
+      data: {
+        prompt: 'p',
+        model: 'm',
+        aspectRatio: '1:1',
+        batchIndex: 2,
+        batchTotal: 4,
+        imageUrl: '/tmp/x.png',
+      } as unknown as CanvasNodeData,
+    });
+    const rendered = buildSceneModel([node], []).byId.get('ai2');
+    expect(rendered?.badge).toBe('3/4');
+    expect(rendered?.imageUrl).toBeTruthy();
+  });
+
+  it('全景节点预览 sourcePrompt', () => {
+    const node = makeNode({
+      id: 'pano1',
+      type: CANVAS_NODE_TYPES.panorama,
+      data: { sourcePrompt: '雪山环景', imageUrl: null, aspectRatio: '2:1', sourceMode: 'text' } as unknown as CanvasNodeData,
+    });
+    const rendered = buildSceneModel([node], []).byId.get('pano1');
+    expect(rendered?.textPreview).toBe('雪山环景');
+    expect(rendered?.badge).toBe('◎ 全景');
+  });
+
+  it('故事板生成节点预览各帧描述', () => {
+    const node = makeNode({
+      id: 'sb1',
+      type: CANVAS_NODE_TYPES.storyboardGen,
+      data: {
+        frames: [
+          { id: 'f1', description: '开场远景', referenceIndex: null },
+          { id: 'f2', description: '主角特写', referenceIndex: null },
+        ],
+        gridRows: 1,
+        gridCols: 2,
+        model: 'm',
+      } as unknown as CanvasNodeData,
+    });
+    const rendered = buildSceneModel([node], []).byId.get('sb1');
+    expect(rendered?.textPreview).toBe('开场远景\n主角特写');
+    expect(rendered?.badge).toBe('2 格');
+  });
+
+  it('上传节点（无 prompt）不受影响', () => {
+    const node = makeNode({
+      id: 'up1',
+      type: CANVAS_NODE_TYPES.upload,
+      data: { imageUrl: '/tmp/a.png', sourceFileName: 'a.png' } as unknown as CanvasNodeData,
+    });
+    const rendered = buildSceneModel([node], []).byId.get('up1');
+    expect(rendered?.textPreview).toBeNull();
+    expect(rendered?.title).toBe('a.png');
+  });
+});
