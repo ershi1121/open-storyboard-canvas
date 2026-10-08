@@ -113,6 +113,14 @@ export function invalidateImage(url: string): void {
   cache.delete(url);
 }
 
+/** 预取图片入缓存（DOM 岛用 <img> 走浏览器缓存，画布 imageCache 独立；
+ *  岛挂载时预热，保证平移/缩放切回卡片时立即有图而非灰占位） */
+export function prefetchImage(url: string | null | undefined): void {
+  if (!url) return;
+  if (cache.has(url)) return;
+  getImage(url, () => {});
+}
+
 export function clearImageCache(): void {
   cache.clear();
 }

@@ -11,6 +11,7 @@ import {
 import { nodeTypes } from '@/features/canvas/nodes';
 import { withNodeRenderErrorBoundary } from '@/features/canvas/nodes/NodeRenderErrorBoundary';
 import type { Canvas2DEngine } from './engine';
+import { prefetchImage } from './imageCache';
 import { selectDomIslands, type IslandViewport } from './domIslands';
 
 /** 每帧放行的新挂载岛显示数量（摊薄重绘成本） */
@@ -24,8 +25,6 @@ const CAMERA_MOVING_MS = 200;
 /** 显示门槛（屏幕像素）：挂载集合内达到该尺寸才显示为活编辑器 */
 const SHOW_GATE_W = 140;
 const SHOW_GATE_H = 40;
-/** 调度器每帧卸载上限 */
-const UNMOUNT_BATCH_PER_FRAME = 6;
 /** 拖拽快速路径阈值：同时移动的岛达到该数量时运动期降级为画布卡片 */
 const DRAG_SIMPLIFY_MIN = 4;
 /** 预挂载上限（含隐藏岛）：隐藏岛零绘制成本，仅占内存 */
@@ -116,6 +115,9 @@ const DomIslandsInner = memo(function DomIslandsInner({
   const targetOrderRef = useRef<string[]>([]);
   /** 待空闲挂载队列（有序） */
   const pendingAddRef = useRef<string[]>([]);
+  /** 待空闲卸载队列 */
+  const pendingRemoveRef = useRef<string[]>([]);
+  const pendingRemoveSetRef = useRef<Set<string>>(new Set<string>());
   /** 已挂载（React 状态）镜像 */
   const mountedSetRef = useRef<Set<string>>(new Set<string>());
 
@@ -166,7 +168,10 @@ const DomIslandsInner = memo(function DomIslandsInner({
     lastKeyRef.current = key;
     // 成员变化只更新目标；挂载由空闲回调调度、卸载由 rAF 分批
     islandSetRef.current = new Set(ids);
+    const targetSet = new Set(ids);
     pendingAddRef.current = ids.filter((id) => !mountedSetRef.current.has(id));
+    pendingRemoveRef.current = [...mountedSetRef.current].filter((id) => !targetSet.has(id));
+    pendingRemoveSetRef.current = new Set(pendingRemoveRef.current);
   }, [engineRef, model]);
 
   const recomputeRef = useRef(recompute);
@@ -257,6 +262,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
         const desired = new Set<string>();
         for (const id of mountSet) {
           if (!wrapperRefs.current.has(id)) continue;
+          if (pendingRemoveSetRef.current.has(id)) continue;
           if (moving) {
             if (selectedSet.current.has(id)) desired.add(id);
           } else if (passesGate(id) || selectedSet.current.has(id)) {
@@ -292,25 +298,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
           emitIslandVisibilityChange();
         }
 
-        /* ---- 分批挂载/卸载：把成员变化的集中成本摊到多帧 ---- */
-        {
-          const target = islandSetRef.current;
-          const mounted = mountedSetRef.current;
-          const removeChunk: string[] = [];
-          for (const id of mounted) {
-            if (!target.has(id) && removeChunk.length < UNMOUNT_BATCH_PER_FRAME) {
-              removeChunk.push(id);
-            }
-          }
-          if (removeChunk.length > 0) {
-            const removeSet = new Set(removeChunk);
-            setIslandIds((prev) => {
-              const next = new Set(prev);
-              for (const id of removeSet) next.delete(id);
-              return [...next];
-            });
-          }
-        }
+        /* 挂载/卸载均由空闲回调调度（见 idle 循环），rAF 只管可见性 */
       }
 
       for (const [id, el] of wrapperRefs.current) {
@@ -368,10 +356,21 @@ const DomIslandsInner = memo(function DomIslandsInner({
     const step = () => {
       if (cancelled) return;
       const moving = performance.now() - lastCameraMoveRef.current < CAMERA_MOVING_MS;
-      if (!moving && pendingAddRef.current.length > 0) {
-        const id = pendingAddRef.current.shift() as string;
-        if (!mountedSetRef.current.has(id) && islandSetRef.current.has(id)) {
-          setIslandIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      if (!moving) {
+        if (pendingAddRef.current.length > 0) {
+          const id = pendingAddRef.current.shift() as string;
+          if (!mountedSetRef.current.has(id) && islandSetRef.current.has(id)) {
+            // 预热画布图片缓存：平移/缩放切回卡片时立即有图，不再灰占位
+            const rn = modelRef.current?.byId.get(id);
+            prefetchImage(rn?.previewUrl ?? rn?.imageUrl);
+            setIslandIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+          }
+        } else if (pendingRemoveRef.current.length > 0) {
+          const id = pendingRemoveRef.current.shift() as string;
+          pendingRemoveSetRef.current.delete(id);
+          if (mountedSetRef.current.has(id) && !islandSetRef.current.has(id)) {
+            setIslandIds((prev) => prev.filter((pid) => pid !== id));
+          }
         }
       }
       schedule();
