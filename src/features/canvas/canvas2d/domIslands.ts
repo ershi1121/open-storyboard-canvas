@@ -32,12 +32,12 @@ export interface DomIslandOptions {
 }
 
 export const DOM_ISLAND_DEFAULTS = {
-  /** 低于该缩放仅挂载选中节点（极端全览保护） */
-  minZoom: 0.2,
+  /** 低于该缩放仅挂载选中节点（极端全览保护；常规缩放岛常开） */
+  minZoom: 0.05,
   /** 视口外扩（世界像素），提前挂载边缘节点 */
   margin: 200,
-  /** 同时挂载的 DOM 岛上限（保护交互性能）；选中节点不受上限约束 */
-  cap: 60,
+  /** 同时挂载的 DOM 岛上限（极端规模保护）；选中节点不受上限约束 */
+  cap: 200,
 };
 
 export function selectDomIslands(

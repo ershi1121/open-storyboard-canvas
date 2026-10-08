@@ -11,14 +11,14 @@ const NONE = new Set<string>();
 
 describe('selectDomIslands（DOM 岛候选选择）', () => {
   it('极端全览（zoom < minZoom）且无选中：不挂载岛', () => {
-    const ids = selectDomIslands([rect('a', 0, 0)], NONE, { ...VP, zoom: 0.1 });
+    const ids = selectDomIslands([rect('a', 0, 0)], NONE, { ...VP, zoom: 0.02 });
     expect(ids).toEqual([]);
   });
 
   it('极端全览下选中节点仍然入岛（内联编辑永远可用）', () => {
     const ids = selectDomIslands([rect('a', 0, 0), rect('b', 400, 0)], new Set(['b']), {
       ...VP,
-      zoom: 0.1,
+      zoom: 0.02,
     });
     expect(ids).toEqual(['b']);
   });
@@ -63,9 +63,19 @@ describe('selectDomIslands（DOM 岛候选选择）', () => {
     for (let i = 0; i < 70; i++) {
       nodes.push(rect(`n${i}`, (i % 10) * 110, Math.floor(i / 10) * 110, 100, 100));
     }
-    const ids = selectDomIslands(nodes, new Set(['n69']), VP);
-    expect(ids.length).toBe(DOM_ISLAND_DEFAULTS.cap);
+    const ids = selectDomIslands(nodes, new Set(['n69']), VP, { cap: 60 });
+    expect(ids.length).toBe(60);
     expect(ids).toContain('n69');
     expect(ids[0]).toBe('n69'); // 选中排序优先
+  });
+
+  it('默认上限 200：百节点项目全视口全部入岛（不再出现卡片切换）', () => {
+    const nodes: ReturnType<typeof rect>[] = [];
+    for (let i = 0; i < 100; i++) {
+      nodes.push(rect(`n${i}`, (i % 10) * 130, Math.floor(i / 10) * 130, 120, 120));
+    }
+    const ids = selectDomIslands(nodes, NONE, { ...VP, viewW: 4000, viewH: 3000 });
+    expect(ids.length).toBe(100);
+    expect(DOM_ISLAND_DEFAULTS.cap).toBe(200);
   });
 });

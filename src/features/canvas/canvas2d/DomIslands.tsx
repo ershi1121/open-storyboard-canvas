@@ -9,9 +9,7 @@ import { withNodeRenderErrorBoundary } from '@/features/canvas/nodes/NodeRenderE
 import type { Canvas2DEngine } from './engine';
 import { selectDomIslands, type IslandViewport } from './domIslands';
 
-/** 相机静止多久后恢复 DOM 岛（毫秒） */
-const SUSPEND_RESUME_MS = 220;
-/** 恢复期每帧放行的岛数量（摊薄重绘成本） */
+/** 每帧放行的新挂载岛显示数量（摊薄重绘成本） */
 const RESUME_BATCH_PER_FRAME = 8;
 /** 调度器每帧新增挂载上限（摊薄"停止缩放瞬间"的集中挂载成本） */
 const MOUNT_BATCH_PER_FRAME = 2;
@@ -93,13 +91,6 @@ const DomIslandsInner = memo(function DomIslandsInner({
   const selectedSet = useRef(new Set<string>());
   selectedSet.current = new Set(selectedIds);
 
-  /* ---------- 相机运动期间挂起 DOM 岛（缩放/平移性能关键路径） ----------
-   * 相机每帧变化时：隐藏非选中岛（display:none，保留挂载不卸载）、
-   * 引擎 domIslands 清空让画布卡片接管 → 零 DOM 重排重绘、零挂载抖动；
-   * 相机静止 SUSPEND_RESUME_MS 后恢复岛并刷新成员。
-   * 选中节点的岛保持可见：编辑焦点不在缩放时丢失。 */
-  const suspendedRef = useRef(false);
-  const suspendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const islandSetRef = useRef<ReadonlySet<string>>(new Set<string>());
   /** 当前实际可见（display:''）的岛集合，与 engine.domIslands 严格同步 */
   const shownSetRef = useRef<Set<string>>(new Set<string>());
@@ -157,26 +148,11 @@ const DomIslandsInner = memo(function DomIslandsInner({
   recomputeRef.current = recompute;
 
 
-  const suspendForCamera = useCallback(() => {
-    suspendedRef.current = true;
-    if (suspendTimerRef.current) clearTimeout(suspendTimerRef.current);
-    suspendTimerRef.current = setTimeout(() => {
-      suspendTimerRef.current = null;
-      suspendedRef.current = false;
-      recomputeRef.current();
-    }, SUSPEND_RESUME_MS);
-  }, []);
-
   useEffect(() => {
     mountedSetRef.current = new Set(islandIds);
     onIslandsChange(new Set(islandIds));
   }, [islandIds, onIslandsChange]);
 
-  useEffect(() => {
-    return () => {
-      if (suspendTimerRef.current) clearTimeout(suspendTimerRef.current);
-    };
-  }, []);
   useEffect(() => {
     // 引擎由父组件 effect 创建（晚于子组件 effect），需等待其就绪后再注册监听
     let unsub: (() => void) | null = null;
@@ -192,7 +168,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
       recompute();
       unsub = engine.addCameraListener(() => {
         applyWorldTransform();
-        suspendForCamera(); // 相机运动：挂起岛并续期恢复计时器
+        recomputeRef.current(); // 成员变化经调度器分批生效，无集中挂载冻帧
       });
     };
     attach();
@@ -201,7 +177,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
       cancelAnimationFrame(raf);
       unsub?.();
     };
-  }, [applyWorldTransform, recompute, suspendForCamera, engineRef]);
+  }, [applyWorldTransform, recompute, engineRef]);
 
 
   /* ---------- 拖拽期间岛跟随（rAF 直写 transform） ---------- */
@@ -214,9 +190,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
       /* ---- 岛可见性：挂起期仅选中可见；恢复期每帧分批显示（防瞬时重绘尖峰） ---- */
       const engine = engineRef.current;
       if (engine) {
-        const desired = suspendedRef.current
-          ? new Set([...islandSetRef.current].filter((id) => selectedSet.current.has(id)))
-          : islandSetRef.current;
+        const desired = islandSetRef.current;
         const shown = shownSetRef.current;
         let changed = false;
         // 清理已卸载岛残留（否则画布会持续跳过其卡片导致节点不可见）
@@ -243,8 +217,8 @@ const DomIslandsInner = memo(function DomIslandsInner({
         }
         if (changed) engine.setDomIslands(new Set(shown));
 
-        /* ---- 分批挂载/卸载：把停止缩放瞬间的集中成本摊到多帧 ---- */
-        if (!suspendedRef.current) {
+        /* ---- 分批挂载/卸载：把成员变化的集中成本摊到多帧 ---- */
+        {
           const target = islandSetRef.current;
           const mounted = mountedSetRef.current;
           const removeChunk: string[] = [];

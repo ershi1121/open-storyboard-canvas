@@ -156,7 +156,7 @@ describe('Canvas2DView / DomIslands 挂载诊断（防黑屏回归）', () => {
   it('DomIslands 直挂：极端全览且无选中不挂载岛', async () => {
     useCanvasStore.setState({ nodes: [AI_NODE], edges: [] });
     const engine = makeStubEngine();
-    engine.ref.current.getViewport = () => ({ x: 0, y: 0, zoom: 0.1 });
+    engine.ref.current.getViewport = () => ({ x: 0, y: 0, zoom: 0.02 });
     const model = buildSceneModel([AI_NODE], []);
 
     let root: Root | null = null;
