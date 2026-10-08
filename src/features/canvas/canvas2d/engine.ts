@@ -8,6 +8,15 @@ import {
 } from './renderer';
 import type { RenderNode, SceneModel } from './sceneModel';
 import { collectFollowCluster, SpatialGrid } from './spatialGrid';
+import {
+  buildAvoidRects,
+  distToPolyline,
+  polylineMidpoint,
+  sampleOrthogonal,
+  sampleSpline,
+  type EdgeRoutingMode,
+  type Pt,
+} from './edgeGeometry';
 
 /**
  * Canvas2D 画布引擎 v1：相机、手势状态机、磁吸、rAF 循环。
@@ -63,6 +72,8 @@ export interface EngineHost {
   onContextMenu(payload: { nodeId: string | null } & LocalPoint): void;
   onNodeDoubleClick(nodeId: string): void;
   onCanvasDoubleClick(p: LocalPoint): void;
+  /** 选中边中点断开按钮点击 */
+  onEdgeDelete(edgeId: string): void;
 }
 
 export type ConnectionValidator = (sourceId: string, targetId: string) => boolean;
@@ -125,6 +136,7 @@ type Gesture =
       moved: boolean;
     }
   | { kind: 'minimap'; moved: boolean }
+  | { kind: 'edgePan'; edgeId: string; startSx: number; startSy: number; startCamX: number; startCamY: number; moved: boolean }
   | { kind: 'rightPending'; startSx: number; startSy: number; hitId: string | null; moved: boolean };
 
 const MIN_ZOOM = 0.02;
@@ -230,6 +242,9 @@ export class Canvas2DEngine {
   private validator: ConnectionValidator | null = null;
   /** 当前以 DOM 岛形式渲染的节点（画布跳过其卡片/手柄绘制） */
   private domIslands: ReadonlySet<string> = new Set<string>();
+  private edgeRoutingMode: EdgeRoutingMode = 'spline';
+  private selectedEdgeId: string | null = null;
+  private hoverEdgeId: string | null = null;
   private snapEnabled = false;
   private guides: SnapGuideLine[] = [];
   private wasd = { enabled: false, sensitivity: 60 };
@@ -387,6 +402,22 @@ export class Canvas2DEngine {
     this.snapEnabled = enabled;
     if (!enabled) this.guides = [];
     this.dirty = true;
+  }
+
+  setEdgeRoutingMode(mode: EdgeRoutingMode): void {
+    this.edgeRoutingMode = mode;
+    this.dirty = true;
+  }
+
+  getSelectedEdgeId(): string | null {
+    return this.selectedEdgeId;
+  }
+
+  clearEdgeSelection(): void {
+    if (this.selectedEdgeId !== null) {
+      this.selectedEdgeId = null;
+      this.dirty = true;
+    }
   }
 
   setWasdConfig(enabled: boolean, sensitivity: number): void {
@@ -552,6 +583,58 @@ export class Canvas2DEngine {
     return rect;
   }
 
+  /** 计算某条边当前的采样点列（含拖拽偏移） */
+  private edgePointsOf(edgeId: string): Pt[] | null {
+    if (!this.model) return null;
+    const edge = this.model.edges.find((e) => e.id === edgeId);
+    if (!edge) return null;
+    const a = this.model.byId.get(edge.sourceId);
+    const b = this.model.byId.get(edge.targetId);
+    if (!a || !b) return null;
+    const g = this.gesture;
+    const dragging = g.kind === 'drag' && g.moved;
+    const adx = dragging && g.renderIds.has(a.id) ? g.dx : 0;
+    const ady = dragging && g.renderIds.has(a.id) ? g.dy : 0;
+    const bdx = dragging && g.renderIds.has(b.id) ? g.dx : 0;
+    const bdy = dragging && g.renderIds.has(b.id) ? g.dy : 0;
+    const ax = a.x + a.w + adx;
+    const ay = a.y + a.h / 2 + ady;
+    const bx = b.x + bdx;
+    const by = b.y + b.h / 2 + bdy;
+    if (this.edgeRoutingMode === 'spline') return sampleSpline(ax, ay, bx, by);
+    return sampleOrthogonal(
+      ax, ay, 'right', bx, by, 'left',
+      this.edgeRoutingMode === 'smartOrthogonal'
+        ? buildAvoidRects(this.model.nodes, a.id, b.id)
+        : [],
+    );
+  }
+
+  private findEdgeAt(wx: number, wy: number): string | null {
+    if (!this.model) return null;
+    const th = 6 / this.cam.zoom;
+    let best: string | null = null;
+    let bestD = Infinity;
+    for (const edge of this.model.edges) {
+      const pts = this.edgePointsOf(edge.id);
+      if (!pts) continue;
+      const d = distToPolyline(wx, wy, pts);
+      if (d <= th && d < bestD) {
+        bestD = d;
+        best = edge.id;
+      }
+    }
+    return best;
+  }
+
+  private disconnectButtonHit(wx: number, wy: number): boolean {
+    if (!this.selectedEdgeId || !this.model) return false;
+    const pts = this.edgePointsOf(this.selectedEdgeId);
+    if (!pts) return false;
+    const mid = polylineMidpoint(pts);
+    return Math.hypot(wx - mid.x, wy - mid.y) <= 10 / this.cam.zoom;
+  }
+
   private setCursor(cursor: string): void {
     if (cursor === this.cursor) return;
     this.cursor = cursor;
@@ -658,6 +741,33 @@ export class Canvas2DEngine {
 
     const w = this.toWorld(sx, sy);
 
+    // 选中边中点断开按钮
+    if (opts.button === 0 && this.disconnectButtonHit(w.x, w.y)) {
+      const id = this.selectedEdgeId as string;
+      this.selectedEdgeId = null;
+      this.dirty = true;
+      this.host.onEdgeDelete(id);
+      return;
+    }
+
+    // 边命中：拖拽=平移画布（旧版 edgePan），单击=选中边
+    if (opts.button === 0 && !opts.ctrlKey && !opts.metaKey && !opts.shiftKey) {
+      const edgeId = this.findEdgeAt(w.x, w.y);
+      if (edgeId) {
+        this.gesture = {
+          kind: 'edgePan',
+          edgeId,
+          startSx: sx,
+          startSy: sy,
+          startCamX: this.cam.x,
+          startCamY: this.cam.y,
+          moved: false,
+        };
+        this.setCursor('grabbing');
+        return;
+      }
+    }
+
     // 右键：菜单或框选（与旧版右键框选行为一致）
     if (opts.button === 2) {
       const hit = this.grid.hitTest(w.x, w.y);
@@ -719,6 +829,7 @@ export class Canvas2DEngine {
 
     const hit = this.grid.hitTest(w.x, w.y);
     if (hit && !wantMarquee) {
+      this.selectedEdgeId = null;
       if (opts.shiftKey) {
         if (this.selectedIds.has(hit.id)) this.selectedIds.delete(hit.id);
         else this.selectedIds.add(hit.id);
@@ -844,7 +955,7 @@ export class Canvas2DEngine {
       return;
     }
 
-    if (g2.kind === 'pan') {
+    if (g2.kind === 'pan' || g2.kind === 'edgePan') {
       if (Math.abs(sx - g2.startSx) + Math.abs(sy - g2.startSy) > 1) g2.moved = true;
       this.cam.x = g2.startCamX - (sx - g2.startSx) / this.cam.zoom;
       this.cam.y = g2.startCamY - (sy - g2.startSy) / this.cam.zoom;
@@ -916,6 +1027,16 @@ export class Canvas2DEngine {
       this.setCursor('nwse-resize');
       return;
     }
+    const hoverEdge = this.findEdgeAt(w.x, w.y);
+    if (hoverEdge !== this.hoverEdgeId) {
+      this.hoverEdgeId = hoverEdge;
+      this.dirty = true;
+    }
+    if (hoverEdge) {
+      this.hoverId = null;
+      this.setCursor('pointer');
+      return;
+    }
     const hit = this.grid.hitTest(w.x, w.y);
     const nextHover = hit ? hit.id : null;
     if (nextHover !== this.hoverId) {
@@ -959,6 +1080,13 @@ export class Canvas2DEngine {
       }
     } else if (g.kind === 'pan') {
       if (g.moved) this.scheduleViewportCommit();
+      else this.clearEdgeSelection();
+    } else if (g.kind === 'edgePan') {
+      if (g.moved) this.scheduleViewportCommit();
+      else {
+        this.selectedEdgeId = g.edgeId;
+        this.dirty = true;
+      }
     } else if (g.kind === 'marquee') {
       const ids = [...this.selectedIds];
       this.host.onSelect(ids, ids.length > 0 ? ids[ids.length - 1] : null);
@@ -1102,6 +1230,9 @@ export class Canvas2DEngine {
         connectPreview: connect,
         resizeOverride: this.resizeOverride,
         minimap: this.minimapLayout,
+        selectedEdgeId: this.selectedEdgeId,
+        hoverEdgeId: this.hoverEdgeId,
+        edgeRoutingMode: this.edgeRoutingMode,
         showHandles: this.cam.zoom >= RENDER_CONSTANTS.LOD0_ZOOM,
         preferOriginal:
           this.cam.zoom >= RENDER_CONSTANTS.ORIGINAL_ZOOM &&

@@ -278,3 +278,27 @@ describe('buildSceneModel 生成类节点卡片内容（防"灰块"回归）', (
     expect(rendered?.title).toBe('a.png');
   });
 });
+
+describe('buildSceneModel 边生成态业务规则（旧版对齐）', () => {
+  function node(id: string, type: string, gen = false) {
+    return makeNode({
+      id,
+      type: type as never,
+      data: { isGenerating: gen, imageUrl: gen ? null : '/x.png' } as unknown as CanvasNodeData,
+    });
+  }
+  it('AI图片→结果图 且生成中：边为 gen', () => {
+    const model = buildSceneModel(
+      [node('a', CANVAS_NODE_TYPES.imageEdit), node('b', CANVAS_NODE_TYPES.exportImage, true)],
+      [{ id: 'e', source: 'a', target: 'b' } as CanvasEdge],
+    );
+    expect(model.edges[0]?.state).toBe('gen');
+  });
+  it('AI图片→普通图片节点：边恒为 idle（旧版规则）', () => {
+    const model = buildSceneModel(
+      [node('a', CANVAS_NODE_TYPES.imageEdit), node('b', CANVAS_NODE_TYPES.upload, true)],
+      [{ id: 'e', source: 'a', target: 'b' } as CanvasEdge],
+    );
+    expect(model.edges[0]?.state).toBe('idle');
+  });
+});

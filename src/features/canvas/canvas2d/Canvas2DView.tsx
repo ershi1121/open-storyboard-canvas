@@ -137,6 +137,7 @@ export function Canvas2DView() {
   const snapEnabled = useSnapStore((state) => state.snapEnabled);
   const apiKeys = useSettingsStore((state) => state.apiKeys);
   const enableCanvasWasdPan = useSettingsStore((state) => state.enableCanvasWasdPan);
+  const canvasEdgeRoutingMode = useSettingsStore((state) => state.canvasEdgeRoutingMode);
   const canvasWasdPanSensitivity = useSettingsStore((state) => state.canvasWasdPanSensitivity);
 
   /* ---------- 持久化（与旧版共用同一套 hook，传入视口适配器） ---------- */
@@ -497,7 +498,7 @@ export function Canvas2DView() {
           nodeId: payload.nodeId,
           position: { x: payload.sx, y: payload.sy },
           worldPosition: payload.world,
-          selectedText: '',
+          selectedText: window.getSelection()?.toString().trim() ?? '',
         });
       },
       onNodeDoubleClick: (nodeId) => {
@@ -537,6 +538,10 @@ export function Canvas2DView() {
           }
           return;
         }
+      },
+      onEdgeDelete: (edgeId) => {
+        useCanvasStore.getState().deleteEdge(edgeId);
+        schedulePersistRef.current(0);
       },
       onCanvasDoubleClick: (payload) => {
         setContextMenu(null);
@@ -616,6 +621,10 @@ export function Canvas2DView() {
   useEffect(() => {
     engineRef.current?.setWasdConfig(enableCanvasWasdPan, canvasWasdPanSensitivity);
   }, [enableCanvasWasdPan, canvasWasdPanSensitivity]);
+
+  useEffect(() => {
+    engineRef.current?.setEdgeRoutingMode(canvasEdgeRoutingMode);
+  }, [canvasEdgeRoutingMode]);
 
   useEffect(() => {
     if (selectedNodeId === lastEmittedSelectionRef.current) return;
@@ -916,6 +925,7 @@ export function Canvas2DView() {
       if (key === 'Escape') {
         closeMenus();
         engineRef.current?.cancelGesture();
+        engineRef.current?.clearEdgeSelection();
         engineRef.current?.clearSelection();
         return;
       }
@@ -967,6 +977,14 @@ export function Canvas2DView() {
         return;
       }
       if (key === 'Delete' || key === 'Backspace') {
+        const edgeId = engineRef.current?.getSelectedEdgeId() ?? null;
+        if (edgeId) {
+          event.preventDefault();
+          store.deleteEdge(edgeId);
+          engineRef.current?.clearEdgeSelection();
+          schedulePersistRef.current(0);
+          return;
+        }
         const ids = [...(engineRef.current?.getSelectedIds() ?? [])];
         if (ids.length === 0) return;
         event.preventDefault();

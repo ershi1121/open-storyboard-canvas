@@ -1,5 +1,13 @@
 import { getImage, getImageState } from './imageCache';
 import { CANVAS_NODE_TYPES } from '@/features/canvas/domain/canvasNodes';
+import {
+  buildAvoidRects,
+  polylineMidpoint,
+  sampleOrthogonal,
+  sampleSpline,
+  type EdgeRoutingMode,
+  type Pt,
+} from './edgeGeometry';
 import type { RenderNode, SceneModel } from './sceneModel';
 import type { SpatialGrid } from './spatialGrid';
 
@@ -66,6 +74,9 @@ export interface DrawSceneOptions {
   selectionBounds: { x: number; y: number; w: number; h: number } | null;
   /** 以 DOM 岛渲染的节点（画布不绘制其卡片与手柄） */
   domIslands: ReadonlySet<string>;
+  selectedEdgeId: string | null;
+  hoverEdgeId: string | null;
+  edgeRoutingMode: EdgeRoutingMode;
   connectPreview: { fromX: number; fromY: number; toX: number; toY: number; valid: boolean; hasTarget: boolean } | null;
   resizeOverride: { id: string; w: number; h: number } | null;
   minimap: MinimapLayout | null;
@@ -251,10 +262,96 @@ function drawDotGrid(ctx: CanvasRenderingContext2D, cam: Camera, vw: number, vh:
   }
 }
 
+/* ---------- 边路由点列缓存（model 身份 + 端点位置为 key） ---------- */
+interface RouteCacheEntry {
+  pts: Pt[];
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+}
+let routeCache = new Map<string, RouteCacheEntry>();
+let routeCacheModel: unknown = null;
+
+function edgePoints(
+  edgeId: string,
+  model: SceneModel,
+  ax: number, ay: number, bx: number, by: number,
+  mode: EdgeRoutingMode,
+  avoidRects: ReturnType<typeof buildAvoidRects> | null,
+): Pt[] {
+  if (routeCacheModel !== model) {
+    routeCacheModel = model;
+    routeCache = new Map();
+  }
+  const hit = routeCache.get(edgeId);
+  if (
+    hit &&
+    Math.abs(hit.ax - ax) < 0.5 && Math.abs(hit.ay - ay) < 0.5 &&
+    Math.abs(hit.bx - bx) < 0.5 && Math.abs(hit.by - by) < 0.5
+  ) {
+    return hit.pts;
+  }
+  const pts =
+    mode === 'spline'
+      ? sampleSpline(ax, ay, bx, by)
+      : sampleOrthogonal(
+          ax, ay, 'right', bx, by, 'left',
+          mode === 'smartOrthogonal' ? (avoidRects ?? []) : [],
+        );
+  routeCache.set(edgeId, { pts, ax, ay, bx, by });
+  return pts;
+}
+
+/** 三股拧麻花流光（画布版）：沿点列正弦偏移三股，粗细/透明度分层 */
+function drawFlowStrands(
+  ctx: CanvasRenderingContext2D,
+  pts: Pt[],
+  color: string,
+  time: number,
+  zoom: number,
+  speed: number,
+): number {
+  if (pts.length < 2) return 0;
+  const amp = 3.2 / zoom;
+  const strands: Array<{ w: number; a: number; ph: number }> = [
+    { w: 2.2 / zoom, a: 0.85, ph: 0 },
+    { w: 1.5 / zoom, a: 0.5, ph: 2.09 },
+    { w: 1.0 / zoom, a: 0.32, ph: 4.19 },
+  ];
+  let calls = 0;
+  for (const strand of strands) {
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const q = pts[Math.min(i + 1, pts.length - 1)];
+      const o = pts[Math.max(i - 1, 0)];
+      const dx = q.x - o.x;
+      const dy = q.y - o.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const wave = Math.sin(time * 0.006 * speed + i * 0.55 + strand.ph);
+      const x = p.x + (-dy / len) * wave * amp;
+      const y = p.y + (dx / len) * wave * amp;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = strand.a;
+    ctx.lineWidth = strand.w;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    calls++;
+  }
+  return calls;
+}
+
 function drawEdges(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions, P: Palette, view: { x: number; y: number; w: number; h: number }): number {
   const { model, cam, time, dragIds, dragDx, dragDy } = opts;
   let drawn = 0;
   ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const smart = opts.edgeRoutingMode === 'smartOrthogonal';
+  let avoidRects: ReturnType<typeof buildAvoidRects> | null = null;
   for (const edge of model.edges) {
     const a = model.byId.get(edge.sourceId);
     const b = model.byId.get(edge.targetId);
@@ -267,7 +364,7 @@ function drawEdges(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions, P: Pal
     const ay = a.y + a.h / 2 + ady;
     const bx = b.x + bdx;
     const by = b.y + b.h / 2 + bdy;
-    const pad = 120;
+    const pad = 160;
     if (
       Math.max(ax, bx) + pad < view.x ||
       Math.min(ax, bx) - pad > view.x + view.w ||
@@ -276,26 +373,66 @@ function drawEdges(ctx: CanvasRenderingContext2D, opts: DrawSceneOptions, P: Pal
     ) {
       continue;
     }
-    const gap = Math.max(48, Math.abs(bx - ax) * 0.4);
+    if (smart && avoidRects === null) {
+      avoidRects = buildAvoidRects(model.nodes, '', '__none__');
+    }
+    const pts = edgePoints(edge.id, model, ax, ay, bx, by, opts.edgeRoutingMode, avoidRects);
+    const selected = opts.selectedEdgeId === edge.id;
+    const hovered = opts.hoverEdgeId === edge.id;
+    const showFlow = edge.state !== 'idle' || selected;
+
+    // 底线
     ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.bezierCurveTo(ax + gap, ay, bx - gap, by, bx, by);
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
     if (edge.state === 'gen') {
       ctx.strokeStyle = GEN_COLOR;
       ctx.lineWidth = 2 / cam.zoom;
-      ctx.setLineDash([7 / cam.zoom, 5 / cam.zoom]);
-      ctx.lineDashOffset = (-time * 0.06) / cam.zoom;
     } else if (edge.state === 'fail') {
       ctx.strokeStyle = hexToRgba(FAIL_COLOR, 0.65);
       ctx.lineWidth = 1.6 / cam.zoom;
-      ctx.setLineDash([]);
+    } else if (selected) {
+      ctx.strokeStyle = SELECT_COLOR;
+      ctx.lineWidth = 2.4 / cam.zoom;
+    } else if (hovered) {
+      ctx.strokeStyle = 'rgba(148,197,255,0.8)';
+      ctx.lineWidth = 1.8 / cam.zoom;
     } else {
       ctx.strokeStyle = P.edgeIdle;
       ctx.lineWidth = 1.4 / cam.zoom;
-      ctx.setLineDash([]);
     }
     ctx.stroke();
     drawn++;
+
+    // 流光：生成中加速 / 失败常显 / 选中显示（旧版触发规则）
+    if (showFlow) {
+      const color = edge.state === 'gen' ? GEN_COLOR : edge.state === 'fail' ? FAIL_COLOR : SELECT_COLOR;
+      const speed = edge.state === 'gen' ? 2.2 : edge.state === 'fail' ? 0.6 : 1;
+      drawn += drawFlowStrands(ctx, pts, color, time, cam.zoom, speed);
+    }
+
+    // 选中边中点：断开按钮
+    if (selected) {
+      const mid = polylineMidpoint(pts);
+      const r = 10 / cam.zoom;
+      ctx.beginPath();
+      ctx.arc(mid.x, mid.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = P.cardBg;
+      ctx.fill();
+      ctx.strokeStyle = P.cardBorder;
+      ctx.lineWidth = 1.2 / cam.zoom;
+      ctx.stroke();
+      const c = 3.6 / cam.zoom;
+      ctx.beginPath();
+      ctx.moveTo(mid.x - c, mid.y - c);
+      ctx.lineTo(mid.x + c, mid.y + c);
+      ctx.moveTo(mid.x + c, mid.y - c);
+      ctx.lineTo(mid.x - c, mid.y + c);
+      ctx.strokeStyle = P.mutedText;
+      ctx.lineWidth = 1.6 / cam.zoom;
+      ctx.stroke();
+      drawn += 3;
+    }
   }
   ctx.setLineDash([]);
   return drawn;
