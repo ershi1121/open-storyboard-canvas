@@ -78,3 +78,30 @@ export const useViewportSnapshotStore = create<ViewportSnapshotState>()((set) =>
         : { x: vp.x, y: vp.y, zoom: vp.zoom },
     ),
 }));
+
+/* ---------------- DOM 岛可见性查询 ---------------- */
+
+let islandVisibilityChecker: ((id: string) => boolean) | null = null;
+
+/** DomIslands 注册：已挂载但隐藏（display:none）的岛不显示浮动工具栏 */
+export function registerIslandVisibilityChecker(fn: ((id: string) => boolean) | null): void {
+  islandVisibilityChecker = fn;
+}
+
+export function isIslandVisible(id: string): boolean {
+  return islandVisibilityChecker ? islandVisibilityChecker(id) : true;
+}
+
+const visibilityListeners = new Set<() => void>();
+
+/** 岛可见性翻转时通知（浮动工具栏重定位） */
+export function onIslandVisibilityChange(fn: () => void): () => void {
+  visibilityListeners.add(fn);
+  return () => {
+    visibilityListeners.delete(fn);
+  };
+}
+
+export function emitIslandVisibilityChange(): void {
+  for (const fn of visibilityListeners) fn();
+}

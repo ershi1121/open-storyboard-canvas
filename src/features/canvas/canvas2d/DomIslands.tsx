@@ -3,7 +3,11 @@ import { Component, memo, useCallback, useEffect, useRef, useState, type ReactNo
 import { useCanvasStore } from '@/stores/canvasStore';
 import type { CanvasNodeData } from '@/features/canvas/domain/canvasNodes';
 import { IslandHostContext, NodeHostIdContext } from '@/features/canvas/compat/nodeHostApi';
-import { getCanvasElement } from '@/features/canvas/compat/engineBridge';
+import {
+  emitIslandVisibilityChange,
+  getCanvasElement,
+  registerIslandVisibilityChecker,
+} from '@/features/canvas/compat/engineBridge';
 import { nodeTypes } from '@/features/canvas/nodes';
 import { withNodeRenderErrorBoundary } from '@/features/canvas/nodes/NodeRenderErrorBoundary';
 import type { Canvas2DEngine } from './engine';
@@ -17,6 +21,9 @@ const RASTER_SETTLE_MS = 180;
 const MEMBER_SETTLE_MS = 250;
 /** 相机运动判定窗口（毫秒）：窗口内岛隐藏由卡片接管 */
 const CAMERA_MOVING_MS = 200;
+/** 显示门槛（屏幕像素）：挂载集合内达到该尺寸才显示为活编辑器 */
+const SHOW_GATE_W = 140;
+const SHOW_GATE_H = 40;
 /** 调度器每帧新增挂载上限（相机运动中降为 1，摊薄切换顿挫） */
 const MOUNT_BATCH_PER_FRAME = 2;
 const MOUNT_BATCH_PER_FRAME_MOVING = 1;
@@ -24,6 +31,8 @@ const MOUNT_BATCH_PER_FRAME_MOVING = 1;
 const UNMOUNT_BATCH_PER_FRAME = 6;
 /** 拖拽快速路径阈值：同时移动的岛达到该数量时运动期降级为画布卡片 */
 const DRAG_SIMPLIFY_MIN = 4;
+/** 预挂载上限（含隐藏岛）：隐藏岛零绘制成本，仅占内存 */
+const MOUNT_CAP = 120;
 import type { RenderNode, SceneModel } from './sceneModel';
 
 /**
@@ -139,7 +148,11 @@ const DomIslandsInner = memo(function DomIslandsInner({
       viewW: size.w,
       viewH: size.h,
     };
-    const ids = selectDomIslands(model.nodes, selectedSet.current, viewport);
+    const ids = selectDomIslands(model.nodes, selectedSet.current, viewport, {
+      minScreenW: 0,
+      minScreenH: 0,
+      cap: MOUNT_CAP,
+    });
     targetOrderRef.current = ids;
     const key = ids.join('|');
     if (key === lastKeyRef.current) return;
@@ -164,6 +177,11 @@ const DomIslandsInner = memo(function DomIslandsInner({
     mountedSetRef.current = new Set(islandIds);
     onIslandsChange(new Set(islandIds));
   }, [islandIds, onIslandsChange]);
+
+  useEffect(() => {
+    registerIslandVisibilityChecker((id) => shownSetRef.current.has(id));
+    return () => registerIslandVisibilityChecker(null);
+  }, []);
 
   useEffect(() => {
     // 引擎由父组件 effect 创建（晚于子组件 effect），需等待其就绪后再注册监听
@@ -229,10 +247,22 @@ const DomIslandsInner = memo(function DomIslandsInner({
         // 相机运动中：仅选中岛保持可见，其余隐藏由等比微缩卡片接管
         // （卡片已是"缩小的正常节点"，切换观感连续；静止后分批恢复）
         const moving = performance.now() - lastCameraMoveRef.current < CAMERA_MOVING_MS;
-        const desiredBase = islandSetRef.current;
-        const desired = moving
-          ? new Set([...desiredBase].filter((id) => selectedSet.current.has(id)))
-          : desiredBase;
+        const mountSet = islandSetRef.current;
+        const zoom = engine.getViewport().zoom;
+        const passesGate = (id: string): boolean => {
+          const rn = modelRef.current?.byId.get(id);
+          if (!rn) return false;
+          return rn.w * zoom >= SHOW_GATE_W && rn.h * zoom >= SHOW_GATE_H;
+        };
+        const desired = new Set<string>();
+        for (const id of mountSet) {
+          if (!wrapperRefs.current.has(id)) continue;
+          if (moving) {
+            if (selectedSet.current.has(id)) desired.add(id);
+          } else if (passesGate(id) || selectedSet.current.has(id)) {
+            desired.add(id);
+          }
+        }
         const shown = shownSetRef.current;
         let changed = false;
         // 清理已卸载岛残留（否则画布会持续跳过其卡片导致节点不可见）
@@ -257,7 +287,10 @@ const DomIslandsInner = memo(function DomIslandsInner({
             changed = true;
           }
         }
-        if (changed) engine.setDomIslands(new Set(shown));
+        if (changed) {
+          engine.setDomIslands(new Set(shown));
+          emitIslandVisibilityChange();
+        }
 
         /* ---- 分批挂载/卸载：把成员变化的集中成本摊到多帧 ---- */
         {

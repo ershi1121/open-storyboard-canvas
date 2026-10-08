@@ -26,7 +26,9 @@ import {
   worldToClientPosition,
   getCanvas2DEngine,
   getCanvasElement,
+  isIslandVisible,
   liveViewport,
+  onIslandVisibilityChange,
   useViewportSnapshotStore,
 } from './engineBridge';
 
@@ -234,6 +236,11 @@ export function NodeToolbar({
         el.style.display = 'none';
         return;
       }
+      // 已挂载但隐藏的岛（预挂载/运动期）不显示浮动工具栏
+      if (inIsland && ids.some((id) => !isIslandVisible(id))) {
+        el.style.display = 'none';
+        return;
+      }
       // 多节点工具栏：取联合包围盒
       let minX = Infinity;
       let minY = Infinity;
@@ -269,9 +276,12 @@ export function NodeToolbar({
     const unsubscribe = engine ? engine.addCameraListener(reposition) : null;
     // store 变化（节点增删/移动提交）后也需要重定位
     const storeUnsubscribe = useCanvasStore.subscribe(reposition);
+    // 岛显示/隐藏翻转时重定位（工具栏随岛显隐）
+    const visibilityUnsubscribe = onIslandVisibilityChange(reposition);
     return () => {
       unsubscribe?.();
       storeUnsubscribe();
+      visibilityUnsubscribe();
     };
   }, [ids, effectiveVisible, position, align, offset]);
 
