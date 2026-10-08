@@ -1,4 +1,4 @@
-import { getImage, getImageState } from './imageCache';
+import { getImage, getImageFade, getImageState } from './imageCache';
 import { CANVAS_NODE_TYPES } from '@/features/canvas/domain/canvasNodes';
 import {
   buildAvoidRects,
@@ -484,13 +484,20 @@ function drawMedia(
     Boolean(n.previewUrl) && n.previewUrl !== n.imageUrl;
   const img = url ? getImage(url, opts.onImageReady, isOriginalTier ? 'original' : 'preview') : null;
   if (img && areaW > 0 && areaH > 0) {
+    const fade = url ? getImageFade(url, opts.time) : 1;
     const scale = Math.min(areaW / img.naturalWidth, areaH / img.naturalHeight);
     const dw = img.naturalWidth * scale;
     const dh = img.naturalHeight * scale;
     ctx.save();
     rr(ctx, areaX, areaY, areaW, areaH, radius);
     ctx.clip();
+    if (fade < 1) {
+      ctx.globalAlpha = fade;
+      // 淡入期间请求续帧
+      opts.onImageReady();
+    }
     ctx.drawImage(img, areaX + (areaW - dw) / 2, areaY + (areaH - dh) / 2, dw, dh);
+    ctx.globalAlpha = 1;
     ctx.restore();
     calls += 2;
   } else {

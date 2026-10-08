@@ -17,9 +17,14 @@ interface CacheEntry {
   state: EntryState;
   /** 分辨率层级：淘汰时优先丢弃 original，保护 preview（防缩放回退重载风暴） */
   tier: ImageTier;
+  /** 解码完成时刻（淡入用） */
+  readyAt: number;
 }
 
-const MAX_ENTRIES = 240;
+/** 预览图不主动淘汰（旧版 DOM <img> 常驻不重载，画布缓存对齐该行为）；
+ *  原图单独限流，防止大图撑爆内存 */
+const MAX_ENTRIES = 1024;
+const MAX_ORIGINALS = 60;
 const cache = new Map<string, CacheEntry>();
 
 /* 原图加载探针：1 秒内超过 8 张 original 层级加载时告警（限流） */
@@ -61,12 +66,13 @@ export function getImage(
   if (tier === 'original') noteOriginalLoad();
   const img = new Image();
   img.decoding = 'async';
-  const entry: CacheEntry = { img, state: 'loading', tier };
+  const entry: CacheEntry = { img, state: 'loading', tier, readyAt: 0 };
   cache.set(url, entry);
   img.onload = () => {
     // 用 decode() 把像素解码移到主线程外：避免首次 drawImage 同步解码大图冻帧
     const finish = () => {
       entry.state = 'ready';
+      entry.readyAt = performance.now();
       onReady();
     };
     if (typeof img.decode === 'function') {
@@ -86,13 +92,22 @@ export function getImage(
   // 淘汰策略（loading 中的不淘汰，防加载风暴）：
   // 第一轮只淘汰 original 层（缩放回退时 preview 仍在缓存，免重载冻帧）；
   // 仍超限再按 LRU 淘汰任意已完成条目。
-  if (cache.size > MAX_ENTRIES) {
-    for (const key of cache.keys()) {
-      if (cache.size <= MAX_ENTRIES) break;
-      const candidate = cache.get(key);
-      if (!candidate || candidate.state === 'loading' || candidate.tier !== 'original') continue;
-      cache.delete(key);
+  if (tier === 'original') {
+    let originals = 0;
+    for (const candidate of cache.values()) {
+      if (candidate.tier === 'original') originals++;
     }
+    if (originals > MAX_ORIGINALS) {
+      for (const key of cache.keys()) {
+        if (originals <= MAX_ORIGINALS) break;
+        const candidate = cache.get(key);
+        if (!candidate || candidate.state === 'loading' || candidate.tier !== 'original') continue;
+        cache.delete(key);
+        originals--;
+      }
+    }
+  }
+  if (cache.size > MAX_ENTRIES) {
     for (const key of cache.keys()) {
       if (cache.size <= MAX_ENTRIES) break;
       const candidate = cache.get(key);
@@ -101,6 +116,14 @@ export function getImage(
     }
   }
   return null;
+}
+
+/** 图片就绪后的淡入进度 0..1（消除"灰块→图片"硬切换观感） */
+export function getImageFade(url: string, now: number, ms = 180): number {
+  const entry = cache.get(url);
+  if (!entry || entry.state !== 'ready' || !entry.readyAt) return 1;
+  const p = (now - entry.readyAt) / ms;
+  return p >= 1 ? 1 : Math.max(0, p);
 }
 
 /** 查询某 URL 的缓存状态；未缓存返回 null（调用方可据此做备源回退） */

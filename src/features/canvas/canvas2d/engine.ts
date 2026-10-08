@@ -288,6 +288,7 @@ export class Canvas2DEngine {
   /** 按需渲染：画面无变化且无生成态动画时跳过 drawScene（空闲近零开销） */
   private dirty = true;
   private genAnim = false;
+  private hasFailEdge = false;
 
   private stats: EngineStats = { fps: 0, frameMs: 0, visible: 0, edgesDrawn: 0, calls: 0, zoom: 1, total: 0 };
   private fpsFrames = 0;
@@ -353,6 +354,7 @@ export class Canvas2DEngine {
       ? model.nodes.some((n) => n.status === 'gen') ||
         model.edges.some((e) => e.state === 'gen')
       : false;
+    this.hasFailEdge = model ? model.edges.some((e) => e.state === 'fail') : false;
     this.dirty = true;
   }
 
@@ -1265,7 +1267,9 @@ export class Canvas2DEngine {
     }
     this.lastFrameT = t;
 
-    const shouldDraw = this.dirty || this.genAnim;
+    // 选中边流光/失败边流光也是时间动画源，必须持续重绘
+    const shouldDraw =
+      this.dirty || this.genAnim || this.hasFailEdge || this.selectedEdgeId !== null;
     if (this.ctx && this.model && shouldDraw) {
       const g = this.gesture;
       const dragging = g.kind === 'drag' && g.moved;

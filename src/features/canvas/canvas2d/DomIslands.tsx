@@ -168,6 +168,11 @@ const DomIslandsInner = memo(function DomIslandsInner({
       cap: MOUNT_CAP,
     });
     targetOrderRef.current = ids;
+    // 视口内节点图片预热（卡片与岛共用画布缓存，杜绝"灰块→加载"观感）
+    for (const id of ids) {
+      const rn = model.byId.get(id);
+      if (rn) prefetchImage(rn.previewUrl ?? rn.imageUrl);
+    }
     const key = ids.join('|');
     if (key === lastKeyRef.current) return;
     const prevSet = islandSetRef.current;
