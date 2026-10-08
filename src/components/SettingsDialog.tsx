@@ -18,6 +18,7 @@ import {
   type ImageHostProvider,
   type ImageHostSettings,
   type PanoramaControlSensitivity,
+  type CanvasRendererBackend,
 } from '@/stores/settingsStore';
 import { UiCheckbox, UiSelect } from '@/components/ui';
 import { UI_CONTENT_OVERLAY_INSET_CLASS, UI_DIALOG_TRANSITION_MS } from '@/components/ui/motion';
@@ -246,6 +247,7 @@ export function SettingsDialog({
     themeTonePreset,
     accentColor,
     canvasEdgeRoutingMode,
+    canvasRenderer,
     autoCheckAppUpdateOnLaunch,
     enableUpdateDialog,
     imageHostSettings,
@@ -273,6 +275,7 @@ export function SettingsDialog({
     setThemeTonePreset,
     setAccentColor,
     setCanvasEdgeRoutingMode,
+    setCanvasRenderer,
     setAutoCheckAppUpdateOnLaunch,
     setEnableUpdateDialog,
     setImageHostSettings,
@@ -338,6 +341,7 @@ export function SettingsDialog({
   const [localThemeTonePreset, setLocalThemeTonePreset] = useState(themeTonePreset);
   const [localAccentColor, setLocalAccentColor] = useState(accentColor);
   const [localCanvasEdgeRoutingMode, setLocalCanvasEdgeRoutingMode] = useState(canvasEdgeRoutingMode);
+  const [localCanvasRenderer, setLocalCanvasRenderer] = useState<CanvasRendererBackend>(canvasRenderer);
   const [localAutoCheckAppUpdateOnLaunch, setLocalAutoCheckAppUpdateOnLaunch] = useState(
     autoCheckAppUpdateOnLaunch
   );
@@ -406,6 +410,7 @@ export function SettingsDialog({
     setLocalThemeTonePreset(themeTonePreset);
     setLocalAccentColor(accentColor);
     setLocalCanvasEdgeRoutingMode(canvasEdgeRoutingMode);
+    setLocalCanvasRenderer(canvasRenderer);
     setLocalAutoCheckAppUpdateOnLaunch(autoCheckAppUpdateOnLaunch);
     setLocalEnableUpdateDialog(enableUpdateDialog);
     setLocalImageHostSettings(cloneImageHostSettings(imageHostSettings ?? DEFAULT_IMAGE_HOST_SETTINGS));
@@ -488,6 +493,7 @@ export function SettingsDialog({
       setThemeTonePreset(localThemeTonePreset);
       setAccentColor(localAccentColor);
       setCanvasEdgeRoutingMode(localCanvasEdgeRoutingMode);
+      setCanvasRenderer(localCanvasRenderer);
       setAutoCheckAppUpdateOnLaunch(localAutoCheckAppUpdateOnLaunch);
       setEnableUpdateDialog(localEnableUpdateDialog);
       setImageHostSettings(nextImageHostSettings);
@@ -532,6 +538,7 @@ export function SettingsDialog({
     localThemeTonePreset,
     localAccentColor,
     localCanvasEdgeRoutingMode,
+    localCanvasRenderer,
     localAutoCheckAppUpdateOnLaunch,
     localEnableUpdateDialog,
     localImageHostSettings,
@@ -563,6 +570,7 @@ export function SettingsDialog({
     setThemeTonePreset,
     setAccentColor,
     setCanvasEdgeRoutingMode,
+    setCanvasRenderer,
     setAutoCheckAppUpdateOnLaunch,
     setEnableUpdateDialog,
     setImageHostSettings,
@@ -1316,6 +1324,27 @@ export function SettingsDialog({
                         <option value="spline">{t('settings.edgeRoutingSpline')}</option>
                         <option value="orthogonal">{t('settings.edgeRoutingOrthogonal')}</option>
                         <option value="smartOrthogonal">{t('settings.edgeRoutingSmartOrthogonal')}</option>
+                      </UiSelect>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border-dark bg-bg-dark p-4">
+                    <h3 className="text-sm font-medium text-text-dark">
+                      {t('settings.canvasRenderer')}
+                    </h3>
+                    <p className="mt-1 text-xs text-text-muted">
+                      {t('settings.canvasRendererDesc')}
+                    </p>
+                    <div className="mt-3">
+                      <UiSelect
+                        value={localCanvasRenderer}
+                        onChange={(event) =>
+                          setLocalCanvasRenderer(event.target.value as CanvasRendererBackend)
+                        }
+                        className="h-9 text-sm"
+                      >
+                        <option value="reactflow">{t('settings.canvasRendererReactFlow')}</option>
+                        <option value="canvas2d">{t('settings.canvasRendererCanvas2D')}</option>
                       </UiSelect>
                     </div>
                   </div>

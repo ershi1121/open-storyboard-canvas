@@ -40,6 +40,15 @@
     "maximize": "Maximize",
     "close": "Close"
   },
+  "canvas2d": {
+    "badge": "Canvas2D Preview",
+    "banner": "Pan / zoom / drag / Shift multi-select / Delete / Ctrl+Z undo / F fit-view are supported. Edge creation, marquee, snapping and in-node editing are not wired yet - switch back to React Flow under Settings > Appearance.",
+    "empty": "Canvas is empty. Switch back to the React Flow engine to create nodes (Settings > Appearance > Canvas Renderer).",
+    "fit": "Fit",
+    "hudFrame": "Frame",
+    "hudVisible": "Visible",
+    "hudEdges": "Edges"
+  },
   "canvas": {
     "addImage": "Add Image",
     "splitStoryboard": "Split Storyboard",
@@ -1534,6 +1543,10 @@
     "edgeRoutingSpline": "Spline",
     "edgeRoutingOrthogonal": "Orthogonal",
     "edgeRoutingSmartOrthogonal": "Smart Avoidance (Orthogonal)",
+    "canvasRenderer": "Canvas Renderer (Experimental)",
+    "canvasRendererDesc": "Canvas2D is a high-performance preview: smooth pan/zoom for hundreds to thousands of nodes, with some editing features still being migrated. React Flow is the current full-feature renderer. Reopen the project canvas after saving.",
+    "canvasRendererReactFlow": "React Flow (default, full features)",
+    "canvasRendererCanvas2D": "Canvas2D (high performance, preview)",
     "accentColor": "Accent Color",
     "accentColorDesc": "Used by buttons, selected borders, and interaction highlights.",
     "resetAccentColor": "Reset",

@@ -3,6 +3,7 @@ import { ReactFlowProvider } from '@xyflow/react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { Canvas } from './features/canvas/Canvas';
+import { Canvas2DView } from './features/canvas/canvas2d';
 import { TitleBar } from './components/TitleBar';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -42,6 +43,7 @@ function App() {
   const { t } = useTranslation();
   const { theme } = useThemeStore();
   const uiRadiusPreset = useSettingsStore((state) => state.uiRadiusPreset);
+  const canvasRenderer = useSettingsStore((state) => state.canvasRenderer);
   const themeTonePreset = useSettingsStore((state) => state.themeTonePreset);
   const accentColor = useSettingsStore((state) => state.accentColor);
   const autoCheckAppUpdateOnLaunch = useSettingsStore((state) => state.autoCheckAppUpdateOnLaunch);
@@ -255,7 +257,11 @@ function App() {
           ) : null}
 
           <main className="relative min-h-0 flex-1 overflow-hidden">
-            {currentProjectId ? <Canvas /> : <ProjectHome />}
+            {currentProjectId ? (
+              canvasRenderer === 'canvas2d' ? <Canvas2DView /> : <Canvas />
+            ) : (
+              <ProjectHome />
+            )}
           </main>
 
           <SettingsDialog

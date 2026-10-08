@@ -40,6 +40,15 @@
     "maximize": "最大化",
     "close": "关闭"
   },
+  "canvas2d": {
+    "badge": "Canvas2D 预览版",
+    "banner": "支持平移 / 缩放 / 拖拽 / Shift 多选 / Delete 删除 / Ctrl+Z 撤销 / F 全览。连线拖出、框选、磁吸与节点内编辑尚未接入，可在 设置 → 外观 切回 React Flow 引擎。",
+    "empty": "画布为空。请先切回 React Flow 引擎创建节点（设置 → 外观 → 画布渲染引擎）。",
+    "fit": "全览",
+    "hudFrame": "帧耗时",
+    "hudVisible": "可见节点",
+    "hudEdges": "已绘边"
+  },
   "canvas": {
     "addImage": "添加图片",
     "splitStoryboard": "切割",
@@ -1534,6 +1543,10 @@
     "edgeRoutingSpline": "曲线",
     "edgeRoutingOrthogonal": "直角",
     "edgeRoutingSmartOrthogonal": "智能避让（直角）",
+    "canvasRenderer": "画布渲染引擎（实验）",
+    "canvasRendererDesc": "Canvas2D 为高性能预览版：面向数百至上千节点的流畅平移缩放，部分编辑功能仍在迁移；React Flow 为当前完整功能版。保存后重新进入项目画布生效。",
+    "canvasRendererReactFlow": "React Flow（默认 · 功能完整）",
+    "canvasRendererCanvas2D": "Canvas2D（高性能 · 预览）",
     "accentColor": "强调色",
     "accentColorDesc": "用于按钮、选中边框和交互高亮。",
     "resetAccentColor": "恢复默认",
