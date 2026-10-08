@@ -264,6 +264,8 @@ const DomIslandsInner = memo(function DomIslandsInner({
           if (!appliedBaseRef.current.has(id) && rn) {
             appliedBaseRef.current.set(id, { x: rn.x, y: rn.y });
           }
+          // 合成层提升：移动交给 GPU 合成器，避免逐帧重绘 DOM 子树
+          if (el.style.willChange !== 'transform') el.style.willChange = 'transform';
           el.style.transform = `translate(${off.dx}px, ${off.dy}px)`;
         } else if (el.style.transform) {
           // 等 store 提交新坐标（model 基准变化）后再清除偏移，避免回跳一帧
@@ -271,6 +273,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
           const rn = modelRef.current?.byId.get(id);
           if (!base || !rn || rn.x !== base.x || rn.y !== base.y) {
             el.style.transform = '';
+            el.style.willChange = '';
             appliedBaseRef.current.delete(id);
           }
         }
@@ -452,6 +455,8 @@ const IslandNode = memo(function IslandNode({
         width: rendered.w,
         minHeight: rendered.h,
         display: 'none',
+        // 布局/样式隔离：岛内变化不向外传播失效，降低主线程布局成本
+        contain: 'layout style',
         boxShadow: selected ? '0 0 0 2px #38bdf8' : undefined,
         borderRadius: 10,
       }}

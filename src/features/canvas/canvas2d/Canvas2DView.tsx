@@ -543,6 +543,15 @@ export function Canvas2DView() {
       },
     });
 
+    // 一次性探针：报告 WebView 实际光栅化后端（GPU / 软件），定位环境级性能问题
+    try {
+      const probe = document.createElement('canvas').getContext('webgl');
+      const ext = probe?.getExtension('WEBGL_debug_renderer_info');
+      const renderer = ext ? String(probe?.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'unknown';
+      console.warn(`[canvas2d] 光栅化后端: ${renderer}`);
+    } catch {
+      console.warn('[canvas2d] 光栅化后端: 探测失败');
+    }
     engine.attach(canvas);
     const rect = containerRef.current?.getBoundingClientRect();
     engine.resize(rect?.width ?? 800, rect?.height ?? 600, Math.min(window.devicePixelRatio || 1, 2));
