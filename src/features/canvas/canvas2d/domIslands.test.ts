@@ -64,7 +64,7 @@ describe('selectDomIslands（DOM 岛候选选择）', () => {
   it('超过上限截断，但选中节点始终保留', () => {
     const nodes: ReturnType<typeof rect>[] = [];
     for (let i = 0; i < 70; i++) {
-      nodes.push(rect(`n${i}`, (i % 10) * 110, Math.floor(i / 10) * 110, 100, 100));
+      nodes.push(rect(`n${i}`, (i % 10) * 220, Math.floor(i / 10) * 220, 200, 200));
     }
     const ids = selectDomIslands(nodes, new Set(['n69']), VP, { cap: 60 });
     expect(ids.length).toBe(60);
@@ -78,8 +78,10 @@ describe('selectDomIslands（DOM 岛候选选择）', () => {
     expect(selectDomIslands(nodes, NONE, { ...VP, zoom: 0.06 })).toEqual([]);
     // zoom 0.5：360*0.5=180 ≥90 且 420*0.5=210 ≥24 → 挂；标签 120*0.5=60 <90 → 不挂
     expect(selectDomIslands(nodes, NONE, { ...VP, zoom: 0.5 })).toEqual(['big']);
-    // zoom 1：标签 120×36 均达标 → 都挂
-    expect(selectDomIslands(nodes, NONE, VP).sort()).toEqual(['big', 'tag']);
+    // zoom 1：标签 120px 宽 < 140 门槛 → 卡片（点选后豁免入岛）
+    expect(selectDomIslands(nodes, NONE, VP)).toEqual(['big']);
+    // zoom 1.2：标签 144×43 达标 → 都挂
+    expect(selectDomIslands(nodes, NONE, { ...VP, zoom: 1.2 }).sort()).toEqual(['big', 'tag']);
   });
 
   it('屏幕过小但被选中：豁免入岛（点中即可内联编辑）', () => {
@@ -90,7 +92,7 @@ describe('selectDomIslands（DOM 岛候选选择）', () => {
   it('默认上限 200：百节点项目全视口全部入岛（不再出现卡片切换）', () => {
     const nodes: ReturnType<typeof rect>[] = [];
     for (let i = 0; i < 100; i++) {
-      nodes.push(rect(`n${i}`, (i % 10) * 130, Math.floor(i / 10) * 130, 120, 120));
+      nodes.push(rect(`n${i}`, (i % 10) * 230, Math.floor(i / 10) * 230, 200, 200));
     }
     const ids = selectDomIslands(nodes, NONE, { ...VP, viewW: 4000, viewH: 3000 });
     expect(ids.length).toBe(100);

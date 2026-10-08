@@ -43,8 +43,8 @@ export const DOM_ISLAND_DEFAULTS = {
   /** 屏幕空间 LOD：节点在屏幕上的宽/高低于该值时不挂岛（画布卡片代替）。
    *  屏幕上读不懂的编辑器不值得挂载——174 节点项目在全览缩放曾因此
    *  挂载 161 个重型组件把主线程压到 4fps（诊断面板实测）。 */
-  minScreenW: 90,
-  minScreenH: 24,
+  minScreenW: 140,
+  minScreenH: 40,
 };
 
 export function selectDomIslands(

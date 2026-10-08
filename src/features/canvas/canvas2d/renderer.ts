@@ -195,6 +195,19 @@ function wrapLines(text: string, fs: number, maxWidth: number, maxLines: number)
   return lines;
 }
 
+/* ---------- 换行结果缓存（key: 文本+每行字符数+行数上限） ---------- */
+const wrapCache = new Map<string, string[]>();
+function wrapLinesCached(text: string, fs: number, maxWidth: number, maxLines: number): string[] {
+  const charsPerLine = Math.max(1, Math.floor(maxWidth / (fs * 0.86)));
+  const key = `${charsPerLine}|${maxLines}|${text.length}|${text.slice(0, 48)}`;
+  const hit = wrapCache.get(key);
+  if (hit) return hit;
+  const lines = wrapLines(text, fs, maxWidth, maxLines);
+  if (wrapCache.size > 800) wrapCache.clear();
+  wrapCache.set(key, lines);
+  return lines;
+}
+
 function hexToRgba(hex: string, alpha: number): string {
   if (!hex.startsWith('#') || hex.length < 7) return hex;
   const r = parseInt(hex.slice(1, 3), 16);
@@ -402,9 +415,12 @@ function drawCard(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, 
   let calls = 0;
   const selected = opts.selectedIds.has(n.id);
   const hovered = opts.hoverId === n.id;
-  const headerH = lod >= 1 ? 26 : 0;
+  // 屏幕空间尺寸：决定微型副本的细节档位（任何缩放都画成"缩小的正常节点"）
+  const screenW = n.w * zoom;
+  const micro = screenW < 60; // 微型档：更小屏幕字号、无徽标/阴影
+  const headerH = screenW >= 32 ? 26 : 0;
 
-  if (lod >= 2) {
+  if (lod >= 2 && !micro) {
     ctx.fillStyle = P.shadow;
     rr(ctx, n.x + 4 / zoom, n.y + 5 / zoom, n.w, n.h, 10);
     ctx.fill();
@@ -413,58 +429,60 @@ function drawCard(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, 
 
   // 卡片底
   ctx.fillStyle = P.cardBg;
-  rr(ctx, n.x, n.y, n.w, n.h, 10);
+  rr(ctx, n.x, n.y, n.w, n.h, micro ? 4 : 10);
   ctx.fill();
   calls++;
 
   // 媒体 / 文本区
   const areaX = n.x + 3;
-  const areaY = n.y + headerH + (lod >= 1 ? 3 : 3);
+  const areaY = n.y + headerH + 3;
   const areaW = n.w - 6;
   const areaH = n.h - headerH - 6;
   const hasImage = Boolean(n.imageUrl || n.previewUrl);
-  if (n.textPreview && !hasImage && lod >= 1 && n.w * zoom >= 70) {
-    const fs = fontSize(11.5, zoom);
-    const lineH = fs * 1.45;
-    const maxLines = Math.max(1, Math.floor((areaH - 8) / lineH));
-    const lines = wrapLines(n.textPreview, fs, areaW - 12, Math.min(maxLines, 12));
+  if (n.textPreview && !hasImage && screenW >= 24) {
+    // 屏幕恒定字号：微型档 6px（呈现为"文本纹理"），常规档 11.5px
+    const fsScreen = micro ? 6 : 11.5;
+    const fsWorld = fsScreen / zoom;
+    const lineH = fsWorld * 1.45;
+    const maxLines = Math.max(1, Math.min(12, Math.floor((areaH * zoom) / (fsScreen * 1.45))));
+    const lines = wrapLinesCached(n.textPreview, fsWorld, areaW - 12, maxLines);
     ctx.fillStyle = P.titleText;
-    ctx.font = `${fs}px system-ui, sans-serif`;
+    ctx.font = `${fsWorld}px system-ui, sans-serif`;
     ctx.textBaseline = 'top';
     for (let i = 0; i < lines.length; i++) {
       ctx.fillText(lines[i], areaX + 6, areaY + 4 + i * lineH);
       calls++;
     }
   } else {
-    calls += drawMedia(ctx, n, areaX, areaY, areaW, Math.max(0, areaH), 8, opts, P);
+    calls += drawMedia(ctx, n, areaX, areaY, areaW, Math.max(0, areaH), micro ? 3 : 8, opts, P);
   }
 
-  // 标题栏
-  if (lod >= 1) {
+  // 标题栏（屏幕宽 ≥32px 就画，微型档用 7px 屏幕字号）
+  if (headerH > 0) {
     ctx.fillStyle = P.headerBg;
-    rr(ctx, n.x, n.y, n.w, headerH, 10);
+    rr(ctx, n.x, n.y, n.w, headerH, micro ? 4 : 10);
     ctx.fill();
     ctx.fillRect(n.x, n.y + headerH / 2, n.w, headerH / 2);
     calls += 2;
-    const fs = fontSize(12.5, zoom);
+    const fsTitle = (micro ? 7 : 12.5) / zoom;
     ctx.fillStyle = P.titleText;
-    ctx.font = `600 ${fs}px system-ui, sans-serif`;
+    ctx.font = `600 ${fsTitle}px system-ui, sans-serif`;
     ctx.textBaseline = 'middle';
     const glyph = GLYPH[n.kind];
     let textX = n.x + 8;
-    if (glyph) {
+    if (glyph && !micro) {
       ctx.fillStyle = n.accent.startsWith('#') ? n.accent : SELECT_COLOR;
       ctx.fillText(glyph, textX, n.y + headerH / 2);
-      textX += fs * 1.4;
+      textX += fsTitle * 1.4;
       calls++;
     }
     ctx.fillStyle = P.titleText;
-    ctx.fillText(truncate(n.title, fs, n.w - (textX - n.x) - 10), textX, n.y + headerH / 2);
+    ctx.fillText(truncate(n.title, fsTitle, n.w - (textX - n.x) - 10), textX, n.y + headerH / 2);
     calls++;
   }
 
-  // 徽标 chip
-  if (lod >= 1 && n.badge && n.w * zoom >= 90) {
+  // 徽标 chip（微型档跳过）
+  if (lod >= 1 && n.badge && !micro && n.w * zoom >= 90) {
     const fs = fontSize(10, zoom);
     const chipW = Math.min(n.w * 0.45, fs * (n.badge.length + 1.6));
     const chipH = fs * 1.7;
@@ -484,10 +502,10 @@ function drawCard(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, 
     const pulse = 0.45 + 0.35 * Math.sin(opts.time / 300);
     ctx.strokeStyle = hexToRgba(GEN_COLOR, pulse);
     ctx.lineWidth = 2.4 / zoom;
-    rr(ctx, n.x, n.y, n.w, n.h, 10);
+    rr(ctx, n.x, n.y, n.w, n.h, micro ? 4 : 10);
     ctx.stroke();
     calls++;
-    if (lod >= 1) {
+    if (lod >= 1 && !micro) {
       const p = (Math.sin(opts.time / 500 + n.z) * 0.5 + 0.5);
       ctx.fillStyle = hexToRgba(GEN_COLOR, 0.9);
       ctx.fillRect(n.x + 8, n.y + n.h - 6, (n.w - 16) * p, 3);
@@ -496,19 +514,19 @@ function drawCard(ctx: CanvasRenderingContext2D, n: RenderNode, lod: 0 | 1 | 2, 
   } else if (n.status === 'fail') {
     ctx.strokeStyle = hexToRgba(FAIL_COLOR, 0.75);
     ctx.lineWidth = 2 / zoom;
-    rr(ctx, n.x, n.y, n.w, n.h, 10);
+    rr(ctx, n.x, n.y, n.w, n.h, micro ? 4 : 10);
     ctx.stroke();
     calls++;
   } else {
     ctx.strokeStyle = selected ? SELECT_COLOR : hovered ? 'rgba(148,197,255,0.75)' : P.cardBorder;
-    ctx.lineWidth = (selected ? 2.2 : 1.2) / zoom;
-    rr(ctx, n.x, n.y, n.w, n.h, 10);
+    ctx.lineWidth = (selected ? 2.2 : micro ? 0.8 : 1.2) / zoom;
+    rr(ctx, n.x, n.y, n.w, n.h, micro ? 4 : 10);
     ctx.stroke();
     calls++;
   }
 
-  // 选中手柄
-  if (selected && lod >= 1) {
+  // 选中手柄（微型档跳过）
+  if (selected && lod >= 1 && !micro) {
     ctx.fillStyle = SELECT_COLOR;
     const hs = 6 / zoom;
     const corners: Array<[number, number]> = [

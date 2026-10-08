@@ -11,8 +11,9 @@ import { selectDomIslands, type IslandViewport } from './domIslands';
 
 /** 每帧放行的新挂载岛显示数量（摊薄重绘成本） */
 const RESUME_BATCH_PER_FRAME = 8;
-/** 调度器每帧新增挂载上限（摊薄"停止缩放瞬间"的集中挂载成本） */
+/** 调度器每帧新增挂载上限（相机运动中降为 1，摊薄切换顿挫） */
 const MOUNT_BATCH_PER_FRAME = 2;
+const MOUNT_BATCH_PER_FRAME_MOVING = 1;
 /** 调度器每帧卸载上限 */
 const UNMOUNT_BATCH_PER_FRAME = 6;
 /** 拖拽快速路径阈值：同时移动的岛达到该数量时运动期降级为画布卡片 */
@@ -88,6 +89,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
   const wrapperRefs = useRef(new Map<string, HTMLDivElement>());
   const lastKeyRef = useRef('');
   const lastMemberLogRef = useRef(0);
+  const lastCameraMoveRef = useRef(0);
   const [islandIds, setIslandIds] = useState<string[]>([]);
 
   const selectedSet = useRef(new Set<string>());
@@ -169,6 +171,7 @@ const DomIslandsInner = memo(function DomIslandsInner({
       applyWorldTransform();
       recompute();
       unsub = engine.addCameraListener(() => {
+        lastCameraMoveRef.current = performance.now();
         applyWorldTransform();
         recomputeRef.current(); // 成员变化经调度器分批生效，无集中挂载冻帧
       });
@@ -236,8 +239,10 @@ const DomIslandsInner = memo(function DomIslandsInner({
           }
           const addChunk: string[] = [];
           if (removeChunk.length === 0) {
+            const moving = performance.now() - lastCameraMoveRef.current < 300;
+            const batch = moving ? MOUNT_BATCH_PER_FRAME_MOVING : MOUNT_BATCH_PER_FRAME;
             for (const id of targetOrderRef.current) {
-              if (addChunk.length >= MOUNT_BATCH_PER_FRAME) break;
+              if (addChunk.length >= batch) break;
               if (!mounted.has(id)) addChunk.push(id);
             }
           }
