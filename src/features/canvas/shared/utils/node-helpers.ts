@@ -6,7 +6,11 @@ import {
   type CanvasNode,
   type CanvasNodeType,
 } from '@/features/canvas/domain/canvasNodes';
-import { getConnectMenuNodeTypes, nodeHasSourceHandle } from '@/features/canvas/domain/nodeRegistry';
+import {
+  getConnectMenuNodeTypes,
+  getNodeDefinition,
+  nodeHasSourceHandle,
+} from '@/features/canvas/domain/nodeRegistry';
 import type { CanvasClipboardSnapshot } from '../types';
 
 export function cloneNodeData<T>(value: T): T {
@@ -19,9 +23,23 @@ export function cloneNodeData<T>(value: T): T {
 export function getNodeSize(node: CanvasNode): { width: number; height: number } {
   const styleWidth = typeof node.style?.width === 'number' ? node.style.width : null;
   const styleHeight = typeof node.style?.height === 'number' ? node.style.height : null;
+  // 与渲染器 resolveSize 同一解析链：Canvas2D 下未挂载岛节点没有 measured，
+  // 必须回退到类型默认尺寸（否则整理/包围盒按 200 高排布真实 400+ 高的
+  // 编辑器节点 → 排布后重叠）
+  const def = node.type ? getNodeDefinition(node.type)?.defaultSize : undefined;
   return {
-    width: node.measured?.width ?? styleWidth ?? DEFAULT_NODE_WIDTH,
-    height: node.measured?.height ?? styleHeight ?? 200,
+    width:
+      node.measured?.width ??
+      (typeof node.width === 'number' ? node.width : null) ??
+      styleWidth ??
+      def?.width ??
+      DEFAULT_NODE_WIDTH,
+    height:
+      node.measured?.height ??
+      (typeof node.height === 'number' ? node.height : null) ??
+      styleHeight ??
+      def?.height ??
+      200,
   };
 }
 

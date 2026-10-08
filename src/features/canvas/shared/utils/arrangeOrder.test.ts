@@ -100,3 +100,31 @@ describe('layoutGraphWithDagre', () => {
     expect(distinctY.size).toBeGreaterThanOrEqual(3);
   });
 });
+
+describe('整理排布与节点尺寸回归（Canvas2D 语境）', () => {
+  it('未挂载节点（无 measured）按类型默认尺寸参与排布，结果不重叠', () => {
+    // 两个无 measured 的 AI 图片节点（默认尺寸应 > 200 高）
+    const nodes = [
+      { id: 'a', position: { x: 0, y: 0 }, type: 'imageEdit', data: {} },
+      { id: 'b', position: { x: 10, y: 10 }, type: 'imageEdit', data: {} },
+    ] as never as Parameters<typeof layoutGraphWithDagre>[0];
+    const sizes = new Map([
+      ['a', { width: 520, height: 560 }],
+      ['b', { width: 520, height: 560 }],
+    ]);
+    const out = layoutGraphWithDagre(nodes, [], {
+      sortBy: 'name',
+      nameOf: () => '',
+      sizeOf: (id: string) => sizes.get(id) ?? { width: 100, height: 100 },
+      nodeGap: 40,
+      rankGap: 100,
+      originX: 0,
+      originY: 0,
+    });
+    const pa = out.get('a')!;
+    const pb = out.get('b')!;
+    const overlap =
+      pa.x < pb.x + 520 && pb.x < pa.x + 520 && pa.y < pb.y + 560 && pb.y < pa.y + 560;
+    expect(overlap).toBe(false);
+  });
+});
